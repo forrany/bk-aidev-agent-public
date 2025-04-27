@@ -12,6 +12,8 @@
 | `prompts`       | `Array<String>`   | `[]`        | 预设提示词列表。详细说明参见 [预设提示词指南](/guide/core-features/prompts)。                         |
 | `requestOptions`| `Object`          | `{}`        | 自定义请求选项，可设置 `headers` 和 `data` 属性，分别合并到请求头和请求体。详细说明参见 [自定义请求指南](/guide/advanced-usage/custom-requests)。 |
 | `defaultMinimize`| `Boolean`         | `false`     | 控制 AI 小鲸窗口初始是否处于最小化状态。详细说明参见 [界面定制指南](/guide/core-features/ui-customization#初始最小化状态)。 |
+| `teleportTo`    | `String`          | `'body'`    | 控制组件内容传送到的 DOM 节点，可将组件内容渲染到任意 DOM 位置。详细说明参见 [界面定制指南](/guide/core-features/ui-customization#自定义传送目标)。 |
+| `defaultMessages`| `Array<Message>` | `[]`        | 预设对话内容，可用于初始化对话或恢复会话状态。详细说明参见 [预设对话内容指南](/guide/advanced-usage/default-messages)。 |
 | `sessionContents`| `Array`           | `[] (内部)` | **只读**. 暴露当前会话内容，可用于外部访问和操作。详细说明参见 [访问会话内容指南](/guide/advanced-usage/session-access)。 |
 
 ## `ShortCut` 对象格式
@@ -24,5 +26,17 @@ interface ShortCut {
   key: string;         // 操作的唯一标识符
   prompt: string;      // 指令模板，可包含 {{ SELECTED_TEXT }} 占位符
   icon?: string;       // (可选) 按钮图标的类名
+}
+```
+
+## `Message` 对象格式
+
+`defaultMessages` 数组中的每个对象应符合以下格式：
+
+```typescript
+interface Message {
+  role: 'user' | 'assistant';  // 消息发送者角色
+  content: string;            // 消息内容
+  cite?: string;              // (可选) 框选引用内容，用于预设引用的文本
 }
 ```

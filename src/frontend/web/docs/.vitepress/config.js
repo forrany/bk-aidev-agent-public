@@ -47,6 +47,7 @@ export default defineConfig({
           items: [
             { text: '自定义请求', link: '/guide/advanced-usage/custom-requests' },
             { text: '会话管理', link: '/guide/advanced-usage/session-access' },
+            { text: '预设对话内容', link: '/guide/advanced-usage/default-messages' },
             { text: '编程控制', link: '/guide/advanced-usage/programmatic-control' }
           ]
         },
@@ -72,6 +73,7 @@ export default defineConfig({
             { text: '基础使用', link: '/demos/basic-usage' },
             { text: '快捷操作', link: '/demos/shortcuts-demo' },
             { text: '提示词', link: '/demos/prompts-demo' },
+            { text: '预设对话内容', link: '/demos/default-messages-demo' }
           ]
         }
       ]

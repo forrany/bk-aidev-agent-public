@@ -77,6 +77,8 @@ export default {
           enablePopup: that.enablePopup,
           url: that.url,
           prompts: that.prompts,
+          defaultMessages: that.defaultMessages,
+          teleportTo: that.teleportTo,
           onClose() {
             emit('close', ...arguments);
           },
@@ -88,6 +90,18 @@ export default {
           },
           onShow() {
             emit('show', ...arguments);
+          },
+          onSendMessage() {
+            emit('send-message', ...arguments);
+          },
+          onReceivedStart() {
+            emit('received-start', ...arguments);
+          },
+          onReceivedEnd() {
+            emit('received-end', ...arguments);
+          },
+          onReceivedText() {
+            emit('received-text', ...arguments);
           },
           ...that.$attrs,
         });

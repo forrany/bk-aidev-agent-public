@@ -8,6 +8,10 @@
 | `close`            | -                             | AI 小鲸窗口关闭时触发。                                                                                |
 | `stop`             | -                             | 用户点击停止按钮或调用 `handleStop` 方法，成功停止内容生成时触发。                                     |
 | `shortcut-click`   | `shortcut: ShortCut`          | 点击快捷操作按钮时触发，返回所点击的快捷操作对象 (`ShortCut` 类型定义见 [Props](/api/props#shortcut-对象格式))。 |
+| `receive-start`    | -                             | AI 开始接收响应时触发。                                                                           |
+| `receive-text`     | -                             | 接收到文本片段时触发。                                                                            |
+| `receive-end`      | -                             | 响应接收完成时触发。                                                                              |
+| `send-message`     | `message: string`             | 发送消息时触发，参数为发送的消息内容。                                                           |
 
 ## 使用示例
 
@@ -21,6 +25,10 @@
     @close="onClose"
     @stop="onStop"
     @shortcut-click="onShortcutClick"
+    @receive-start="onReceiveStart"
+    @receive-text="onReceiveText"
+    @receive-end="onReceiveEnd"
+    @send-message="onSendMessage"
   />
 </template>
 
@@ -32,6 +40,10 @@ const onShow = () => console.log('Event: show');
 const onClose = () => console.log('Event: close');
 const onStop = () => console.log('Event: stop');
 const onShortcutClick = (shortcut) => console.log('Event: shortcut-click', shortcut);
+const onReceiveStart = () => console.log('Event: receive-start');
+const onReceiveText = () => console.log('Event: receive-text');
+const onReceiveEnd = () => console.log('Event: receive-end');
+const onSendMessage = (message) => console.log('Event: send-message', message);
 </script>
 ```
 
@@ -44,6 +56,10 @@ const onShortcutClick = (shortcut) => console.log('Event: shortcut-click', short
     @close="onClose"
     @stop="onStop"
     @shortcut-click="onShortcutClick"
+    @receive-start="onReceiveStart"
+    @receive-text="onReceiveText"
+    @receive-end="onReceiveEnd"
+    @send-message="onSendMessage"
   />
 </template>
 
@@ -56,7 +72,11 @@ export default {
     onShow() { console.log('Event: show'); },
     onClose() { console.log('Event: close'); },
     onStop() { console.log('Event: stop'); },
-    onShortcutClick(shortcut) { console.log('Event: shortcut-click', shortcut); }
+    onShortcutClick(shortcut) { console.log('Event: shortcut-click', shortcut); },
+    onReceiveStart() { console.log('Event: receive-start'); },
+    onReceiveText() { console.log('Event: receive-text'); },
+    onReceiveEnd() { console.log('Event: receive-end'); },
+    onSendMessage(message) { console.log('Event: send-message', message); }
   }
 }
 </script>

@@ -148,7 +148,7 @@
   import VueDraggableResizable from 'vue-draggable-resizable';
   import type { IRequestOptions } from './types';
 
-  import { useChat, useStyle, useClickProxy, type ISession, ShortCut } from '@blueking/ai-ui-sdk';
+  import { useChat, useStyle, useClickProxy, type ISession, ShortCut, ISessionContent } from '@blueking/ai-ui-sdk';
   import { motion } from 'motion-v';
 
   import AiBluekingHeader from './components/ai-header.vue';
@@ -177,6 +177,7 @@
     requestOptions?: IRequestOptions;
     defaultMinimize?: boolean;
     teleportTo?: string;
+    defaultMessages?: ISessionContent[];
   }
 
   // Props 定义
@@ -190,12 +191,14 @@
     requestOptions: () => ({}),
     defaultMinimize: false,
     teleportTo: 'body',
+    defaultMessages: () => [],
   });
 
   // Emits 定义
   const emit = defineEmits<{
     (e: 'shortcut-click', shortcut: ShortCut): void;
-    (e: 'close' | 'show' | 'stop'): void;
+    (e: 'close' | 'show' | 'stop' | 'receive-start' | 'receive-text' | 'receive-end'): void;
+    (e: 'send-message', message: string): void;
   }>();
 
   // 提供 popup 注入
@@ -305,6 +308,7 @@
     sendChat,
     stopChat,
     setCurrentSession,
+    setSessionContents,
     currentSessionLoading,
     reGenerateChat,
     reSendChat,
@@ -312,19 +316,27 @@
   } = useChat({
     handleStart: () => {
       scrollToBottomIfNeeded();
+      emit('receive-start');
     },
     handleText: () => {
       scrollToBottomIfNeeded();
+      emit('receive-text');
     },
     handleEnd: () => {
       scrollToBottomIfNeeded();
+      emit('receive-end');
     },
     requestOptions: {
       url: props.url,
       ...props.requestOptions,
     },
   });
+  
   setCurrentSession(session);
+
+  if (props.defaultMessages.length > 0) {
+    setSessionContents(props.defaultMessages);
+  }
 
   const scrollMainToBottom = () => {
     messageWrapper.value?.scrollTo({
@@ -362,6 +374,8 @@
         nextTick(scrollToBottomIfNeeded);
       },
     );
+
+    emit('send-message', escapedMessage);
 
     // 清空输入
     inputMessage.value = '';

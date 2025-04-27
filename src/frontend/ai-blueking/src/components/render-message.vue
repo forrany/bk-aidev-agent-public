@@ -282,6 +282,7 @@
   }
 
   .ai-cite-container {
+    max-width: 100%;
     margin-bottom: 2px;
   }
 

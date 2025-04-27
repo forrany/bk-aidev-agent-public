@@ -1,5 +1,60 @@
 # 更新日志
 
+## [0.5.3] - 2025-04-20
+
+### 新增功能
+- **支持预设对话内容**：
+  - 新增 `defaultMessages` 属性，允许预设初始化对话内容
+  - 可通过此属性实现对话的预加载和状态恢复
+
+```html
+<template>
+  <AIBlueking :default-messages="[
+    { role: 'user', content: '你好' },
+    { role: 'assistant', content: '您好！有什么我可以帮助您的吗？' }
+  ]"/>
+</template>
+```
+
+- **新增消息交互事件**：
+  - 新增 `receive-start` 事件：AI 开始接收响应时触发
+  - 新增 `receive-text` 事件：接收到文本片段时触发
+  - 新增 `receive-end` 事件：响应接收完成时触发
+  - 新增 `send-message` 事件：发送消息时触发
+  - 提供完整的消息传递生命周期钩子
+
+```html
+<template>
+  <AIBlueking 
+    @receive-start="handleReceiveStart" 
+    @receive-text="handleReceiveText"
+    @receive-end="handleReceiveEnd"
+    @send-message="handleSendMessage"
+  />
+</template>
+```
+
+### 从 Beta 版本合并的功能
+
+- **增强 Vue2 组件 API 支持**：
+  - 完善 Vue2 组件对 Vue3 组件暴露的 API 的支持，确保所有方法和属性都能被正确访问
+  - 包括 `sessionContents`, `handleClose`, `handleSendMessage`, `handleDelete`, `handleRegenerate`, `handleResend` 等
+  - 使用 `Object.defineProperty` 保持 `sessionContents` 属性的响应式特性
+- **完善 Vue2 与 Vue3 组件的兼容性**
+- **图标系统升级**：将所有图标类名从 `icon-*` 更新为 `bkai-*` 前缀
+- **支持自定义标题和欢迎语**：新增 `title` 和 `helloText` 属性
+- **支持组件关闭事件**：新增 `close` 事件
+- **支持 mermaid 图表渲染**
+- **支持自定义传送目标元素**：新增 `teleportTo` 属性
+- **支持设置 Nimbus 初始最小化状态**：新增 `defaultMinimize` 属性
+- **支持自定义请求选项**：通过 `requestOptions` 传递自定义选项到发送请求
+- **支持访问会话内容**：新增 `sessionContents` 属性
+
+### 修复
+- 修复框选内容在输入时没有立即消失的问题
+- 修复输入框组件可能引起的 xml 攻击风险
+- 修复 `minimize` 下点击无法显示面板的问题
+
 ## [0.5.3-beta.6] - 2025-04-16
 
 ### 优化

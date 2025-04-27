@@ -8,6 +8,30 @@ export default {
     return {
       changelogData: [
         {
+          version: "v0.5.3",
+          date: "2025-04-20",
+          features: [
+            "支持 `defaultMessages` 属性，可预设对话内容",
+            "新增 `receive-start`、`receive-text`、`receive-end` 和 `send-message` 事件，提供完整消息传递生命周期",
+            "增强 Vue2 组件的API暴露支持，同步暴露Vue3组件中的所有方法和属性",
+            "完善 Vue2 与 Vue3 组件的兼容性",
+            "图标系统升级，将所有图标类名从 <code>icon-*</code> 更新为 <code>bkai-*</code> 前缀",
+            "新增 `title` 属性，支持自定义标题",
+            "新增 `helloText` 属性，支持自定义欢迎语",
+            "新增 `close` 事件，响应组件关闭",
+            "支持 mermaid 图表渲染",
+            "新增 <code>teleportTo</code> 属性，支持自定义传送目标元素",
+            "新增 <code>defaultMinimize</code> 属性，控制 Nimbus 组件初始最小化状态",
+            "支持 <code>requestOptions</code> 传递自定义选项到发送请求",
+            "新增 <code>sessionContents</code> 属性，暴露当前会话内容"
+          ],
+          fixes: [
+            "修复框选内容在输入时没有立即消失的问题",
+            "修复输入框组件可能引起的 xml 攻击风险",
+            "修复 <code>minimize</code> 下点击无法显示面板的问题"
+          ]
+        },
+        {
           version: "v0.5.3-beta.6",
           date: "2025-04-16",
           features: [
