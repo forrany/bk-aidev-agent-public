@@ -24,6 +24,7 @@
         <div class="ai-blueking-container">
           <!-- 顶部栏 -->
           <AiBluekingHeader
+            v-if="!props.hideHeader"
             :title="props.title"
             :is-compression-height="isCompressionHeight"
             :draggable="props.draggable"
@@ -65,7 +66,7 @@
                     :animate="{ width: 'auto', scaleX: 1 }"
                     :initial="{ width: 0, scaleX: 0 }"
                   >
-                    {{ t('输入你的问题，助你高效的完成工作') }}
+                    {{ greetingText }}
                   </motion.div>
                 </div>
               </motion.div>
@@ -117,7 +118,7 @@
                 <ChatInputBox
                   v-model="inputMessage"
                   :loading="currentSessionLoading"
-                  :prompts="props.prompts"
+                  :prompts="promptList"
                   :shortcuts="shortcuts"
                   @height-change="handleInputHeightChange"
                   @send="handleSendMessage"
@@ -130,6 +131,7 @@
         </div>
       </vue-draggable-resizable>
       <Nimbus
+        v-if="!props.hideNimbus"
         v-model:is-panel-show="isShow"
         :default-minimize="defaultMinimize"
         v-model:is-minimize="isNimbusMinimize"
@@ -145,11 +147,11 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, provide, ref, nextTick, watch, defineExpose } from 'vue';
+  import { computed, provide, ref, nextTick, watch, defineExpose, Ref } from 'vue';
   import VueDraggableResizable from 'vue-draggable-resizable';
   import type { IRequestOptions } from './types';
 
-  import { useChat, useStyle, useClickProxy, type ISession, ShortCut, ISessionContent } from '@blueking/ai-ui-sdk';
+  import { useChat, useStyle, useClickProxy, type ISession, ShortCut, SessionContentRole } from '@blueking/ai-ui-sdk';
   import { motion } from 'motion-v';
 
   import AiBluekingHeader from './components/ai-header.vue';
@@ -162,7 +164,7 @@
   import { useSelect } from './composables/use-select-pop';
   import { DEFAULT_SHORTCUTS } from './config';
   import { t } from './lang';
-  import { scrollToBottom, escapeHtml } from './utils';
+  import { scrollToBottom, escapeHtml, uuid } from './utils';
   import Nimbus from './views/nimbus.vue';
 
   import 'vue-draggable-resizable/style.css';
@@ -175,15 +177,16 @@
     shortcuts?: ShortCut[];
     url?: string;
     prompts?: string[];
+    hideNimbus?: boolean;
     requestOptions?: IRequestOptions;
     defaultMinimize?: boolean;
     teleportTo?: string;
-    defaultMessages?: ISessionContent[];
     draggable?: boolean;
     defaultWidth?: number;
     defaultHeight?: number;
     defaultTop?: number;
     defaultLeft?: number;
+    hideHeader?: boolean;
   }
 
   // Props 定义
@@ -194,15 +197,16 @@
     shortcuts: () => DEFAULT_SHORTCUTS,
     url: '',
     prompts: () => [],
+    hideNimbus: false,
     requestOptions: () => ({}),
     defaultMinimize: false,
     teleportTo: 'body',
-    defaultMessages: () => [],
     draggable: true,
     defaultWidth: undefined,
     defaultHeight: undefined,
     defaultTop: undefined,
     defaultLeft: undefined,
+    hideHeader: false,
   });
 
   // Emits 定义
@@ -223,6 +227,22 @@
   const showScrollToBottom = ref(false);
   const isNimbusMinimize = ref(props.defaultMinimize);
   let lastScrollTop = 0; // 上一次的滚动位置, 用于判断是否向下滑动
+  const sessionCode = ref(uuid());
+  const isSessionInitialized = ref(false);
+
+  const openingRemark = ref('') // 接口获取的开场白
+  const predefinedQuestions: Ref<string[]> = ref([]) // 接口获取的预设问题
+
+  const greetingText = computed(() => {
+    return openingRemark.value || t('输入你的问题，助你高效的完成工作')
+  })
+
+  const promptList = computed(() => {
+    return [
+      ...props.prompts,
+      ...predefinedQuestions.value,
+    ]
+  })
 
   // 使用可调整大小的容器
   const {
@@ -267,6 +287,11 @@
   const handleShow = () => {
     isShow.value = true;
     emit('show');
+    
+    // 弹窗打开时，如果有 URL 且未初始化会话，则初始化会话
+    if (props.url && !isSessionInitialized.value) {
+      initSession();
+    }
   };
 
   const handleNimbusClick = () => {
@@ -276,13 +301,6 @@
   // 初始化样式和点击代理
   useStyle();
   useClickProxy();
-
-  // 初始化会话信息
-  const session: ISession = {
-    sessionCode: '1',
-    sessionName: 'test',
-    model: '',
-  };
 
   // 添加用户滚动跟踪变量
   const userScrolling = ref(false);
@@ -322,14 +340,18 @@
   const {
     currentSession,
     sessionContents,
-    sendChat,
+    plusSessionContent,
+    plusSessionApi,
+    chat,
     stopChat,
     setCurrentSession,
-    setSessionContents,
     currentSessionLoading,
     reGenerateChat,
     reSendChat,
     deleteChat,
+    updateRequestOptions,
+    getAgentInfoApi,
+    handleCompleteRole,
   } = useChat({
     handleStart: () => {
       scrollToBottomIfNeeded();
@@ -349,10 +371,49 @@
     },
   });
   
-  setCurrentSession(session);
+  // 封装会话初始化逻辑
+  const initSession = async () => {
+    // 重新生成 sessionCode
+    sessionCode.value = uuid();
+    
+    const session: ISession = {
+      sessionCode: sessionCode.value,
+      sessionName: 'session',
+    };
 
-  if (props.defaultMessages.length > 0) {
-    setSessionContents(props.defaultMessages);
+    // 创建 session 并设置为当前会话
+    plusSessionApi(session);
+    setCurrentSession(session);
+
+
+    const { conversationSettings, promptSetting } = await getAgentInfoApi()
+    openingRemark.value = conversationSettings?.openingRemark || ''
+    predefinedQuestions.value = conversationSettings?.predefinedQuestions || []
+
+    if (promptSetting?.content?.length) {
+      await handleCompleteRole(sessionCode.value, promptSetting.content)
+    }
+    
+    isSessionInitialized.value = true;
+  };
+
+  // 监听 url 变化
+  watch(() => props.url, (newUrl, oldUrl) => {
+    if (newUrl !== oldUrl && newUrl) {
+      // 更新请求选项
+      updateRequestOptions({
+        url: props.url,
+        ...props.requestOptions,
+      });
+      // URL 变化时重新初始化会话
+      initSession();
+
+    }
+  });
+
+  // 如果初始 URL 存在且弹窗默认显示，则立即初始化会话
+  if (props.url && !props.defaultMinimize) {
+    initSession();
   }
 
   const scrollMainToBottom = () => {
@@ -373,8 +434,13 @@
   };
 
   // 事件处理
-  const handleSendMessage = (message: string) => {
+  const handleSendMessage = async (message: string) => {
     if (!message.trim()) return;
+    
+    // 如果会话未初始化，先初始化
+    if (!isSessionInitialized.value && props.url) {
+      initSession();
+    }
 
     // 发送新消息时重置用户滚动状态
     resetUserScrolling();
@@ -382,15 +448,21 @@
     // HTML转义功能 防止被当做 HTML 标签渲染
     const escapedMessage = escapeHtml(message);
 
-    sendChat(
-      {
-        message: escapedMessage,
-        cite: citeText.value,
+    await plusSessionContent(sessionCode.value, {
+      role: SessionContentRole.User,
+      content: escapedMessage,
+      sessionCode: sessionCode.value,
+      property: {
+        extra: {
+          cite: citeText.value,
+        },
       },
-      () => {
-        nextTick(scrollToBottomIfNeeded);
-      },
-    );
+    });
+
+    chat({
+      sessionCode: sessionCode.value,
+      ...props.requestOptions,
+    })
 
     emit('send-message', escapedMessage);
 
@@ -400,11 +472,21 @@
   };
 
   const handleRegenerate = (index: number) => {
-    reGenerateChat(index);
+    const sessionContent = sessionContents.value[index];
+    if (sessionContent) {
+      reGenerateChat(sessionContent.sessionCode, sessionContent, index);
+    }
   };
 
-  const handleResend = (index: number, value: { message: string; cite: string }) => {
-    reSendChat(index, value);
+  const handleResend = (index: number, { message, cite }: { message: string; cite: string }) => {
+    const sessionContent = sessionContents.value[index];
+    if (sessionContent) {
+      sessionContent.content = escapeHtml(message);
+      if (sessionContent?.property?.extra?.cite) {
+        sessionContent.property.extra.cite = cite;
+      }
+      reSendChat(sessionContent.sessionCode, sessionContent, index);
+    }
   };
 
   const handleStop = () => {
@@ -414,20 +496,36 @@
     }
   };
 
-  const handleShortcutClick = (shortcut: ShortCut) => {
+  const handleShortcutClick = async (shortcut: ShortCut) => {
     !isShow.value && handleShow();
+    
+    // 如果会话未初始化，先初始化
+    if (!isSessionInitialized.value && props.url) {
+      initSession();
+    }
 
-    sendChat({
-      message: shortcut.label,
-      cite: selectedText.value || inputMessage.value,
-      shortcut,
+    await plusSessionContent(sessionCode.value, {
+      role: SessionContentRole.User,
+      content: shortcut.label,
+      sessionCode: sessionCode.value,
+      property: {
+        extra: {
+          cite: selectedText.value || inputMessage.value,
+          shortcut,
+        },
+      },
     });
+
+    chat({
+      sessionCode: sessionCode.value,
+      ...props.requestOptions,
+    })
 
     emit('shortcut-click', shortcut);
   };
 
   const handleDelete = (index: number) => {
-    deleteChat(index);
+    deleteChat(index, sessionCode.value)
   };
 
   // 监听消息列表变化，自动滚动到底部
@@ -444,12 +542,12 @@
     handleShow,
     handleClose,
     handleStop,
-    sendChat,
     handleSendMessage,
     handleShortcutClick,
     handleDelete,
     handleRegenerate,
     handleResend,
+    initSession,
   });
 </script>
 
@@ -541,10 +639,12 @@
     display: flex;
     flex: 1;
     overflow: hidden;
+    justify-content: center;
   }
 
   .main-content {
     position: relative;
+    max-width: 1000px;
     display: flex;
     flex: 1;
     flex-direction: column;
