@@ -34,5 +34,7 @@
   "non_thinking_llm": "",
   "app_apigw_host": "",
   "static_template_root": "tpls",
-  "sync_config_from_aidev": "False"
+  "sync_config_from_aidev": "False",
+  "app_setting_page": "",
+  "bk_paas_domain": ".com"
 }
