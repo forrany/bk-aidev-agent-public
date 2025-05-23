@@ -66,7 +66,7 @@ curl -X POST http://127.0.0.1:8000/bk_plugin/invoke/1.0.0assistant \
     -d '{
         "inputs": {
             "command": "chat",
-            "input": "SRE 可观测性有哪些领域?",
+            "input": "SRE 是什么?",
             "stream": true,
             "chat_history": [
                 {
@@ -95,7 +95,7 @@ curl -X POST {{cookiecutter.app_apigw_host}}/invoke/1.0.0assistant \
     -d '{
         "inputs": {
             "command": "chat",
-            "input": "SRE 可观测性有哪些领域?",
+            "input": "SRE 是什么?",
             "stream": true,
             "chat_history": [
                 {
