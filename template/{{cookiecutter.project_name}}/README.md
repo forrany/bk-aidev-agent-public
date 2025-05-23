@@ -13,25 +13,28 @@ pip install -r requirements.txt
 cp .env.template .env
 ```
 
-根据实际情况,更新`.env`文件末尾对应的`BKPAAS_APP_SECRET`.
+可通过[蓝鲸插件应用设置]({{cookiecutter.app_setting_page}})获取此应用的密钥,并将其补充到`.env`文件末尾对应的`BKPAAS_APP_SECRET`
 
 ### 1.2 启动服务并测试
 
-执行下面脚本本地启动服务,即可开始测试
+在执行本地服务前,需要先配置本地测试域名,需要先把`local.{{cookiecutter.bk_paas_domain}}`配置到本地的`hosts`文件中
+
+然后,执行下面脚本本地启动服务,即可开始测试
 
 ```bash
 source .env
 python bin/manage.py migrate
-python bin/manage.py runserver 0.0.0.0:5000
+python bin/manage.py runserver local.{{cookiecutter.bk_paas_domain}}:8000
 ```
 
-本地打开`localhost:5000`即可使用小鲸进行会话
+本地打开`local.{{cookiecutter.bk_paas_domain}}:8000`即可使用小鲸进行会话
+
 
 ### 1.3 开发指引
 
 #### 1.3.1 更新配置
 
-更新当前目录的`agent/config.py`文件即可自定义所需的配置,例如需要修改默认的模型变为`deepseek-r1`.
+更新当前目录的`agent/config.py`文件即可自定义所需的配置,例如需要修改默认的模型变为`deepseek-r1`
 
 ```python
 AGENT_CONFIG = {
@@ -63,7 +66,7 @@ curl -X POST http://127.0.0.1:8000/bk_plugin/invoke/1.0.0assistant \
     -d '{
         "inputs": {
             "command": "chat",
-            "input": "SRE 可观测性有哪些领域?",
+            "input": "SRE 是什么?",
             "stream": true,
             "chat_history": [
                 {
@@ -92,7 +95,7 @@ curl -X POST {{cookiecutter.app_apigw_host}}/invoke/1.0.0assistant \
     -d '{
         "inputs": {
             "command": "chat",
-            "input": "SRE 可观测性有哪些领域?",
+            "input": "SRE 是什么?",
             "stream": true,
             "chat_history": [
                 {
@@ -124,7 +127,7 @@ curl -X POST {{cookiecutter.app_apigw_host}}/invoke/1.0.0assistant \
 智能体本地开发调用示例
 
 ```bash
-curl -X POST http://127.0.0.1:8000/bk_plugin/plugin_api/chat_completion/ \
+curl -X POST http://local.{{cookiecutter.bk_paas_domain}}:8000/bk_plugin/plugin_api/chat_completion/ \
     -H "Content-Type: application/json"   \
     -d '{"chat_history":[{"role":"user","content":"hi"}], "execute_kwargs": {"stream": true}}'
 ```
@@ -181,7 +184,7 @@ curl -X POST {{cookiecutter.app_apigw_host}}/bk_plugin/plugin_api/chat_completio
       - code
 
 
-- 可以在agent内部处理逻辑中使用`langchain_core.callbacks.manager.dispatch_custom_event`函数，从算法逻辑中分发自定义事件并在`bk_plugin/apis/assistant.py`中转换为上述标准流式事件。
+- 可以在agent内部处理逻辑中使用`langchain_core.callbacks.manager.dispatch_custom_event`函数，从算法逻辑中分发自定义事件并在`bk_plugin/apis/assistant.py`中转换为上述标准流式事件
 
 
 - 示例:

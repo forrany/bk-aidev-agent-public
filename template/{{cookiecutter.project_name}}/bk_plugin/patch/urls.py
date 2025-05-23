@@ -10,7 +10,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-from bk_plugin_framework.kit.decorators import login_exempt
 from django.conf import settings
 from django.conf.urls import include, url
 from django.contrib import admin
@@ -41,6 +40,9 @@ urlpatterns = [
     ),
     url(r"^redoc/$", schema_view.with_ui("redoc", cache_timeout=0), name="schema-redoc"),
     url(r"^bk_plugin/", include("bk_plugin_framework.services.bpf_service.urls")),
+    url(r"^$", IndexView.as_view(), name="index"),
+    url(r"^page/$", IndexView.as_view(), name="index"),
+    url(r"^side-slider/$", IndexView.as_view(), name="index"),
 ]
 
 
@@ -49,25 +51,11 @@ if settings.ENVIRONMENT == "dev":
 
     urlpatterns.extend(
         [
-            url(
-                r"^swagger/$",
-                schema_view.with_ui("swagger", cache_timeout=0),
-                name="schema-swagger-ui",
-            ),
             url(r"^debug/$", debug_panel, name="debug-panel"),
-            url(r"^$", login_exempt(IndexView.as_view()), name="index"),
-        ]
-    )
-else:
-    urlpatterns.extend(
-        [
             url(
                 r"^swagger/$",
                 schema_view.with_ui("swagger", cache_timeout=0),
                 name="schema-swagger-ui",
             ),
-            url(r"^$", IndexView.as_view(), name="index"),
-            url(r"^page/$", IndexView.as_view(), name="index"),
-            url(r"^side-slider/$", IndexView.as_view(), name="index"),
         ]
     )
