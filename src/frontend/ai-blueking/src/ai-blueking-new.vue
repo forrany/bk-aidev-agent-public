@@ -120,6 +120,7 @@
                   :loading="currentSessionLoading"
                   :prompts="promptList"
                   :shortcuts="shortcuts"
+                  :disabled="props.disabledInput"
                   @height-change="handleInputHeightChange"
                   @send="handleSendMessage"
                   @shortcut-click="handleShortcutClick"
@@ -187,6 +188,7 @@
     defaultTop?: number;
     defaultLeft?: number;
     hideHeader?: boolean;
+    disabledInput?: boolean;
   }
 
   // Props 定义
@@ -207,6 +209,7 @@
     defaultTop: undefined,
     defaultLeft: undefined,
     hideHeader: false,
+    disabledInput: false,
   });
 
   // Emits 定义

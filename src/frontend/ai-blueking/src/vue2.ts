@@ -57,13 +57,33 @@ export default {
       default: () => [],
       type: Array,
     },
-    defaultMessages: {
-      default: () => [],
-      type: Array,
-    },
     teleportTo: {
       default: 'body',
       type: String,
+    },
+    title: {
+      default: '',
+      type: String,
+    },
+    helloText: {
+      default: '',
+      type: String,
+    },
+    requestOptions: {
+      default: () => ({}),
+      type: Object,
+    },
+    defaultMinimize: {
+      default: false,
+      type: Boolean,
+    },
+    hideHeader: {
+      default: false,
+      type: Boolean,
+    },
+    hideNimbus: {
+      default: false,
+      type: Boolean,
     },
     draggable: {
       default: true,
@@ -80,6 +100,10 @@ export default {
     },
     defaultTop: {
       type: Number,
+    },
+    disabledInput: {
+      default: false,
+      type: Boolean,
     },
   },
   data() {
@@ -100,9 +124,15 @@ export default {
           shortcuts: that.shortcuts,
           enablePopup: that.enablePopup,
           url: that.url,
+          title: that.title,
+          helloText: that.helloText,
+          requestOptions: that.requestOptions,
           prompts: that.prompts,
-          defaultMessages: that.defaultMessages,
+          disabledInput: that.disabledInput,
           teleportTo: that.teleportTo,
+          defaultMinimize: that.defaultMinimize,
+          hideHeader: that.hideHeader,
+          hideNimbus: that.hideNimbus,
           draggable: that.draggable,
           defaultWidth: that.defaultWidth,
           defaultHeight: that.defaultHeight,
@@ -172,6 +202,9 @@ export default {
     };
     this.handleResend = (index: number, value: { message: string; cite: string }) => {
       aiBlueking.component.exposed.handleResend(index, value);
+    };
+    this.updateRequestOptions = (options: { message: string; cite: string }) => {
+      aiBlueking.component.exposed.updateRequestOptions(options);
     };
 
     // 添加 组件暴露属性（属性类型使用 defineProperty 添加, 以保持响应式）

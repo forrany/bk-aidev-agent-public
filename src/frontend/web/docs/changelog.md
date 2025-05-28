@@ -8,8 +8,19 @@ export default {
     return {
       changelogData: [
         {
-          version: "v1.0.0",
+          version: "v1.0.1",
           date: "2025-05-28",
+          features: [
+            "新增 `disabledInput` 属性，用于控制输入框是否禁用",
+            "优化输入框禁用状态的样式，提供更好的视觉反馈"
+          ],
+          fixes: [
+            "修复了某些场景下输入组件状态管理问题"
+          ]
+        },
+        {
+          version: "v1.0.0",
+          date: "2025-05-27",
           features: [
             "全新架构设计，提供更高效的组件性能",
             "增强的界面适配能力，更好地支持各种屏幕尺寸",

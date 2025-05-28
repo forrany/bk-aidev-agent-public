@@ -14,7 +14,7 @@
       :shortcuts="shortcuts"
       @shortcut-click="handleShortcutClickWithClear"
     />
-    <div class="input-wrapper">
+    <div class="input-wrapper" :class="{ disabled: props.disabled }">
       <PromptList
         ref="promptListRef"
         class="prompt-list-wrapper"
@@ -38,6 +38,7 @@
         :style="{ height: textareaHeight + 'px' }"
         class="input-area"
         v-model="inputValue"
+        :disabled="props.disabled"
         :placeholder="placeholder"
         @compositionend="handleCompositionEnd"
         @compositionstart="handleCompositionStart"
@@ -89,6 +90,7 @@
     shortcuts: ShortCut[];
     loading: boolean;
     prompts: string[];
+    disabled: boolean;
   }>();
 
   const textareaRef = ref<HTMLTextAreaElement>();
@@ -129,6 +131,7 @@
 
   // 处理合并后的操作按钮点击事件
   const handleActionClick = () => {
+    if (props.disabled) return;
     if (props.loading) {
       handleStop();
     } else {
@@ -326,7 +329,7 @@
 
   // 封装自定义的sendMessage方法
   const sendMessage = () => {
-    if (!inputValue.value.trim() || props.loading) return;
+    if (!inputValue.value.trim() || props.loading || props.disabled) return;
     handleSend();
   };
 </script>
@@ -351,6 +354,33 @@
       border: 1px solid transparent;
       border-radius: 8px;
 
+      &.disabled {
+        background: 
+          linear-gradient(#f5f7fa, #f5f7fa) padding-box,
+          linear-gradient(180deg, #e5e5e5, #d5d5d5) border-box;
+        
+        .input-area {
+          color: #c4c6cc;
+          background-color: #f5f7fa;
+          cursor: not-allowed;
+        }
+        
+        .input-tools {
+          .bkai-icon {
+            &.clickable {
+              color: #c4c6cc;
+              background: #f0f1f5;
+              cursor: not-allowed;
+              
+              &:hover {
+                color: #c4c6cc;
+                background: #f0f1f5;
+              }
+            }
+          }
+        }
+      }
+
       .cite {
         margin: 8px 8px 0 8px;
 
@@ -366,6 +396,7 @@
       min-height: 68px;
       max-height: 248px;
       padding: 8px 8px 0 8px;
+      border-radius: 8px 8px 0 0;
       overflow-y: auto;
       font-size: 14px;
       line-height: 20px;

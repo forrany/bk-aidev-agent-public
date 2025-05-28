@@ -179,3 +179,81 @@ export default {
 </script>
 ```
 :::
+
+## 输入框禁用控制
+
+从 `v1.0.1` 版本开始，您可以通过 `disabledInput` 属性来控制输入框是否处于禁用状态。禁用后，用户将无法在输入框中输入文本或发送消息，适用于只读展示或特定交互场景。
+
+-   `disabledInput` (Boolean): 默认值为 `false`。设置为 `true` 时，输入框将处于禁用状态。
+
+:::code-group
+```vue [Vue 3]
+<template>
+  <AIBlueking
+    ref="aiBlueking"
+    :url="apiUrl"
+    :disabled-input="true"
+  />
+</template>
+
+<script lang="ts" setup>
+import { ref } from 'vue';
+import AIBlueking from '@blueking/ai-blueking';
+import '@blueking/ai-blueking/dist/vue3/style.css';
+
+const aiBlueking = ref(null);
+const apiUrl = 'https://your-api-endpoint.com/assistant/';
+</script>
+```
+
+```vue [Vue 2]
+<template>
+  <AIBlueking
+    ref="aiBlueking"
+    :url="apiUrl"
+    :disabled-input="true"
+  />
+</template>
+
+<script>
+import AIBlueking from '@blueking/ai-blueking/vue2';
+import '@blueking/ai-blueking/dist/vue2/style.css';
+
+export default {
+  components: {
+    AIBlueking
+  },
+  data() {
+    return {
+      apiUrl: 'https://your-api-endpoint.com/assistant/'
+    };
+  }
+};
+</script>
+```
+:::
+
+### 禁用输入框的应用场景
+
+输入框禁用功能在以下场景中特别有用：
+
+1. **只读展示模式**：
+   - 展示预设的对话内容，但不希望用户继续交互
+   - 创建演示或教程内容，引导用户了解产品功能
+
+2. **条件限制交互**：
+   - 在用户完成特定操作前，暂时禁用输入功能
+   - 特定情境下临时限制用户输入
+
+3. **根据权限动态控制**：
+   ```vue
+   <AIBlueking
+     :url="apiUrl"
+     :disabled-input="!userHasPermission"
+   />
+   ```
+
+4. **创建引导式体验**：
+   - 结合预设问题，引导用户通过点击预设问题而非直接输入来交互
+
+禁用状态下，输入框会呈现灰色背景，并显示禁用状态的光标样式，为用户提供明确的视觉反馈。
