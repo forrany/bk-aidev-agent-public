@@ -3,19 +3,19 @@
     <div class="delete-confirm-title">{{ title }}</div>
     <div class="delete-confirm-content">{{ content }}</div>
     <div class="delete-confirm-footer">
-      <BkButton
+      <bk-button
         style="width: 64px; min-width: 64px"
         size="small"
         theme="danger"
         @click="handleConfirm"
-        >{{ t('删除') }}</BkButton
+        >{{ t('删除') }}</bk-button
       >
-      <BkButton
+      <bk-button
         style="width: 64px; min-width: 64px"
         size="small"
         theme="default"
         @click="handleCancel"
-        >{{ t('取消') }}</BkButton
+        >{{ t('取消') }}</bk-button
       >
     </div>
   </div>

@@ -27,9 +27,9 @@
 import { createApp, h } from 'vue';
 
 import { DEFAULT_SHORTCUTS } from './config/shortcuts';
+import type { ShortCut } from './types/index.ts';
 import AiBlueking from './vue3.ts';
 
-import type { ShortCut } from './types/index.ts';
 
 export type * from './types/index.ts';
 
@@ -62,11 +62,9 @@ export default {
       type: String,
     },
     title: {
-      default: '',
       type: String,
     },
     helloText: {
-      default: '',
       type: String,
     },
     requestOptions: {

@@ -1,6 +1,6 @@
 <template>
   <div class="chat-input-box">
-    <AiSelectedBox
+    <ai-selected-box
       v-if="selectedText.length > 0"
       style="margin-bottom: 10px"
       :actions="props.shortcuts"
@@ -8,36 +8,29 @@
       @mousedown.prevent
       @shortcut-click="handleShortcutClick"
     />
-    <ShortcutsBar
+    <shortcuts-bar
       v-else
       style="margin-bottom: 8px"
       :shortcuts="shortcuts"
       @shortcut-click="handleShortcutClickWithClear"
     />
     <div class="input-wrapper" :class="{ disabled: props.disabled }">
-      <PromptList
+      <prompt-list
         ref="promptListRef"
-        class="prompt-list-wrapper"
         v-model:show="showPromptList"
+        class="prompt-list-wrapper"
         :prompts="props.prompts"
         @height-change="handlePromptHeightChange"
         @select="handlePromptSelect"
       />
-      <div
-        v-if="citeText.length > 0"
-        class="cite"
-      >
-        <AiCite
-          :show-close-icon="true"
-          :text="citeText"
-          @close="setCiteText('')"
-        />
+      <div v-if="citeText.length > 0" class="cite">
+        <ai-cite :show-close-icon="true" :text="citeText" @close="setCiteText('')" />
       </div>
       <textarea
         ref="textareaRef"
+        v-model="inputValue"
         :style="{ height: textareaHeight + 'px' }"
         class="input-area"
-        v-model="inputValue"
         :disabled="props.disabled"
         :placeholder="placeholder"
         @compositionend="handleCompositionEnd"
@@ -49,7 +42,12 @@
       <div class="input-tools">
         <i
           ref="actionIconRef"
-          :class="['bkai-icon', actionIconClass, { disabled: !loading && !inputValue.trim() }, 'clickable']"
+          :class="[
+            'bkai-icon',
+            actionIconClass,
+            { disabled: !loading && !inputValue.trim() },
+            'clickable',
+          ]"
           @click="handleActionClick"
         ></i>
       </div>
@@ -58,11 +56,10 @@
 </template>
 
 <script setup lang="ts">
-  import { ref, onMounted, watch, computed, onBeforeUnmount } from 'vue';
-  import { ComponentPublicInstance } from 'vue';
 
-  import { type ShortCut } from '@blueking/ai-ui-sdk';
   import { Instance } from 'tippy.js';
+  import { ComponentPublicInstance } from 'vue';
+  import { ref, onMounted, watch, computed, onBeforeUnmount } from 'vue';
 
   import AiCite from '../components/ai-cite.vue';
   import { useInputInteraction } from '../composables/use-input-interaction';
@@ -71,6 +68,8 @@
   import { useTextareaHeight } from '../composables/use-textarea-height';
   import { useTooltip } from '../composables/use-tippy';
   import { t } from '../lang';
+  import type { IShortcut } from '../types';
+
   import AiSelectedBox from './ai-selected-box.vue';
   import PromptList from './prompt-list.vue';
   import ShortcutsBar from './shortcuts-bar.vue';
@@ -79,15 +78,16 @@
     (e: 'send' | 'update:modelValue', value: string): void;
     (e: 'stop'): void;
     (e: 'height-change', height: number): void;
-    (e: 'shortcut-click', shortcut: ShortCut): void;
+    (e: 'shortcut-click', shortcut: IShortcut): void;
   }>();
   const placeholder = t('输入 "/" 唤出 Prompt\n通过 Shift + Enter 进行换行输入');
 
   const { enablePopup } = usePopup();
-  const { selectedText, citeText, setCiteText, clearSelection, lockSelectedText } = useSelect(enablePopup);
+  const { selectedText, citeText, setCiteText, clearSelection, lockSelectedText } =
+    useSelect(enablePopup);
 
   const props = defineProps<{
-    shortcuts: ShortCut[];
+    shortcuts: IShortcut[];
     loading: boolean;
     prompts: string[];
     disabled: boolean;
@@ -171,12 +171,12 @@
     defaultHeight: 68,
   });
 
-  const handleShortcutClickWithClear = (shortcut: ShortCut) => {
+  const handleShortcutClickWithClear = (shortcut: IShortcut) => {
     handleShortcutClick(shortcut);
     inputValue.value = '';
   };
 
-  const handleShortcutClick = (shortcut: ShortCut) => {
+  const handleShortcutClick = (shortcut: IShortcut) => {
     emit('shortcut-click', shortcut);
     clearSelection();
   };
@@ -211,7 +211,7 @@
     () => textareaHeight.value,
     newHeight => {
       emit('height-change', newHeight);
-    },
+    }
   );
 
   // 监听加载状态和输入内容变化，更新tooltip
@@ -323,6 +323,9 @@
     // 现有的键盘事件处理逻辑
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      if (isComposing.value) {
+        return;
+      }
       sendMessage();
     }
   };

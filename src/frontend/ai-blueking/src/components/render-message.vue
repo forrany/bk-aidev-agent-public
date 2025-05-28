@@ -1,5 +1,6 @@
 <template>
   <li
+    v-if="!HIDE_ROLE_LIST.includes(message.role)"
     ref="messageMainRef"
     :class="[message.role, 'message-main']"
   >
@@ -7,11 +8,11 @@
       v-if="message?.property?.extra?.cite"
       class="ai-cite-container"
     >
-      <AiCite :text="message.property.extra.cite" />
+      <ai-cite :text="message.property.extra.cite" />
     </div>
     <div :class="`message-content-container ${message.role}`">
       <template v-if="[SessionContentRole.User, SessionContentRole.Role].includes(message.role)">
-        <BkTextEditor
+        <bk-text-editor
           v-if="isEdit"
           :auto-focus="true"
           :model-value="message.content"
@@ -63,11 +64,11 @@
           </span>
           <span
             v-else
-            v-html="renderValue"
             :class="{
               'markdown-message': true,
               loading: message.status === SessionContentStatus.Loading,
             }"
+            v-html="renderValue"
           ></span>
         </p>
       </template>
@@ -105,23 +106,29 @@
 
 <script lang="ts" setup>
   import { computed, onMounted, ref, watch, defineEmits, onBeforeUnmount } from 'vue';
-
-  import { SessionContentRole, type ISessionContent, SessionContentStatus } from '@blueking/ai-ui-sdk';
-  import { Message } from 'bkui-vue';
   import mermaidPlugin from "@agoose77/markdown-it-mermaid";
+  import { SessionContentRole, SessionContentStatus } from '@blueking/ai-ui-sdk/enums';
+  import { type ISessionContent } from '@blueking/ai-ui-sdk/types';
+  import { Message } from 'bkui-vue';
   import dayjs from 'dayjs';
   import hljs from 'highlight.js';
   import MarkdownIt from 'markdown-it';
-  import MarkdownItCodeCopy from 'markdown-it-code-copy';
+  import MarkdownItCodeCopy from 'markdown-it-copy-code';
+  import 'markdown-it-copy-code/styles/base.css'
+  import 'markdown-it-copy-code/styles/small.css'
+
+  import { useCopyCode } from 'markdown-it-copy-code'
 
   import defaultUserLogo from '../assets/images/ai-user.png';
   import AiCite from '../components/ai-cite.vue';
   import { usePopup } from '../composables/use-popup-props';
   import { useSelect } from '../composables/use-select-pop';
   import { useTooltip } from '../composables/use-tippy';
+  import { HIDE_ROLE_LIST } from '../config';
   import { t } from '../lang';
   import MarkdownItLinkBlank from '../plugins/markdown-it-link-blank';
   import { createDeleteConfirm, closeAllDeleteConfirms } from '../utils/delete-confirm';
+
   import BkTextEditor from './text-editor.vue';
 
   // 类型定义
@@ -134,7 +141,7 @@
 
   const emit = defineEmits<{
     regenerate: [index: number];
-    resend: [index: number, value: { message: string; cite: string }];
+    resend: [index: number, value: { message: string }];
     delete: [index: number];
   }>();
 
@@ -169,10 +176,7 @@
       return '';
     },
   })
-    .use(MarkdownItCodeCopy, {
-      iconClass: 'bkai-icon bkai-fuzhi',
-      buttonClass: 'ai-blueking-copy-button',
-    })
+    .use(MarkdownItCodeCopy)
     .use(MarkdownItLinkBlank)
     .use(mermaidPlugin);
   // 计算属性
@@ -202,7 +206,7 @@
   // 事件处理
   const handleEditMessage = (value: string) => {
     isEdit.value = false;
-    emit('resend', props.index, { message: value, cite: props.message.cite || '' });
+    emit('resend', props.index, { message: value });
   };
 
   const handleCopy = async () => {
@@ -251,6 +255,7 @@
   // 生命周期钩子
   onMounted(() => {
     setTimeout(initTooltips, 0);
+    useCopyCode();
   });
 
   // 监听器
@@ -331,7 +336,7 @@
     &.user,
     &.cite {
       justify-content: flex-end;
-      float: right;
+      align-items: flex-end;
     }
 
     &:after {
@@ -432,6 +437,18 @@
       font-size: 14px;
       color: #313238;
 
+      .markdown-copy-code-container .markdown-copy-code-button {
+        color: rgba(255,255,255,.87);
+        background-color: #2c2c2c;
+        &:hover {
+          background-color: #8884;
+        }
+
+        .markdown-copy-code-done>svg {
+          stroke: rgba(255,255,255,.87);
+        }
+      }
+
       h1,
       h2,
       h3,
@@ -522,7 +539,7 @@
 
       ul,
       ol {
-        padding-left: 40px;
+        padding-left: 12px;
         margin: 10px 0 10px;
         text-indent: 0;
       }

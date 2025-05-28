@@ -1,6 +1,6 @@
 {
   "name": "@blueking/ai-blueking",
-  "version": "1.0.2",
+  "version": "1.1.0-beta.16",
   "description": "AI 小鲸",
   "license": "MIT",
   "author": "Tencent BlueKing",
@@ -9,6 +9,10 @@
     "build": "tsx ./scripts/vite.build.ts && vue-tsc --project tsconfig.dts.json",
     "dts": "vue-tsc --project tsconfig.dts.json",
     "prettier": "prettier ./src ./scripts ./playground --write",
+    "format": "prettier --write ./src ./scripts ./playground --config .prettierrc.js",
+    "lint": "eslint src --ext .vue,.js,.ts,.jsx,.tsx",
+    "lint:fix": "eslint src --ext .vue,.js,.ts,.jsx,.tsx --fix",
+    "lint:check": "eslint src --ext .vue,.js,.ts,.jsx,.tsx --max-warnings 0",
     "visualize": "vite-bundle-visualizer -c scripts/vite.vusualizer.ts",
     "clean": "rm -rf dist node_modules"
   },
@@ -60,23 +64,32 @@
   "peerDependencies": {
     "dayjs": "^1.10.7",
     "highlight.js": "^11.5.1",
-    "markdown-it": "^13.0.1",
-    "markdown-it-code-copy": "^0.2.1"
+    "markdown-it": "^13.0.1"
   },
   "devDependencies": {
     "@types/highlight.js": "^10.1.0",
     "@types/node": "^20.14.2",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
     "@vitejs/plugin-vue": "^5.2.3",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-prettier": "^5.5.1",
+    "eslint-plugin-unused-imports": "^4.1.4",
+    "eslint-plugin-vue": "^9.33.0",
     "highlight.js": "11.11.1",
     "marked": "^15.0.8",
     "marked-highlight": "2.2.1"
   },
   "dependencies": {
     "@agoose77/markdown-it-mermaid": "^1.1.0",
-    "@blueking/ai-ui-sdk": "0.0.15-beta.36",
+    "@blueking/ai-ui-sdk": "0.1.11",
     "@blueking/bkui-library": "0.0.0-beta.6",
+    "markdown-it-copy-code": "^0.1.3",
     "motion-v": "^0.11.3",
-    "tippy.js": "6.3.6",
+    "tippy.js": "6.3.5",
     "vue-draggable-resizable": "^3.0.0"
   }
 }
