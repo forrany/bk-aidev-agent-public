@@ -5,13 +5,13 @@ from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.services.chat import ChatCompletionAgent, ChatPrompt, ExecuteKwargs
 from bk_plugin_framework.kit.api import custom_authentication_classes
 from bk_plugin_framework.kit.decorators import inject_user_token, login_exempt
-from bkoauth import get_app_access_token
 from blueapps.core.exceptions import ClientBlueException
 from django.conf import settings
 from django.http.response import StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.request import Request
 from rest_framework.status import is_success
 from rest_framework.views import APIView, Response
 from rest_framework.viewsets import ViewSetMixin
@@ -24,17 +24,18 @@ from agent.services.agent import build_chat_completion_agent
 class PluginViewSet(ViewSetMixin, APIView):
     authentication_classes = custom_authentication_classes
 
+    def initialize_request(self, request, *args, **kwargs):
+        if request.user:
+            setattr(request, "_user", request.user)
+        return super().initialize_request(request, *args, **kwargs)
+
     @staticmethod
-    def get_bkapi_authorization_info(request) -> str:
+    def get_bkapi_authorization_info(request: Request) -> str:
         auth_info = {
             "bk_app_code": settings.BK_APP_CODE,
             "bk_app_secret": settings.BK_APP_SECRET,
             settings.USER_TOKEN_KEY_NAME: request.token,
         }
-        if settings.BKPAAS_ENVIRONMENT != "dev":
-            access_token = get_app_access_token().access_token
-            auth_info.update({"access_token": access_token})
-
         return json.dumps(auth_info)
 
     def finalize_response(self, request, response, *args, **kwargs):
@@ -59,9 +60,25 @@ class PluginViewSet(ViewSetMixin, APIView):
 
 
 class ChatSessionViewSet(PluginViewSet):
+    def list(self, request):
+        client = BKAidevApi.get_client()
+        result = client.api.list_chat_session(headers={"X-BKAIDEV-USER": request.user.username})
+        return Response(data=result["data"])
+
+    @action(["POST"], url_path="batch_delete", detail=False)
+    def batch_delete(self, request):
+        client = BKAidevApi.get_client()
+        result = client.api.batch_delete_chat_session(json=request.data)
+        return Response(data=result["data"])
+
     def create(self, request):
         client = BKAidevApi.get_client()
-        result = client.api.create_chat_session(json=request.data)
+        result = client.api.create_chat_session(json=request.data, headers={"X-BKAIDEV-USER": request.user.username})
+        return Response(data=result["data"])
+
+    def update(self, request, pk, **kwargs):
+        client = BKAidevApi.get_client()
+        result = client.api.update_chat_session(path_params={"session_code": pk}, json=request.data)
         return Response(data=result["data"])
 
     def retrieve(self, request, pk, **kwargs):
@@ -95,6 +112,12 @@ class ChatSessionContentViewSet(PluginViewSet):
     def update(self, request, pk, **kwargs):
         client = BKAidevApi.get_client()
         result = client.api.update_chat_session_content(path_params={"id": pk}, json=request.data)
+        return Response(data=result["data"])
+
+    @action(["POST"], url_path="batch_delete", detail=False)
+    def batch_delete(self, request):
+        client = BKAidevApi.get_client()
+        result = client.api.batch_delete_chat_session_content(json=request.data)
         return Response(data=result["data"])
 
 

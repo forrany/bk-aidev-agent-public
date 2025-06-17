@@ -43,11 +43,32 @@ class OpenApiGroup(OperationGroup):
         path="/openapi/aidev/resource/v1/tool/{tool_code}/",
     )
 
+    list_chat_session = bind_property(
+        Operation,
+        name="list_chat_session",
+        method="GET",
+        path="/openapi/aidev/resource/v1/chat/session/",
+    )
+
+    batch_delete_chat_session = bind_property(
+        Operation,
+        name="batch_delete_chat_session",
+        method="POST",
+        path="/openapi/aidev/resource/v1/chat/session/batch_delete/",
+    )
+
     create_chat_session = bind_property(
         Operation,
         name="create_chat_session",
         method="POST",
         path="/openapi/aidev/resource/v1/chat/session/",
+    )
+
+    update_chat_session = bind_property(
+        Operation,
+        name="update_chat_session",
+        method="PUT",
+        path="/openapi/aidev/resource/v1/chat/session/{session_code}/",
     )
 
     retrieve_chat_session = bind_property(
@@ -78,6 +99,13 @@ class OpenApiGroup(OperationGroup):
         path="/openapi/aidev/resource/v1/chat/session_content/{id}/",
     )
 
+    batch_delete_chat_session_content = bind_property(
+        Operation,
+        name="batch_delete_chat_session_content ",
+        method="POST",
+        path="/openapi/aidev/resource/v1/chat/session_content/batch_delete/",
+    )
+
     get_chat_session_contents = bind_property(
         Operation,
         name="get_chat_session_contents",
@@ -104,6 +132,27 @@ class OpenApiGroup(OperationGroup):
         name="retrieve_agent_config",
         method="GET",
         path="/openapi/aidev/resource/v1/agent/{agent_code}/",
+    )
+
+    add_knowledge_item = bind_property(
+        Operation,
+        name="add_knowledge_item",
+        method="POST",
+        path="/openapi/aidev/resource/v1/knowledge/",
+    )
+
+    add_dataset_item = bind_property(
+        Operation,
+        name="add_dataset_item",
+        method="POST",
+        path="/openapi/aidev/resource/v1/dataset_item/",
+    )
+
+    bind_agent_space = bind_property(
+        Operation,
+        name="bind_agent_space",
+        method="POST",
+        path="/openapi/aidev/resource/v1/agent/{agent_code}/bind_space/",
     )
 
 

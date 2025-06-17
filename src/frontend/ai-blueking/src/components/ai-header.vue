@@ -14,8 +14,17 @@
       <div class="title">{{ title }}</div>
     </div>
     <div class="right-section">
-      <!-- <i class="bkai-icon bkai-xinzengliaotian"></i> -->
-      <!-- <i class="bkai-icon bkai-history"></i> -->
+      <i
+        class="bkai-icon bkai-xinzengliaotian"
+        v-bk-tooltips="{ content: t('新增聊天'), boundary: 'parent' }"
+        @click="handleNewChat"
+      ></i>
+      <i
+        ref="historyIconRef"
+        class="bkai-icon bkai-history"
+        v-bk-tooltips="{ content: t('历史会话'), boundary: 'parent' }"
+        @click="handleHistoryClick"
+      ></i>
       <i
         ref="compressionRef"
         class="bkai-icon"
@@ -36,7 +45,12 @@
 
   import logo from '../assets/images/avatar.png';
   import { useTooltip } from '../composables/use-tippy';
+  import { useHistoryPanel } from '../composables/use-history-panel';
   import { t } from '../lang';
+  import { sessionStore } from '../store/sessionStore';
+
+  import { bkTooltips } from 'bkui-vue';
+  import HistoryPanel from './history-panel.vue';
 
   const props = withDefaults(defineProps<{
     title: string;
@@ -48,7 +62,23 @@
     draggable: true,
   });
 
-  const emit = defineEmits<(e: 'close' | 'toggleCompression') => void>();
+  const emit = defineEmits<(e: 'close' | 'toggleCompression' | 'newChat') => void>();
+
+  const vBkTooltips = bkTooltips;
+
+  // 历史面板相关的 refs
+  const historyIconRef = ref<HTMLElement | null>(null);
+
+  // 使用历史面板 composable
+  const { handleTriggerClick: handleHistoryClick } = useHistoryPanel({
+    triggerRef: historyIconRef,
+    panelComponent: HistoryPanel,
+    tippyOptions: {
+      placement: 'bottom-end',
+      offset: [0, 8],
+      appendTo: () => document.querySelector('.ai-blueking-container-wrapper') as HTMLElement || document.body,
+    }
+  });
 
   const compressionIcon = computed(() => {
     return props.isCompressionHeight ? 'bkai-morenchicun' : 'bkai-yasuo';
@@ -97,6 +127,20 @@
   onBeforeUnmount(() => {
     destroyAll();
   });
+
+
+
+  // 处理新增聊天按钮点击
+  const handleNewChat = async () => {
+    try {
+      // 通知父组件
+      emit('newChat')
+      // 创建新会话
+      await sessionStore.initSession(false)
+    } catch (error) {
+      console.error('Failed to create new chat:', error)
+    }
+  }
 </script>
 
 <style lang="scss" scoped>
@@ -158,6 +202,21 @@
         color: #4d4f56;
         background: #eaebf0;
       }
+    }
+  }
+</style>
+
+<style lang="scss">
+  // 历史面板 tippy 样式
+  .tippy-box[data-theme~='history-panel'] {
+    background-color: #fff;
+    border: 1px solid #dcdee5;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    padding: 0;
+
+    .tippy-content {
+      padding: 0px;
     }
   }
 </style>

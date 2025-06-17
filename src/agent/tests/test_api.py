@@ -74,3 +74,50 @@ class TestAPI:
         client = BKAidevApi.get_client()
         result = client.api.retrieve_agent_config(path_params={"agent_code": settings.APP_CODE})
         print(result)
+
+    def test_bkaidev_knowledge(self):
+        client = BKAidevApi.get_client()
+        obj = {
+            "knowledge_base_id": 6,
+            "file_path": "test_knowledge",
+            "knowledge_name": "test_knowledge",
+            "created_type": "manual",
+            "content": "LangChain is a framework for developing applications powered by large language models (LLMs).",
+        }
+        result = client.api.add_knowledge_item(
+            json=obj,
+            headers={"X-BKAIDEV-USER": "user001"},
+        )
+        print(result)
+
+    def test_bkaidev_dataset(self):
+        client = BKAidevApi.get_client()
+        result = client.api.add_dataset_item(
+            json={
+                "dataset_id": 9,
+                "data": {"text": "test001"},
+            },
+            headers={"X-BKAIDEV-USER": "user001"},
+        )
+        print(result)
+
+    def test_bkaidev_agent_session_management(self):
+        client = BKAidevApi.get_client()
+        results = client.api.list_chat_session()["data"]
+        session_codes = [each["session_code"] for each in results]
+        if session_codes:
+            client.api.batch_delete_chat_session(json={"session_codes": session_codes})
+
+        for _idx in range(5):
+            _session_code = f"onlyfortest-{_idx}"
+            result = client.api.create_chat_session(
+                json={"session_code": _session_code, "session_name": f"testonly-{_idx}"}
+            )
+            session_codes.append(result["data"]["session_code"])
+
+        results = client.api.list_chat_session()["data"]
+        assert len(results) == 5
+        client.api.batch_delete_chat_session(json={"session_codes": session_codes})
+
+        results = client.api.list_chat_session()["data"]
+        assert len(results) == 0
