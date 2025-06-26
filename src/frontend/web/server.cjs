@@ -31,7 +31,10 @@ app.use((req, res, next) => {
   if (req.path.match(/\.[a-z0-9]+$/i)) {
     return next();
   }
-  // 返回index.html
+  // 返回index.html，并设置不缓存
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(distDir, 'index.html'));
 });
 
