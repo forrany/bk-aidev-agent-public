@@ -35,9 +35,9 @@
           />
           <div class="content-wrapper">
             <!-- 主要内容区域 -->
-            <div :class="`main-content ${sessionContents.length === 0 ? 'greeting-layout' : 'chat-layout'}`">
+            <div :class="`main-content ${!hasSessionContents ? 'greeting-layout' : 'chat-layout'}`">
               <motion.div
-                v-if="sessionContents.length === 0"
+                v-if="!hasSessionContents"
                 class="greeting-box"
                 :transition="{
                   duration: 0.5,
@@ -71,7 +71,7 @@
                   </motion.div>
                 </div>
               </motion.div>
-              <div ref="messageWrapper" :style="{ opacity: sessionContents.length > 0 ? 1 : 0 }" class="message-wrapper">
+              <div ref="messageWrapper" :style="{ opacity: hasSessionContents ? 1 : 0 }" class="message-wrapper">
                 <render-message
                   v-for="(message, index) in sessionContents"
                   :index="index"
@@ -89,7 +89,7 @@
                   type: 'tween',
                   layoutId: 'chat-input',
                 }"
-                :class="`chat-input-container ${sessionContents.length === 0 ? 'centered' : 'bottom'}`"
+                :class="`chat-input-container ${ !hasSessionContents ? 'centered' : 'bottom'}`"
                 layout
               >
                 <div v-if="currentSessionLoading || showScrollToBottom" class="bottom-tools-bar">
@@ -144,7 +144,7 @@ import LoadingOverlay from "./components/loading-overlay.vue"
 import { POPUP_INJECTION_KEY } from "./composables/use-popup-props"
 import { useResizableContainer } from "./composables/use-resizable-container"
 import { useSelect } from "./composables/use-select-pop"
-import { DEFAULT_SHORTCUTS } from "./config"
+import { DEFAULT_SHORTCUTS, HIDE_ROLE_LIST } from './config';
 import { t } from "./lang"
 import { scrollToBottom, escapeHtml } from "./utils"
 import Nimbus from "./views/nimbus.vue"
@@ -224,6 +224,10 @@ const greetingText = computed(() => {
 
 const promptList = computed(() => {
   return [...props.prompts, ...predefinedQuestions.value]
+})
+
+const hasSessionContents = computed(() => {
+  return sessionContents.value.filter(item => !HIDE_ROLE_LIST.includes(item.role)).length > 0
 })
 
 // 使用可调整大小的容器

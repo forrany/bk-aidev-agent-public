@@ -101,7 +101,7 @@ const inputRefs = ref<Record<string, any>>({})
 const historyList = computed(() => {
   const list = sessionStore.sessionList.value.reduce<HistoryItem[]>(
     (acc, item) => {
-      const date = new Date(item.createdAt)
+      const date = new Date(item.createdAt || '')
       const today = new Date()
       const yesterday = new Date()
       yesterday.setDate(yesterday.getDate() - 1)

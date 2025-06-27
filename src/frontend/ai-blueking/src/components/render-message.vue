@@ -2,6 +2,7 @@
   <li
     ref="messageMainRef"
     :class="[message.role, 'message-main']"
+    v-if="!HIDE_ROLE_LIST.includes(message.role)"
   >
     <div
       v-if="message?.property?.extra?.cite"
@@ -120,6 +121,7 @@
   import { usePopup } from '../composables/use-popup-props';
   import { useSelect } from '../composables/use-select-pop';
   import { useTooltip } from '../composables/use-tippy';
+  import { HIDE_ROLE_LIST } from '../config';
   import { t } from '../lang';
   import MarkdownItLinkBlank from '../plugins/markdown-it-link-blank';
   import { createDeleteConfirm, closeAllDeleteConfirms } from '../utils/delete-confirm';

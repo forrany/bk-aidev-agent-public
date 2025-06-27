@@ -2,6 +2,7 @@ import { ref } from "vue"
 import type { ISession, ISessionContent } from "@blueking/ai-ui-sdk/types"
 import type { ISessionEditItem, SdkApi } from "./types"
 import { uuid as generateUuid } from "../utils"
+import { HIDE_ROLE_LIST } from "../config"
 
 
 const sessionList = ref<ISessionEditItem[]>([])
@@ -221,7 +222,7 @@ export function useSessionStore() {
         if (availableSessions.length > 0) {
           // 优先选择今天的会话，否则选择第一个会话
           const today = new Date().toDateString()
-          const todaySessions = availableSessions.filter((s) => new Date(s.createdAt).toDateString() === today)
+          const todaySessions = availableSessions.filter((s) => new Date(s.createdAt || '').toDateString() === today)
 
           nextSession = todaySessions.length > 0 ? todaySessions[0] : availableSessions[0]
           
@@ -287,7 +288,7 @@ export function useSessionStore() {
     if (sessions.length > 0) {
       // 按创建时间降序排序，获取最新的会话
       const latestSession = sessions.sort((a, b) => 
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime()
       )[0]
 
       // 获取最新会话的内容
@@ -295,7 +296,7 @@ export function useSessionStore() {
       targetSessionContents = await getContents(latestSession.sessionCode)
 
       // 检查会话内容是否为空（检查每个内容的 content 字段）
-      const hasContent = targetSessionContents.some(item => item.content && item.content.trim() !== '')
+      const hasContent = targetSessionContents.filter(item => !HIDE_ROLE_LIST.includes(item.role)).some(item => item.content && item.content.trim() !== '')
 
       // 如果内容为空，直接使用这个会话
       if (!hasContent) {
@@ -310,7 +311,7 @@ export function useSessionStore() {
       // 使用现有会话
       const setContents = checkSdkMethod('setSessionContents')
       setContents(targetSessionContents)
-      setCurrentSession(targetSession)
+      switchSessionWithContents(targetSession)
     }
 
     // 如果不需要初始化聊天，直接返回
