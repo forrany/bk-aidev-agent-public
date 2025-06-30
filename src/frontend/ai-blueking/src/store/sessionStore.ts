@@ -211,34 +211,33 @@ export function useSessionStore() {
     await deleteApi(sessionCode)
 
     const index = sessionList.value.findIndex((s) => s.sessionCode === sessionCode)
-    if (index !== -1) {
-      // 如果删除的是当前会话，找到一个可用的会话
-      let nextSession: ISessionEditItem | null = null
-      if (currentSession.value && currentSession.value.sessionCode === sessionCode) {
-        // 获取除了要删除的会话之外的所有会话
-        const availableSessions = sessionList.value.filter((s) => s.sessionCode !== sessionCode)
-
-        // 如果有其他会话
-        if (availableSessions.length > 0) {
-          // 优先选择今天的会话，否则选择第一个会话
-          const today = new Date().toDateString()
-          const todaySessions = availableSessions.filter((s) => new Date(s.createdAt || '').toDateString() === today)
-
-          nextSession = todaySessions.length > 0 ? todaySessions[0] : availableSessions[0]
-          
-          if (nextSession) {
-            // 切换到新会话并获取内容
-            await switchSessionWithContents(nextSession)
-          }
-        } else {
-          currentSession.value = null
-        }
-      }
-
-      // 执行删除
-      sessionList.value.splice(index, 1)
-      return nextSession
+    if (index === -1) {
+      return null
     }
+
+    const isDeletingCurrentSession = currentSession.value?.sessionCode === sessionCode
+    // 先从列表中删除
+    sessionList.value.splice(index, 1)
+
+    // 如果删除的是当前会话，需要切换到新会话
+    if (isDeletingCurrentSession) {
+      // 如果还有其他会话
+      if (sessionList.value.length > 0) {
+        // 优先选择今天的会话，否则选择第一个会话
+        const today = new Date().toDateString()
+        const todaySessions = sessionList.value.filter((s) => new Date(s.createdAt || '').toDateString() === today)
+        const nextSession = todaySessions.length > 0 ? todaySessions[0] : sessionList.value[0]
+        
+        await switchSessionWithContents(nextSession)
+        return nextSession
+      } 
+      
+      // 如果没有其他会话，则创建一个新会话
+      const newSession = await addNewSession()
+      return newSession
+    }
+
+    // 如果删除的不是当前会话，则不需要切换
     return null
   }
 
