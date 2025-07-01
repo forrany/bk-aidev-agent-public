@@ -1,5 +1,5 @@
 import { ref } from "vue"
-import type { ISession, ISessionContent } from "@blueking/ai-ui-sdk/types"
+import type { ISession, ISessionContent, IAgentInfo } from "@blueking/ai-ui-sdk/types"
 import type { ISessionEditItem, SdkApi } from "./types"
 import { uuid as generateUuid } from "../utils"
 import { HIDE_ROLE_LIST } from "../config"
@@ -12,6 +12,8 @@ let sdkApi: Partial<SdkApi> = {}
 
 // 存储会话的原始值
 const originalSessionValues = ref<Record<string, ISessionEditItem>>({})
+
+let agentInfo: IAgentInfo | null = null
 
 /**
  * 使用会话管理 Store
@@ -233,8 +235,8 @@ export function useSessionStore() {
       } 
       
       // 如果没有其他会话，则创建一个新会话
-      const newSession = await addNewSession()
-      return newSession
+      await initSession(false)
+      return null
     }
 
     // 如果删除的不是当前会话，则不需要切换
@@ -313,25 +315,25 @@ export function useSessionStore() {
       switchSessionWithContents(targetSession)
     }
 
-    // 如果不需要初始化聊天，直接返回
-    if (!isInitChat) return {
-      openingRemark: '',
-      predefinedQuestions: [],
+    if (!agentInfo || isInitChat) {
+      // 获取会话设置
+      const getAgentInfo = checkSdkMethod('getAgentInfoApi')
+      const { conversationSettings, promptSetting } = await getAgentInfo()
+      agentInfo = {
+        conversationSettings: conversationSettings,
+        promptSetting: promptSetting
+      }
     }
 
-    // 获取会话设置
-    const getAgentInfo = checkSdkMethod('getAgentInfoApi')
-    const { conversationSettings, promptSetting } = await getAgentInfo()
-
+      
     // 处理角色设置
-    if (promptSetting?.content?.length) {
+    if (agentInfo?.promptSetting?.content?.length) {
       const handleRole = checkSdkMethod('handleCompleteRole')
-      await handleRole(targetSession.sessionCode, promptSetting.content)
+      await handleRole(targetSession.sessionCode, agentInfo.promptSetting.content)
     }
 
     return {
-      openingRemark: conversationSettings?.openingRemark || '',
-      predefinedQuestions: conversationSettings?.predefinedQuestions || [],
+      conversationSettings: agentInfo?.conversationSettings,
     }
   }
 

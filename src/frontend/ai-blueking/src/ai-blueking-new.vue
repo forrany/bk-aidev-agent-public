@@ -369,9 +369,9 @@ sessionStore.registerSdkMethods({
 
 // 封装会话初始化逻辑
 const initSession = async () => {
-  const { openingRemark: remark, predefinedQuestions: questions } = await sessionStore.initSession()
-  openingRemark.value = remark
-  predefinedQuestions.value = questions
+  const { conversationSettings } = await sessionStore.initSession()
+  openingRemark.value = conversationSettings?.openingRemark || ''
+  predefinedQuestions.value = conversationSettings?.predefinedQuestions || []
   isSessionInitialized.value = true
 }
 
