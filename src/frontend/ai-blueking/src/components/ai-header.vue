@@ -19,12 +19,12 @@
         v-bk-tooltips="{ content: t('新增聊天'), boundary: 'parent' }"
         @click="handleNewChat"
       ></i>
-      <BkPopover ref="historyPanelRef" theme="light" trigger="click" boundary="parent">
-        <i class="bkai-icon bkai-history" v-bk-tooltips="{ content: t('历史会话'), boundary: 'parent' }"></i>
-        <template #content>
-          <HistoryPanel @close="handleCloseHistoryPanel" />
-        </template>
-      </BkPopover>
+      <i
+        ref="historyIconRef"
+        class="bkai-icon bkai-history"
+        v-bk-tooltips="{ content: t('历史会话'), boundary: 'parent' }"
+        @click="handleHistoryClick"
+      ></i>
       <i
         ref="compressionRef"
         class="bkai-icon"
@@ -45,10 +45,11 @@
 
   import logo from '../assets/images/avatar.png';
   import { useTooltip } from '../composables/use-tippy';
+  import { useHistoryPanel } from '../composables/use-history-panel';
   import { t } from '../lang';
   import { sessionStore } from '../store/sessionStore';
 
-  import { bkTooltips, Popover as BkPopover } from 'bkui-vue';
+  import { bkTooltips } from 'bkui-vue';
   import HistoryPanel from './history-panel.vue';
 
   const props = withDefaults(defineProps<{
@@ -65,7 +66,19 @@
 
   const vBkTooltips = bkTooltips;
 
-  const historyPanelRef = ref<InstanceType<typeof BkPopover> | null>(null);
+  // 历史面板相关的 refs
+  const historyIconRef = ref<HTMLElement | null>(null);
+
+  // 使用历史面板 composable
+  const { handleTriggerClick: handleHistoryClick } = useHistoryPanel({
+    triggerRef: historyIconRef,
+    panelComponent: HistoryPanel,
+    tippyOptions: {
+      placement: 'bottom-end',
+      offset: [0, 8],
+      appendTo: () => document.querySelector('.ai-blueking-container-wrapper') as HTMLElement || document.body,
+    }
+  });
 
   const compressionIcon = computed(() => {
     return props.isCompressionHeight ? 'bkai-morenchicun' : 'bkai-yasuo';
@@ -115,9 +128,7 @@
     destroyAll();
   });
 
-  const handleCloseHistoryPanel = () => {
-    historyPanelRef.value?.hide();
-  };
+
 
   // 处理新增聊天按钮点击
   const handleNewChat = async () => {
@@ -191,6 +202,21 @@
         color: #4d4f56;
         background: #eaebf0;
       }
+    }
+  }
+</style>
+
+<style lang="scss">
+  // 历史面板 tippy 样式
+  .tippy-box[data-theme~='history-panel'] {
+    background-color: #fff;
+    border: 1px solid #dcdee5;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    padding: 0;
+
+    .tippy-content {
+      padding: 0px;
     }
   }
 </style>

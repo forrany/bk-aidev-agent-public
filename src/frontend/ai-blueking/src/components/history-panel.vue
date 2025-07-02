@@ -193,6 +193,7 @@ const handleEnter = (_value: string, event: Event) => {
   background-color: #fff;
   border-radius: 4px;
   overflow-y: auto;
+  padding: 8px 4px;
   .history-panel-header {
     display: flex;
     flex-direction: column;
