@@ -1,5 +1,70 @@
 # 更新日志
 
+## [1.1.2] - 2025-07-08
+
+### ✨ 新增功能
+
+#### 可配置压缩边距
+- **新增 `miniPadding` 属性**：支持自定义压缩状态下的边距
+
+```vue
+<template>
+  <AIBlueking
+    :url="apiUrl"
+    :mini-padding="20"
+  />
+</template>
+```
+
+### 🎨 用户体验优化
+
+#### 高度切换逻辑优化
+- **智能恢复**：恢复默认高度时使用用户设置的初始位置和尺寸
+- **保持配置**：不再使用固定的 `window.innerHeight`，而是根据用户的初始配置恢复
+- **状态管理改进**：更好地保持用户自定义的初始位置、高度等配置
+
+### 🔧 新增属性
+
+| 属性/方法名 | 类型 | 默认值 | 描述 |
+|------------|------|--------|------|
+| `miniPadding` | `Number` | `0` | 压缩状态下的边距，单位为像素 |
+
+### 📝 使用示例
+
+```vue
+<template>
+  <div>
+    <!-- 自定义压缩边距 -->
+    <AIBlueking
+      :url="apiUrl"
+      :mini-padding="20"
+      :default-width="500"
+      :default-height="600"
+      :default-top="100"
+      :default-left="200"
+    />
+
+    <!-- 无边距压缩（默认行为） -->
+    <AIBlueking
+      :url="apiUrl"
+      :mini-padding="0"
+    />
+  </div>
+</template>
+
+<script setup>
+import { AIBlueking } from '@blueking/ai-blueking';
+
+const apiUrl = 'your-ai-service-url';
+</script>
+```
+
+### 🔧 技术改进
+
+- **初始状态保存**：新增 `initialTop`、`initialHeight`、`initialWidth` 等状态保存用户设置的初始值
+- **恢复逻辑优化**：`toggleCompression` 函数在恢复时使用保存的初始值而非固定值
+- **参数化配置**：将硬编码的 `miniPadding` 改为可配置参数，提升组件灵活性
+
 ## [1.1.1] - 2025-07-08
 
 ### ✨ 新增功能

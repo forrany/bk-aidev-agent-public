@@ -179,6 +179,7 @@ interface Props {
   showHistoryIcon?: boolean
   showNewChatIcon?: boolean
   placeholder?: string
+  miniPadding?: number
 }
 
 // Props 定义
@@ -204,6 +205,7 @@ const props = withDefaults(defineProps<Props>(), {
   showHistoryIcon: true,
   showNewChatIcon: true,
   placeholder: t('输入 "/" 唤出 Prompt\n通过 Shift + Enter 进行换行输入'),
+  miniPadding: 0,
 })
 
 // Emits 定义
@@ -249,6 +251,7 @@ const { minWidth, minHeight, maxWidth, top, left, width, height, isCompressionHe
     defaultHeight: props.defaultHeight,
     defaultTop: props.defaultTop,
     defaultLeft: props.defaultLeft,
+    miniPadding: props.miniPadding,
   })
 
 const inputHeight = ref(68)

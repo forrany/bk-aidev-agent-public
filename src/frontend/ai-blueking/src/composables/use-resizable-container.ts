@@ -46,6 +46,8 @@ interface ResizableContainerOptions {
   defaultTop?: number;
   /** 自定义初始左侧位置 */
   defaultLeft?: number;
+  /** 压缩状态下的边距，默认为 0px */
+  miniPadding?: number;
 }
 
 /**
@@ -61,14 +63,18 @@ export function useResizableContainer(options: ResizableContainerOptions = {}) {
   const minHeight = options.minHeight || 400;
   const maxWidthPercent = options.maxWidthPercent || 40;
   const miniHeight = options.miniHeight || 800;
-  const miniPadding = 50;
+  const miniPadding = options.miniPadding !== undefined ? options.miniPadding : 0;
 
   // 状态管理
   const initialX = ref(options.defaultLeft !== undefined ? options.defaultLeft : window.innerWidth - initWidth);
-  const top = ref(options.defaultTop !== undefined ? options.defaultTop : 0);
-  const left = ref(options.defaultLeft !== undefined ? options.defaultLeft : initialX.value);
-  const width = ref(initWidth);
-  const height = ref(options.defaultHeight !== undefined ? options.defaultHeight : window.innerHeight - top.value);
+  const initialTop = ref(options.defaultTop !== undefined ? options.defaultTop : 0);
+  const initialHeight = ref(options.defaultHeight !== undefined ? options.defaultHeight : window.innerHeight - (options.defaultTop !== undefined ? options.defaultTop : 0));
+  const initialWidth = ref(initWidth);
+
+  const top = ref(initialTop.value);
+  const left = ref(initialX.value);
+  const width = ref(initialWidth.value);
+  const height = ref(initialHeight.value);
   const maxWidth = ref(Math.max(window.innerWidth * (maxWidthPercent / 100), width.value));
   const isCompressionHeight = ref(false);
   const leftDiff = ref(0);
@@ -117,13 +123,15 @@ export function useResizableContainer(options: ResizableContainerOptions = {}) {
   // 切换压缩高度
   const toggleCompression = () => {
     if (isCompressionHeight.value) {
-      top.value = 0;
+      // 恢复到用户设置的初始位置和尺寸
+      top.value = initialTop.value;
       nextTick(() => {
-        height.value = window.innerHeight;
+        height.value = initialHeight.value;
         left.value = initialX.value;
-        width.value = initWidth;
+        width.value = initialWidth.value;
       });
     } else {
+      // 切换到压缩状态
       top.value = window.innerHeight - miniHeight - miniPadding;
       left.value = initialX.value - miniPadding;
       width.value = initWidth;

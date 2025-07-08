@@ -8,6 +8,17 @@ export default {
     return {
       changelogData: [
         {
+          version: "v1.1.2",
+          date: "2025-07-08",
+          features: [
+            "新增 `miniPadding` 属性：支持自定义压缩状态下的边距，提供更灵活的布局控制"
+          ],
+          improvements: [
+            "优化高度切换逻辑：恢复默认高度时使用用户设置的初始位置和尺寸，而非固定的窗口高度",
+            "改进容器状态管理：更好地保持用户自定义的初始配置"
+          ]
+        },
+        {
           version: "v1.1.1",
           date: "2025-07-08",
           features: [
