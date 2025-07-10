@@ -51,5 +51,10 @@
     "vue": "^3.4.27",
     "vue-tsc": "^2.0.19",
     "zip-a-folder": "^3.1.6"
+  },
+  "pnpm": {
+    "overrides": {
+      "dompurify": ">=3.2.4"
+    }
   }
 }
