@@ -228,6 +228,7 @@ const showScrollToBottom = ref(false)
 const isNimbusMinimize = ref(props.defaultMinimize)
 let lastScrollTop = 0 // 上一次的滚动位置, 用于判断是否向下滑动
 const isSessionInitialized = ref(false)
+let initSessionPromise: Promise<void> | null = null // 用于避免重复初始化会话
 const openingRemark = ref("") // 接口获取的开场白
 const predefinedQuestions: Ref<string[]> = ref([]) // 接口获取的预设问题
 
@@ -404,10 +405,31 @@ sessionStore.registerSdkMethods({
 
 // 封装会话初始化逻辑
 const initSession = async () => {
-  const { conversationSettings } = await sessionStore.initSession()
-  openingRemark.value = conversationSettings?.openingRemark || ""
-  predefinedQuestions.value = conversationSettings?.predefinedQuestions || []
-  isSessionInitialized.value = true
+  // 如果已经有正在进行的初始化，则等待其完成
+  if (initSessionPromise) {
+    await initSessionPromise
+    return
+  }
+
+  // 如果已经初始化完成，则直接返回
+  if (isSessionInitialized.value && !initSessionPromise) {
+    return
+  }
+
+  // 创建新的初始化Promise
+  initSessionPromise = (async () => {
+    try {
+      const { conversationSettings } = await sessionStore.initSession()
+      openingRemark.value = conversationSettings?.openingRemark || ""
+      predefinedQuestions.value = conversationSettings?.predefinedQuestions || []
+      isSessionInitialized.value = true
+    } finally {
+      // 无论成功还是失败，都要清理Promise
+      initSessionPromise = null
+    }
+  })()
+
+  await initSessionPromise
 }
 
 // 监听 url 变化
@@ -420,7 +442,9 @@ watch(
         url: newUrl,
         ...props.requestOptions,
       })
-      // URL 变化时重新初始化会话
+      // URL 变化时重置初始化状态并重新初始化会话
+      isSessionInitialized.value = false
+      initSessionPromise = null
       initSession()
     }
   }
