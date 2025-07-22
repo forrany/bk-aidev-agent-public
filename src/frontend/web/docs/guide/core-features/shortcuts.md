@@ -36,7 +36,7 @@ const shortcuts = [
   {
     id: 'explain',
     name: '解释代码',
-    icon: 'bkai-code',
+    icon: 'bkai-icon bkai-code',
     components: [
       {
         type: 'textarea',
@@ -80,7 +80,7 @@ const handleShortcutClick = (data) => {
 interface IShortcut {
   id: string;       // 快捷操作的唯一标识符
   name: string;     // 显示的操作名称
-  icon?: string;    // 按钮图标的类名
+  icon?: string;    // 按钮图标的完整类名（如：'bkai-icon bkai-translate'）
   components: Array<{
     type: string;    // 组件类型
     name?: string;   // 表单项名称
@@ -120,7 +120,7 @@ interface IShortcut {
 {
   id: 'translate',
   name: '翻译',
-  icon: 'bkai-translate',
+  icon: 'bkai-icon bkai-translate',
   components: [
     {
       type: 'textarea',
@@ -161,7 +161,7 @@ interface IShortcut {
 {
   id: 'analyze_error',
   name: '分析错误',
-  icon: 'bkai-bug',
+  icon: 'bkai-icon bkai-bug',
   components: [
     {
       type: 'textarea',
@@ -187,7 +187,7 @@ interface IShortcut {
 {
   id: 'generate_code',
   name: '生成代码',
-  icon: 'bkai-code',
+  icon: 'bkai-icon bkai-code',
   components: [
     {
       type: 'input',

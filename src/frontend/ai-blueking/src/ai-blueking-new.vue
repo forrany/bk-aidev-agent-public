@@ -560,6 +560,7 @@
       ...props.requestOptions,
     });
 
+    emit('send-message', shortcut.name);
     emit('shortcut-click', shortcut);
   };
 

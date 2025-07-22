@@ -21,7 +21,7 @@
           :key="index"
           @click="handleShortcutClick(btn)"
         >
-          <i v-if="btn.icon" class="bkai-icon" :class="btn.icon"></i>
+          <i v-if="btn.icon" :class="btn.icon"></i>
           <span class="btn-text ai-blueking-tag-text">{{ btn.name }}</span>
         </div>
       </div>
