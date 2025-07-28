@@ -114,6 +114,7 @@
   import hljs from 'highlight.js';
   import MarkdownIt from 'markdown-it';
   import MarkdownItCodeCopy from 'markdown-it-code-copy';
+  import DOMPurify from 'dompurify';
 
   import defaultUserLogo from '../assets/images/ai-user.png';
   import AiCite from '../components/ai-cite.vue';
@@ -192,7 +193,13 @@
 
   const renderValue = computed(() => {
     if (!props.message.content) return '';
-    const dom = md.render(props.message.content);
+    const rendered = md.render(props.message.content);
+    // 使用 DOMPurify 净化内容以防止 XSS
+    const sanitized = DOMPurify.sanitize(rendered, {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input'],
+      FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover']
+    });
 
     // Process mermaid diagrams after DOM update
     nextTick(() => {
@@ -206,7 +213,7 @@
       }
     });
 
-    return dom.replace(/\s*<\/p>\s*$/, '</p>');
+    return sanitized.replace(/\s*<\/p>\s*$/, '</p>');
   });
 
   const timeMessage = computed(() => {

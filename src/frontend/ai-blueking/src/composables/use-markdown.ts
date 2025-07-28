@@ -4,6 +4,7 @@ import MarkdownIt from 'markdown-it'
 import MarkdownItCodeCopy from 'markdown-it-code-copy'
 import MarkdownItLinkBlank from '../plugins/markdown-it-link-blank'
 import mermaidPlugin from '../plugins/markdown-it-mermaid'
+import DOMPurify from 'dompurify'
 
 /**
  * Markdown 渲染 composable
@@ -40,8 +41,14 @@ export function useMarkdown() {
     
     try {
       const rendered = md.render(text)
+      // 使用 DOMPurify 净化内容以防止 XSS
+      const sanitized = DOMPurify.sanitize(rendered, {
+        USE_PROFILES: { html: true },
+        FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input'],
+        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover']
+      })
       // 移除末尾的空白段落标签
-      return rendered.replace(/\s*<\/p>\s*$/, '</p>')
+      return sanitized.replace(/\s*<\/p>\s*$/, '</p>')
     } catch (error) {
       console.warn('Markdown rendering failed:', error)
       // 如果渲染失败，返回转义后的纯文本
