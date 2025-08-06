@@ -135,7 +135,7 @@ export default {
 3. 点击 **📋** 图标打开历史会话面板
 4. 在历史面板中可以切换、重命名或删除会话
 
-想了解更多多会话功能，请参阅 [会话管理指南](/guide/advanced-usage/session-access)。
+想了解更多多会话功能，请参阅 [会话生命周期管理指南](/guide/advanced-usage/session-lifecycle)。
 
 ## 下一步
 

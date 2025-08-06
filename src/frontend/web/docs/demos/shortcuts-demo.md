@@ -211,7 +211,7 @@ const triggerShortcut = () => {
 };
 ```
 
-具体可以参考 [编程式调用指南](/guide/advanced-usage/programmatic-control)
+具体可以参考 [编程交互基础指南](/guide/advanced-usage/programmatic-interaction)
 
 ## 注意事项
 

@@ -34,4 +34,4 @@
 
 7.  **Q: 如何获取当前的对话历史记录？**
 
-    A: 可以通过访问组件实例的 `sessionContents` 属性来获取。这是一个只读的响应式数组，包含了当前对话的消息列表。详细说明参见 [访问会话内容指南](/guide/advanced-usage/session-access)。
+    A: 可以通过访问组件实例的 `sessionContents` 属性来获取。这是一个只读的响应式数组，包含了当前对话的消息列表。详细说明参见 [编程交互基础指南](/guide/advanced-usage/programmatic-interaction#访问会话内容)。
