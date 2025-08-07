@@ -538,7 +538,9 @@
     const targetSession = sessionStore.sessionList.value.find(s => s.sessionCode === sessionCode);
     if (targetSession) {
       await sessionStore.switchSessionWithContents(targetSession);
+      return true;
     }
+    return false;
   };
   const handleWindowResize = () => {
     windowHeight.value = window.innerHeight;
@@ -723,7 +725,7 @@
       chatInputBoxRef.value?.focus();
     },
     // 新增会话接口
-    addNewSession: sessionStore.addNewSession,
+    addNewSession: (sessionCode?: string) => sessionStore.addNewSession(sessionCode),
     // 更新会话名称接口
     updateSessionName: async (sessionCode: string, newName: string) => {
       return sessionStore.updateSession(sessionCode, { sessionName: newName });

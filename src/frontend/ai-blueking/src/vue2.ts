@@ -102,6 +102,14 @@ export default {
       default: false,
       type: Boolean,
     },
+    initialSessionCode: {
+      type: String,
+      default: '',
+    },
+    autoSwitchToInitialSession: {
+      type: Boolean,
+      default: false,
+    },
   },
   data() {
     return {
@@ -136,6 +144,8 @@ export default {
           defaultHeight: that.defaultHeight,
           defaultLeft: that.defaultLeft,
           defaultTop: that.defaultTop,
+          initialSessionCode: that.initialSessionCode,
+          autoSwitchToInitialSession: that.autoSwitchToInitialSession,
           onClose() {
             emit('close', ...arguments);
           },
@@ -178,8 +188,8 @@ export default {
         { deep: true }
       )
     );
-    this.handleShow = () => {
-      aiBlueking.component.exposed.handleShow();
+    this.handleShow = (sessionCode?: string) => {
+      aiBlueking.component.exposed.handleShow(sessionCode);
     };
     this.handleStop = () => {
       aiBlueking.component.exposed.handleStop();
@@ -207,6 +217,18 @@ export default {
     };
     this.updateRequestOptions = (options: { message: string; cite: string }) => {
       aiBlueking.component.exposed.updateRequestOptions(options);
+    };
+    this.addNewSession = (sessionCode?: string) => {
+      return aiBlueking.component.exposed.addNewSession(sessionCode);
+    };
+    this.updateSessionName = (sessionCode: string, newName: string) => {
+      return aiBlueking.component.exposed.updateSessionName(sessionCode, newName);
+    };
+    this.switchToSession = (sessionCode: string) => {
+      return aiBlueking.component.exposed.switchToSession(sessionCode);
+    };
+    this.getSessionList = () => {
+      return aiBlueking.component.exposed.getSessionList();
     };
 
     // 添加 组件暴露属性（属性类型使用 defineProperty 添加, 以保持响应式）

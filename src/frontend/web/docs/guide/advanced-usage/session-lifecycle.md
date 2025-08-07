@@ -95,7 +95,11 @@ const initialSessionCode = ref('') // 初始会话代码
 const handleCreateSession = async () => {
   try {
     // 1. 调用组件方法创建新会话
+    // 可以不传参数让系统自动生成 sessionCode
     const newSession = await aiBlueking.value?.addNewSession()
+    
+    // 或者传入自定义的 sessionCode
+    // const newSession = await aiBlueking.value?.addNewSession('my-custom-session-code')
     
     if (newSession?.sessionCode) {
       // 2. 根据输入的名称重命名会话（如果提供了名称）
@@ -247,7 +251,7 @@ onMounted(async () => {
 
 | 方法名 | 参数 | 返回值 | 描述 |
 | --- | --- | --- | --- |
-| `addNewSession()` | - | `Promise<ISessionEditItem>` | 创建一个新的聊天会话并返回会话信息 |
+| `addNewSession(sessionCode?)` | `sessionCode?: string` | `Promise<ISessionEditItem>` | 创建一个新的聊天会话并返回会话信息。可选参数 sessionCode 用于指定会话代码，如果不提供则自动生成。 |
 | `updateSessionName(sessionCode, newName)` | `sessionCode: string, newName: string` | `Promise<ISessionEditItem>` | 更新指定会话的名称 |
 | `switchToSession(sessionCode)` | `sessionCode: string` | `Promise<void>` | 切换到指定代码的会话 |
 | `getSessionList()` | - | `Promise<ISessionEditItem[]>` | 获取最新的会话列表 |

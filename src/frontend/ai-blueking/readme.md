@@ -171,7 +171,7 @@ yarn add @blueking/ai-blueking
 | handleStop          | -                                  | -      | 停止当前正在生成的内容 |
 | sendChat            | options: {message, cite, shortcut} | -      | 发送消息到 AI 小鲸     |
 | handleShortcutClick | shortcut: ShortCut                 | -      | 处理快捷操作点击       |
-| addNewSession       | -                                  | Promise<ISessionEditItem> | 创建新的聊天会话 |
+| addNewSession       | sessionCode?: string               | Promise<ISessionEditItem> | 创建新的聊天会话，可选择性地指定会话代码 |
 | updateSessionName   | sessionCode: string, newName: string | Promise<ISessionEditItem | null> | 更新会话名称 |
 | switchToSession     | sessionCode: string                | Promise<void> | 切换到指定会话 |
 

@@ -80,11 +80,12 @@ export function useSessionStore() {
 
   /**
    * 创建新会话
+   * @param sessionCode 可选的会话代码，如果不提供则自动生成
    * @returns Promise<ISessionEditItem> 新创建的会话
    */
-  const addNewSession = async () => {
-    // 生成新的会话代码
-    const sessionCode = generateUuid();
+  const addNewSession = async (sessionCode?: string) => {
+    // 如果没有提供 sessionCode，则生成新的会话代码
+    const newSessionCode = sessionCode || generateUuid();
 
     // 查找现有会话中以 Chat- 开头的最大索引
     const chatPattern = /^Chat-(\d+)$/;
@@ -109,7 +110,7 @@ export function useSessionStore() {
     const sessionName = `Chat-${newIndex}`;
 
     const newSession: ISession = {
-      sessionCode,
+      sessionCode: newSessionCode,
       sessionName,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

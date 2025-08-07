@@ -68,6 +68,7 @@ pnpm run clean             # Remove dist and node_modules
 - **Type Safety**: Full TypeScript with strict configuration
 - **Event-driven**: Uses Vue event system for communication
 - **Cross-framework**: Vue 2 compatibility via wrapper component
+- **Vue 2/3 Sync**: When adding new props or exposing new methods in `ai-blueking-new.vue`, you MUST update `vue2.ts` to ensure feature parity for Vue 2 users. This includes props mapping and method exposure.
 - **I18n**: Built-in internationalization with Chinese as primary language
 
 ## Integration
