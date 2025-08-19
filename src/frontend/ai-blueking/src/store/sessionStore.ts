@@ -412,6 +412,14 @@ export function useSessionStore() {
       }
     }
 
+    // 增加所有会话的更新计数器以触发相关组件刷新
+    sessions.forEach(session => {
+      if (!sessionUpdateCounter.value[session.sessionCode]) {
+        sessionUpdateCounter.value[session.sessionCode] = 0;
+      }
+      sessionUpdateCounter.value[session.sessionCode]++;
+    });
+
     return sessionList.value;
   };
 
