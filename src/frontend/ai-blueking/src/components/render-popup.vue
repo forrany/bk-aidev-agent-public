@@ -100,8 +100,23 @@
     const shortcuts =
       props.shortcuts.length > 0 ? props.shortcuts : props.conversationSettings?.commands || [];
     // 如果提供了过滤函数，则应用过滤
-    if (typeof props.shortcutFilter === 'function') {
-      return shortcuts.filter(item => !!props.shortcutFilter?.(toRaw(item), selectedText.value));
+    if (props.shortcutFilter) {
+      // 创建带有选中文本信息的快捷方式副本
+      const shortcutsWithSelectedText = shortcuts.map(shortcut => {
+        if (shortcut.components && selectedText.value) {
+          // 为每个组件添加选中文本
+          const componentsWithSelectedText = shortcut.components.map(component => ({
+            ...component,
+            selectedText: selectedText.value,
+          }));
+          return {
+            ...shortcut,
+            components: componentsWithSelectedText,
+          };
+        }
+        return shortcut;
+      });
+      return shortcutsWithSelectedText.filter(props.shortcutFilter);
     }
     return shortcuts;
   });
