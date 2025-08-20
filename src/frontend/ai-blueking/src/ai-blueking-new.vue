@@ -195,7 +195,7 @@
 
   // 类型定义
   interface Props {
-    extCls: string;
+    extCls?: string;
     title?: string;
     helloText?: string;
     enablePopup?: boolean;
