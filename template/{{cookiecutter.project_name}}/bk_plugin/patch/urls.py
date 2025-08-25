@@ -11,6 +11,7 @@ specific language governing permissions and limitations under the License.
 """
 
 from django.conf import settings
+from django.urls import include, re_path
 from django.contrib import admin
 from django.urls import include, re_path
 from drf_yasg import openapi
