@@ -36,16 +36,16 @@
 
 ### 系统要求
 
-- Python 3.11+
+- Python 3.10+
 - Node.js 20+
 
 ### Agent 开发
 
-1. 确认 Python 版本（3.11.x）
+1. 确认 Python 版本（3.10.x）
 
    ```bash
    $ python --version
-   Python 3.11.5
+   Python 3.10.5
    ```
 
 2. 初始化项目环境（虚拟环境位于项目根目录 `.venv` 下），此步骤将始化本地`pre-commit`组件
