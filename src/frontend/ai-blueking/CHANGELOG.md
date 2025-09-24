@@ -1,11 +1,13 @@
-## [1.2.7-beta.1] - 2025-09-24
+## [1.2.7-beta.2] - 2025-09-24
 
 ### ✨ 新增功能
 
-#### 拖拽和调整大小结束事件支持
+#### 拖拽和调整大小事件支持
 
 - **新增 `drag-stop` 事件**: 拖拽结束时触发，参数为容器的位置和尺寸信息
 - **新增 `resize-stop` 事件**: 调整大小结束时触发，参数为容器的位置和尺寸信息
+- **新增 `dragging` 事件**: 拖拽过程中触发，参数为容器的位置和尺寸信息
+- **新增 `resizing` 事件**: 调整大小过程中触发，参数为容器的位置和尺寸信息
 - **新增回调函数支持**: 在 `useResizableContainer` 组合式函数中增加拖拽和调整大小结束的回调函数
 
 #### 开发体验优化
@@ -26,17 +28,17 @@
 </template>
 
 <script setup>
-import { AIBlueking } from '@blueking/ai-blueking';
+  import { AIBlueking } from '@blueking/ai-blueking';
 
-const onDragStop = (position) => {
-  console.log('拖拽结束', position);
-  // position 包含 x, y, width, height 属性
-};
+  const onDragStop = position => {
+    console.log('拖拽结束', position);
+    // position 包含 x, y, width, height 属性
+  };
 
-const onResizeStop = (position) => {
-  console.log('调整大小结束', position);
-  // position 包含 x, y, width, height 属性
-};
+  const onResizeStop = position => {
+    console.log('调整大小结束', position);
+    // position 包含 x, y, width, height 属性
+  };
 </script>
 ```
 

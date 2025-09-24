@@ -56,12 +56,16 @@ interface ResizableContainerOptions {
  * @param options 配置选项
  * @param onDragStop 拖拽结束回调函数
  * @param onResizeStop 调整大小结束回调函数
+ * @param onDragging 拖拽过程中回调函数
+ * @param onResizing 调整大小过程中回调函数
  * @returns 容器的属性和方法
  */
 export function useResizableContainer(
   options: ResizableContainerOptions = {},
   onDragStop?: (position: { x: number; y: number; width: number; height: number }) => void,
-  onResizeStop?: (position: { x: number; y: number; width: number; height: number }) => void
+  onResizeStop?: (position: { x: number; y: number; width: number; height: number }) => void,
+  onDragging?: (position: { x: number; y: number; width: number; height: number }) => void,
+  onResizing?: (position: { x: number; y: number; width: number; height: number }) => void
 ) {
   // 初始化参数
   const initWidth = options.initWidth || 400;
@@ -96,6 +100,16 @@ export function useResizableContainer(
     left.value = x;
     top.value = y;
     leftDiff.value = x - (window.innerWidth - width.value);
+
+    // 触发拖拽过程中回调
+    if (onDragging) {
+      onDragging({
+        x: left.value,
+        y: top.value,
+        width: width.value,
+        height: height.value,
+      });
+    }
   };
 
   const handleResizing = (x: number, y: number, w: number, h: number) => {
@@ -104,6 +118,16 @@ export function useResizableContainer(
     // 确保宽度不超过最大值
     width.value = Math.min(w, maxWidth.value);
     height.value = h;
+
+    // 触发调整大小过程中回调
+    if (onResizing) {
+      onResizing({
+        x: left.value,
+        y: top.value,
+        width: width.value,
+        height: height.value,
+      });
+    }
   };
 
   // 拖拽结束事件处理

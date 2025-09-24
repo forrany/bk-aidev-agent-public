@@ -21,6 +21,8 @@
 | `session-init`     | `sessionId: string`           | 会话初始化完成时触发，参数为当前会话ID。从 v1.1.6 开始支持。                                      |                                                   |
 | `drag-stop`        | `{ x: number; y: number; width: number; height: number }` | 拖拽结束时触发，参数为容器的位置和尺寸信息。从 v1.2.7 开始支持。                                      |
 | `resize-stop`      | `{ x: number; y: number; width: number; height: number }` | 调整大小结束时触发，参数为容器的位置和尺寸信息。从 v1.2.7 开始支持。                                      |
+| `dragging`         | `{ x: number; y: number; width: number; height: number }` | 拖拽过程中触发，参数为容器的位置和尺寸信息。从 v1.2.7 开始支持。                                      |
+| `resizing`         | `{ x: number; y: number; width: number; height: number }` | 调整大小过程中触发，参数为容器的位置和尺寸信息。从 v1.2.7 开始支持。                                      |
 
 ## 类型定义
 
@@ -53,6 +55,8 @@ interface ShortCut {
     @session-init="onSessionInit"
     @drag-stop="onDragStop"
     @resize-stop="onResizeStop"
+    @dragging="onDragging"
+    @resizing="onResizing"
   />
 </template>
 
@@ -74,6 +78,8 @@ const onSendMessage = (message) => console.log('Event: send-message', message);
 const onSessionInit = (sessionId) => console.log('Event: session-init', sessionId);
 const onDragStop = (position) => console.log('Event: drag-stop', position);
 const onResizeStop = (position) => console.log('Event: resize-stop', position);
+const onDragging = (position) => console.log('Event: dragging', position);
+const onResizing = (position) => console.log('Event: resizing', position);
 </script>
 ```
 
@@ -93,6 +99,8 @@ const onResizeStop = (position) => console.log('Event: resize-stop', position);
     @session-init="onSessionInit"
     @drag-stop="onDragStop"
     @resize-stop="onResizeStop"
+    @dragging="onDragging"
+    @resizing="onResizing"
   />
 </template>
 
@@ -115,7 +123,9 @@ export default {
     onSendMessage(message) { console.log('Event: send-message', message); },
     onSessionInit(sessionId) { console.log('Event: session-init', sessionId); },
     onDragStop(position) { console.log('Event: drag-stop', position); },
-    onResizeStop(position) { console.log('Event: resize-stop', position); }
+    onResizeStop(position) { console.log('Event: resize-stop', position); },
+    onDragging(position) { console.log('Event: dragging', position); },
+    onResizing(position) { console.log('Event: resizing', position); }
   }
 }
 </script>

@@ -198,6 +198,12 @@ export default {
           onResizeStop(...args: [{ x: number; y: number; width: number; height: number }]) {
             emit('resize-stop', ...args);
           },
+          onDragging(...args: [{ x: number; y: number; width: number; height: number }]) {
+            emit('dragging', ...args);
+          },
+          onResizing(...args: [{ x: number; y: number; width: number; height: number }]) {
+            emit('resizing', ...args);
+          },
           ...that.$attrs,
         });
 

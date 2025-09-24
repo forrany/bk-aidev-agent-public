@@ -8,10 +8,11 @@ export default {
     return {
       changelogData: [
         {
-          version: "v1.2.7-beta.1",
+          version: "v1.2.7-beta.2",
           date: "2025-09-24",
           features: [
             "新增 drag-stop 和 resize-stop 事件，支持监听拖拽和调整大小结束事件",
+            "新增 dragging 和 resizing 事件，支持监听拖拽和调整大小过程中的状态",
             "在 useResizableContainer 组合式函数中增加拖拽和调整大小结束的回调函数",
             "优化 ESLint 配置，修正了 tsconfig.json 路径配置"
           ]

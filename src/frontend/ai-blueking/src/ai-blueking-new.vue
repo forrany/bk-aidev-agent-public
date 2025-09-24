@@ -20,8 +20,8 @@
         drag-handle=".drag-handle"
         @dragging="handleDragging"
         @resizing="handleResizing"
-        @dragstop="handleDragStop"
-        @resizestop="handleResizeStop"
+        @drag-stop="handleDragStop"
+        @resize-stop="handleResizeStop"
       >
         <div
           ref="rootNode"
@@ -313,6 +313,8 @@
     (e: 'sdk-error', data: { apiName: string; code: number; message: string; data: unknown }): void;
     (e: 'transfer-messages', messageIds: string[]): void;
     (e: 'share-messages', messageIds: string[]): void;
+    (e: 'dragging', position: { x: number; y: number; width: number; height: number }): void;
+    (e: 'resizing', position: { x: number; y: number; width: number; height: number }): void;
     (e: 'drag-stop', position: { x: number; y: number; width: number; height: number }): void;
     (e: 'resize-stop', position: { x: number; y: number; width: number; height: number }): void;
   }>();
@@ -416,6 +418,14 @@
     position => {
       // 调整大小结束回调
       emit('resize-stop', position);
+    },
+    position => {
+      // 拖拽过程中回调
+      emit('dragging', position);
+    },
+    position => {
+      // 调整大小过程中回调
+      emit('resizing', position);
     }
   );
 
