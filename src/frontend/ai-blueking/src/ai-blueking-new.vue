@@ -20,6 +20,8 @@
         drag-handle=".drag-handle"
         @dragging="handleDragging"
         @resizing="handleResizing"
+        @dragstop="handleDragStop"
+        @resizestop="handleResizeStop"
       >
         <div
           ref="rootNode"
@@ -311,6 +313,8 @@
     (e: 'sdk-error', data: { apiName: string; code: number; message: string; data: unknown }): void;
     (e: 'transfer-messages', messageIds: string[]): void;
     (e: 'share-messages', messageIds: string[]): void;
+    (e: 'drag-stop', position: { x: number; y: number; width: number; height: number }): void;
+    (e: 'resize-stop', position: { x: number; y: number; width: number; height: number }): void;
   }>();
 
   // ===================================================================
@@ -393,15 +397,27 @@
     isCompressionHeight,
     handleDragging,
     handleResizing,
+    handleDragStop,
+    handleResizeStop,
     toggleCompression,
-  } = useResizableContainer({
-    maxWidthPercent: 80,
-    initWidth: props.defaultWidth,
-    defaultHeight: props.defaultHeight,
-    defaultTop: props.defaultTop,
-    defaultLeft: props.defaultLeft,
-    miniPadding: props.miniPadding,
-  });
+  } = useResizableContainer(
+    {
+      maxWidthPercent: 80,
+      initWidth: props.defaultWidth,
+      defaultHeight: props.defaultHeight,
+      defaultTop: props.defaultTop,
+      defaultLeft: props.defaultLeft,
+      miniPadding: props.miniPadding,
+    },
+    position => {
+      // 拖拽结束回调
+      emit('drag-stop', position);
+    },
+    position => {
+      // 调整大小结束回调
+      emit('resize-stop', position);
+    }
+  );
 
   // 动态计算 greeting 最大高度
   const greetingMaxHeight = computed(() => windowHeight.value - 367);

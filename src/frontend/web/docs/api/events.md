@@ -19,6 +19,8 @@
 | `receive-end`      | -                             | 响应接收完成时触发。                                                                              |
 | `send-message`     | `message: string`             | 发送消息时触发，参数为发送的消息内容。                                                           |
 | `session-init`     | `sessionId: string`           | 会话初始化完成时触发，参数为当前会话ID。从 v1.1.6 开始支持。                                      |                                                   |
+| `drag-stop`        | `{ x: number; y: number; width: number; height: number }` | 拖拽结束时触发，参数为容器的位置和尺寸信息。从 v1.2.7 开始支持。                                      |
+| `resize-stop`      | `{ x: number; y: number; width: number; height: number }` | 调整大小结束时触发，参数为容器的位置和尺寸信息。从 v1.2.7 开始支持。                                      |
 
 ## 类型定义
 
@@ -49,6 +51,8 @@ interface ShortCut {
     @receive-end="onReceiveEnd"
     @send-message="onSendMessage"
     @session-init="onSessionInit"
+    @drag-stop="onDragStop"
+    @resize-stop="onResizeStop"
   />
 </template>
 
@@ -68,6 +72,8 @@ const onReceiveText = (text) => console.log('Event: receive-text', text);
 const onReceiveEnd = () => console.log('Event: receive-end');
 const onSendMessage = (message) => console.log('Event: send-message', message);
 const onSessionInit = (sessionId) => console.log('Event: session-init', sessionId);
+const onDragStop = (position) => console.log('Event: drag-stop', position);
+const onResizeStop = (position) => console.log('Event: resize-stop', position);
 </script>
 ```
 
@@ -85,6 +91,8 @@ const onSessionInit = (sessionId) => console.log('Event: session-init', sessionI
     @receive-end="onReceiveEnd"
     @send-message="onSendMessage"
     @session-init="onSessionInit"
+    @drag-stop="onDragStop"
+    @resize-stop="onResizeStop"
   />
 </template>
 
@@ -105,7 +113,9 @@ export default {
     onReceiveText(text) { console.log('Event: receive-text', text); },
     onReceiveEnd() { console.log('Event: receive-end'); },
     onSendMessage(message) { console.log('Event: send-message', message); },
-    onSessionInit(sessionId) { console.log('Event: session-init', sessionId); }
+    onSessionInit(sessionId) { console.log('Event: session-init', sessionId); },
+    onDragStop(position) { console.log('Event: drag-stop', position); },
+    onResizeStop(position) { console.log('Event: resize-stop', position); }
   }
 }
 </script>

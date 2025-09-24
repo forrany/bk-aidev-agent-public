@@ -8,6 +8,15 @@ export default {
     return {
       changelogData: [
         {
+          version: "v1.2.7-beta.1",
+          date: "2025-09-24",
+          features: [
+            "新增 drag-stop 和 resize-stop 事件，支持监听拖拽和调整大小结束事件",
+            "在 useResizableContainer 组合式函数中增加拖拽和调整大小结束的回调函数",
+            "优化 ESLint 配置，修正了 tsconfig.json 路径配置"
+          ]
+        },
+        {
           version: "v1.2.6",
           date: "2025-09-18",
           important: "⚠️ <strong>重要提醒</strong>：小鲸 1.2.6 版本必须与后端 SDK 版本 1.0.0b42 或更高版本匹配使用，否则可能出现兼容性问题",
