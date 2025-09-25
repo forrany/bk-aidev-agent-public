@@ -8,6 +8,15 @@ export default {
     return {
       changelogData: [
         {
+          version: "v1.2.7-beta.3",
+          date: "2025-09-25",
+          features: [
+            "新增历史会话面板时间分组，支持3天前、5天前、1周前等更精细的时间分组",
+            "优化会话时间分组算法，改进历史会话管理体验",
+            "新增相关时间分组的国际化支持"
+          ]
+        },
+        {
           version: "v1.2.7-beta.2",
           date: "2025-09-24",
           features: [
