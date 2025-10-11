@@ -30,6 +30,9 @@
 | `exitSelectMode()`                        | -                                                                                                                     | `void`                        | <Badge type="tip" text="v1.2.5" /> 退出选择模式。                                                                                    |
 | `getSelectedMessages()`                   | -                                                                                                                     | `Array<ISessionContent>`      | <Badge type="tip" text="v1.2.5" /> 获取当前选择的消息列表。                                                                          |
 | `setCiteText(citeText)`                   | `citeText: string`                                                                                                    | `void`                        | <Badge type="tip" text="v1.2.6" /> 编程式设置输入框中的引用文本。可用于动态添加引用内容到输入框。                                    |
+| `updatePosition(x, y)`                    | `x: number, y: number`                                                                                                | `void`                        | <Badge type="tip" text="v1.2.7" /> 编程式更新容器位置。可用于动态调整AI小鲸窗口的位置。                                              |
+| `updateSize(w, h)`                        | `w: number, h: number`                                                                                                | `void`                        | <Badge type="tip" text="v1.2.7" /> 编程式更新容器大小。可用于动态调整AI小鲸窗口的尺寸。                                              |
+| `updatePositionAndSize(x, y, w, h)`       | `x: number, y: number, w: number, h: number`                                                                          | `void`                        | <Badge type="tip" text="v1.2.7" /> 同时更新容器的位置和大小。可用于一次性调整AI小鲸窗口的位置和尺寸。                                  |
 
 ::: danger 已废弃方法
 以下方法在相应版本中已被移除:

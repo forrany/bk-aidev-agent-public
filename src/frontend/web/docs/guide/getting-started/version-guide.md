@@ -2,7 +2,81 @@
 
 本指南提供了各版本间的主要变化和迁移方法，帮助您顺利升级 AI 小鲸组件。
 
-## v1.2.6 更新指南 <Badge type="tip" text="最新" />
+## v1.2.7 更新指南 <Badge type="tip" text="最新" />
+
+v1.2.7 版本新增了编程式控制容器位置和大小的功能，优化了可调整大小容器的逻辑，同时增强了历史会话面板的时间分组功能。
+
+### v1.2.7-beta.4 主要变更
+
+1. **新增编程式控制容器功能**：新增 `updatePosition`、`updateSize` 和 `updatePositionAndSize` 方法，支持动态调整AI小鲸窗口的位置和尺寸
+2. **优化可调整大小容器的逻辑**：完善容器的拖拽和调整大小功能
+3. **增强历史会话面板**：新增"3天前"、"5天前"、"1周前"等更精细的时间分组
+
+### 新增功能
+
+#### 1. 编程式控制容器位置和大小
+
+v1.2.7 版本新增了编程式控制容器位置和大小的功能，允许您动态调整 AI 小鲸窗口的位置和尺寸：
+
+```vue
+<template>
+  <AIBlueking ref="aiBlueking" :url="apiUrl" />
+  <button @click="moveToTopRight">移动到右上角</button>
+  <button @click="setSizeLarge">设置大尺寸</button>
+  <button @click="setPositionAndSize">设置位置和尺寸</button>
+</template>
+
+<script setup>
+import { ref } from 'vue';
+import { AIBlueking } from '@blueking/ai-blueking';
+
+const aiBlueking = ref(null);
+
+// 移动到右上角
+const moveToTopRight = () => {
+  const containerWidth = 400;
+  const x = window.innerWidth - containerWidth - 20;
+  const y = 20;
+
+  aiBlueking.value?.updatePosition(x, y);
+};
+
+// 设置大尺寸
+const setSizeLarge = () => {
+  aiBlueking.value?.updateSize(600, 500);
+};
+
+// 同时设置位置和尺寸
+const setPositionAndSize = () => {
+  const x = 100;
+  const y = 100;
+  const width = 500;
+  const height = 450;
+
+  aiBlueking.value?.updatePositionAndSize(x, y, width, height);
+};
+</script>
+```
+
+#### 2. 新增方法
+
+- `updatePosition(x: number, y: number): void` - 编程式更新容器位置
+- `updateSize(w: number, h: number): void` - 编程式更新容器大小
+- `updatePositionAndSize(x: number, y: number, w: number, h: number): void` - 同时更新容器的位置和大小
+
+### 升级注意事项
+
+1. **向后兼容**：所有现有功能完全兼容，无需修改现有代码
+2. **新功能可选**：新增功能均为可选特性，不会影响现有功能的正常使用
+3. **使用场景**：新方法特别适用于动态布局调整、响应式设计、用户偏好设置等场景
+
+### 升级步骤
+
+1. 更新依赖包到 v1.2.7 版本
+2. （可选）根据需要使用新增的 `updatePosition`、`updateSize` 和 `updatePositionAndSize` 方法进行编程式控制
+3. 测试所有现有功能确保兼容性
+
+## v1.2.6 更新指南
 
 v1.2.6 版本主要增强了群聊转人工功能，新增了编程式引用文本设置能力，并优化了相关代码逻辑。
 

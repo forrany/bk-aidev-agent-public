@@ -402,6 +402,9 @@
     handleDragStop,
     handleResizeStop,
     toggleCompression,
+    updatePosition,
+    updateSize,
+    updatePositionAndSize,
   } = useResizableContainer(
     {
       maxWidthPercent: 80,
@@ -1001,6 +1004,10 @@
     sessionList: sessionStore.sessionList,
     // 是否启用会话管理
     enableChatSession,
+    // 编程式控制容器位置和大小
+    updatePosition,
+    updateSize,
+    updatePositionAndSize,
   });
 </script>
 

@@ -1,3 +1,50 @@
+## [1.2.7-beta.4] - 2025-10-11
+
+### ✨ 新增功能
+
+#### 编程式控制容器位置和大小
+
+- **新增编程式控制功能**: 新增 `updatePosition`、`updateSize` 和 `updatePositionAndSize` 方法，支持动态调整AI小鲸窗口的位置和尺寸
+- **优化可调整大小容器的逻辑**: 完善容器的拖拽和调整大小功能，提升用户体验
+
+### 🎨 优化改进
+
+#### 可编程控制增强
+
+- **位置控制**: 通过 `updatePosition(x, y)` 方法可以动态设置容器的坐标位置
+- **尺寸控制**: 通过 `updateSize(w, h)` 方法可以动态设置容器的宽度和高度
+- **综合控制**: 通过 `updatePositionAndSize(x, y, w, h)` 方法可以同时设置位置和尺寸
+
+```vue
+<template>
+  <AIBlueking ref="aiBlueking" :url="apiUrl" />
+  <button @click="moveToTopRight">移动到右上角</button>
+  <button @click="setSizeLarge">设置大尺寸</button>
+</template>
+
+<script setup>
+import { ref } from 'vue';
+import { AIBlueking } from '@blueking/ai-blueking';
+
+const aiBlueking = ref(null);
+const apiUrl = '...';
+
+// 移动到右上角
+const moveToTopRight = () => {
+  const containerWidth = 400;
+  const x = window.innerWidth - containerWidth - 20;
+  const y = 20;
+
+  aiBlueking.value?.updatePosition(x, y);
+};
+
+// 设置大尺寸
+const setSizeLarge = () => {
+  aiBlueking.value?.updateSize(600, 500);
+};
+</script>
+```
+
 ## [1.2.7-beta.3] - 2025-09-25
 
 ### ✨ 新增功能

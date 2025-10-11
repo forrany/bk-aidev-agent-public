@@ -212,6 +212,41 @@ export function useResizableContainer(
     isCompressionHeight.value = !isCompressionHeight.value;
   };
 
+  /**
+   * 编程式更新容器位置
+   * @param x 横坐标
+   * @param y 纵坐标
+   */
+  const updatePosition = (x: number, y: number) => {
+    left.value = x;
+    top.value = y;
+    leftDiff.value = x - (window.innerWidth - width.value);
+  };
+
+  /**
+   * 编程式更新容器大小
+   * @param w 宽度
+   * @param h 高度
+   */
+  const updateSize = (w: number, h: number) => {
+    // 确保宽度不超过最大值和最小值
+    width.value = Math.max(minWidth, Math.min(w, maxWidth.value));
+    // 确保高度不低于最小值
+    height.value = Math.max(minHeight, h);
+  };
+
+  /**
+   * 同时更新容器的位置和大小
+   * @param x 横坐标
+   * @param y 纵坐标
+   * @param w 宽度
+   * @param h 高度
+   */
+  const updatePositionAndSize = (x: number, y: number, w: number, h: number) => {
+    updatePosition(x, y);
+    updateSize(w, h);
+  };
+
   // 生命周期钩子
   onMounted(() => {
     window.addEventListener('resize', handleResize);
@@ -238,5 +273,10 @@ export function useResizableContainer(
     handleDragStop,
     handleResizeStop,
     toggleCompression,
+
+    // 编程式控制方法
+    updatePosition,
+    updateSize,
+    updatePositionAndSize,
   };
 }

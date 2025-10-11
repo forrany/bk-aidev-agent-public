@@ -8,6 +8,14 @@ export default {
     return {
       changelogData: [
         {
+          version: "v1.2.7-beta.4",
+          date: "2025-10-11",
+          features: [
+            "新增编程式控制容器位置和大小的功能，优化可调整大小容器的逻辑",
+            "新增 updatePosition、updateSize 和 updatePositionAndSize 方法，支持动态调整AI小鲸窗口的位置和尺寸"
+          ]
+        },
+        {
           version: "v1.2.7-beta.3",
           date: "2025-09-25",
           features: [
