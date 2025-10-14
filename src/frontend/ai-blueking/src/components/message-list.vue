@@ -14,10 +14,12 @@
         :message="message"
         :is-select-mode="isSelectMode"
         :is-message-selected="isMessageSelected"
+        :last-message-id="index === 0 ? undefined : getMessageId(index - 1)"
         @delete="handleDelete"
         @regenerate="handleRegenerate"
         @resend="handleResend"
         @message-select="handleMessageSelect"
+        @update-session-content="handleUpdateSessionContent"
       />
     </div>
   </div>
@@ -43,6 +45,7 @@
     (e: 'resend', index: number, data: { message: string }): void;
     (e: 'message-select', messageId: string): void;
     (e: 'scroll-position-change', isNearBottom: boolean): void;
+    (e: 'update-session-content', data: { messageId: number | undefined; updates: Partial<ISessionContent> }): void;
   }
 
   const props = defineProps<Props>();
@@ -51,6 +54,10 @@
   const messageWrapper = ref<HTMLElement | null>(null);
   let lastScrollTop = 0;
   const userScrolling = ref(false);
+
+  const getMessageId = (index: number) => {
+    return props.sessionContents[index].id;
+  };
 
   const handleUserScroll = () => {
     if (!messageWrapper.value) return;
@@ -102,6 +109,10 @@
 
   const handleMessageSelect = (messageId: string) => {
     emit('message-select', messageId);
+  };
+
+  const handleUpdateSessionContent = (data: { messageId: number | undefined; updates: Partial<ISessionContent> }) => {
+    emit('update-session-content', data);
   };
 
   const scrollToBottomIfNeeded = () => {

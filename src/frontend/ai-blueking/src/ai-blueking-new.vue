@@ -68,6 +68,7 @@
                 @regenerate="handleRegenerate"
                 @resend="handleResend"
                 @message-select="sessionStore.toggleMessageSelection"
+                @update-session-content="handleUpdateSessionContent"
                 @scroll-position-change="handleScrollPositionChange"
               />
               <!-- 选择模式下的底部确认区域 -->
@@ -339,6 +340,14 @@
   // ===================================================================
   provide(POPUP_INJECTION_KEY, props.enablePopup);
 
+  // 标准化的URL，自动匹配当前页面协议
+  const normalizedUrl = computed(() => {
+    return normalizeUrl(props.url);
+  });
+
+  // 提供给子组件使用
+  provide('normalizedUrl', normalizedUrl);
+
   // ===================================================================
   // 4. 核心状态管理
   // ===================================================================
@@ -471,11 +480,6 @@
   // ===================================================================
   // 8. 聊天和会话管理 (Chat & Session)
   // ===================================================================
-
-  // 标准化的URL，自动匹配当前页面协议 - **必须在使用它的 useChat 之前定义**
-  const normalizedUrl = computed(() => {
-    return normalizeUrl(props.url);
-  });
 
   // 使用聊天功能
   const {
@@ -950,6 +954,21 @@
 
   const handleDelete = (index: number) => {
     deleteChat(index, currentSession.value?.sessionCode);
+  };
+
+  const handleUpdateSessionContent = (data: { messageId: number | undefined; updates: Partial<ISessionContent> }) => {
+    if (data.messageId) {
+      // Find the message in sessionContents and update it
+      const index = sessionContents.value.findIndex(content => content.id === data.messageId);
+      if (index !== -1) {
+        // Update the message properties
+        const updatedContent = { ...sessionContents.value[index], ...data.updates };
+        sessionContents.value[index] = updatedContent;
+
+        // Trigger reactivity by replacing the array reference
+        sessionContents.value = [...sessionContents.value];
+      }
+    }
   };
 
   // 检查是否为第一条用户消息（排除隐藏角色）

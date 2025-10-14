@@ -99,28 +99,45 @@
             class="message-tool"
           >
             <i
-              class="bkai-icon bkai-fuzhi"
+              class="bkai-icon bkai-fuzhi tool-icon"
               @click="handleCopy"
             />
             <i
-              class="bkai-icon bkai-yinyong"
+              class="bkai-icon bkai-yinyong tool-icon"
               @click="handleCite"
             />
             <i
               v-if="message.role === SessionContentRole.Ai"
-              class="bkai-icon bkai-zhongxinshengcheng"
+              class="bkai-icon bkai-zhongxinshengcheng tool-icon"
               @click="handleRegenerate"
             />
             <template v-if="message.role === SessionContentRole.User">
               <i
-                class="bkai-icon bkai-bianji"
+                class="bkai-icon bkai-bianji tool-icon"
                 @click="isEdit = true"
               />
             </template>
             <i
-              class="bkai-icon bkai-shanchu"
+              class="bkai-icon bkai-shanchu tool-icon"
               @click="handleDelete"
             />
+            <template v-if="message.role === SessionContentRole.Ai && lastMessageId">
+              <i class="split-line" />
+              <render-like
+                :api-prefix="apiPrefix"
+                :session-code="message.sessionCode"
+                :session-content-ids="[lastMessageId || 0, message.id || 0]"
+                :space-id="message.spaceId || ''"
+                :rate="message.rate || 0"
+                :popover-options="{
+                  zIndex: 999999,
+                }"
+                :tooltip-options="{
+                  boundary: 'parent',
+                }"
+                @update-session-content-list="handleUpdateSessionContentList"
+              />
+            </template>
           </div>
         </div>
       </div>
@@ -130,14 +147,24 @@
 
 <script lang="ts" setup>
   import { SessionContentRole, SessionContentStatus } from '@blueking/ai-ui-sdk/enums';
-  import { type ISessionContent } from '@blueking/ai-ui-sdk/types';
+  import { type ISessionContent, type ISessionFeedback } from '@blueking/ai-ui-sdk/types';
   import { Message, Checkbox as BkCheckbox } from 'bkui-vue';
   import dayjs from 'dayjs';
   import DOMPurify from 'dompurify';
   import hljs from 'highlight.js';
   import MarkdownIt from 'markdown-it';
   import MarkdownItCodeCopy from 'markdown-it-copy-code';
-  import { computed, onMounted, ref, watch, defineEmits, onBeforeUnmount, nextTick } from 'vue';
+  import {
+    computed,
+    onMounted,
+    ref,
+    watch,
+    defineEmits,
+    onBeforeUnmount,
+    nextTick,
+    inject,
+    type ComputedRef,
+  } from 'vue';
   import 'markdown-it-copy-code/styles/base.css';
   import 'markdown-it-copy-code/styles/small.css';
 
@@ -148,12 +175,14 @@
   import { usePopup } from '../composables/use-popup-props';
   import { useSelect } from '../composables/use-select-pop';
   import { useTooltip } from '../composables/use-tippy';
+  import { useInjectSessionStore } from '../composables/use-session-store';
+  import type { SessionStore } from '../store/sessionStore';
   import { HIDE_ROLE_LIST } from '../config';
   import { t } from '../lang';
   import MarkdownItLinkBlank from '../plugins/markdown-it-link-blank';
   import mermaidPlugin from '../plugins/markdown-it-mermaid';
   import { createDeleteConfirm, closeAllDeleteConfirms } from '../utils/delete-confirm';
-
+  import { RenderLike } from '@blueking/ai-ui-sdk/components';
   import BkTextEditor from './text-editor.vue';
 
   // 类型定义
@@ -163,6 +192,7 @@
     showTime?: boolean;
     index: number;
     isSelectMode?: boolean;
+    lastMessageId?: number;
     isMessageSelected?: (messageId: string) => boolean;
   }
 
@@ -185,6 +215,9 @@
     resend: [index: number, value: { message: string }];
     delete: [index: number];
     'message-select': [messageId: string];
+    'update-session-content': [
+      data: { messageId: number | undefined; updates: Partial<ISessionContent> },
+    ];
   }>();
 
   // Props 定义
@@ -194,6 +227,15 @@
     isSelectMode: false,
     isMessageSelected: () => false,
   });
+
+  // 注入会话 store
+  const sessionStore = useInjectSessionStore() as SessionStore;
+
+  // 注入动态 URL
+  const normalizedUrl = inject<ComputedRef<string>>('normalizedUrl');
+
+  // 将 normalizedUrl 赋值给 apiPrefix
+  const apiPrefix = computed(() => normalizedUrl?.value || '');
 
   // 状态管理
   const isEdit = ref(false);
@@ -368,6 +410,19 @@
     });
   };
 
+  const handleUpdateSessionContentList = (feedBack: ISessionFeedback) => {
+    // Emit an event to update the session content in the parent component
+    // This will allow the parent to update the sessionContents ref properly
+    emit('update-session-content', {
+      messageId: props.message.id,
+      updates: {
+        rate: feedBack.rate ?? props.message.rate,
+        comment: feedBack.comment ?? props.message.comment,
+        labels: feedBack.labels ?? props.message.labels,
+      },
+    });
+  };
+
   /**
    * 处理消息选择事件
    */
@@ -518,15 +573,30 @@
         position: absolute;
         bottom: -24px;
         display: flex;
-        gap: 10px;
+        gap: 8px;
         align-items: center;
         color: #979ba5;
         opacity: 0;
 
-        i {
+        .tool-icon {
           margin-right: 0;
           font-size: 14px;
           cursor: pointer;
+        }
+
+        .split-line {
+          width: 1px;
+          height: 12px;
+          background: #dcdee5;
+          margin: 0 5px;
+        }
+
+        .select-options .ai-ui-sdk-icon {
+          margin-right: 0;
+        }
+
+        .select-options .ai-blueking-popper {
+          padding: 5px 9px;
         }
 
         .bkai-icon {
