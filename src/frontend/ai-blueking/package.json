@@ -65,7 +65,8 @@
   "peerDependencies": {
     "dayjs": "^1.10.7",
     "highlight.js": "^11.5.1",
-    "markdown-it": "^13.0.1"
+    "markdown-it": "^13.0.1",
+    "x-mavon-editor": "^0.0.15"
   },
   "devDependencies": {
     "@types/highlight.js": "^10.1.0",
@@ -82,15 +83,17 @@
     "eslint-plugin-vue": "^9.33.0",
     "highlight.js": "11.11.1",
     "marked": "^15.0.8",
-    "marked-highlight": "2.2.1"
+    "marked-highlight": "2.2.1",
+    "tsx": "^4.20.6",
+    "vue-tsc": "^3.1.1"
   },
   "dependencies": {
     "@blueking/ai-ui-sdk": " 0.1.18-beta.23",
     "@blueking/bkui-library": "0.0.0-beta.6",
     "dompurify": ">=3.2.4",
+    "markdown-it-copy-code": "^0.1.3",
     "mermaid": "10.9.3",
     "motion-v": "^0.11.3",
-    "markdown-it-copy-code": "^0.1.3",
     "tippy.js": "6.3.7",
     "vue-draggable-resizable": "^3.0.0"
   },
