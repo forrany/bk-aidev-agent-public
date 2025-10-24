@@ -193,3 +193,6 @@ pnpm-lock.yaml
 pnpm-workspace.yaml
 .aider*
 .vscode/
+
+# publish-template environment files
+publish-template/.bk.development.env
