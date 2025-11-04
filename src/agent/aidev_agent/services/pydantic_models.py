@@ -111,6 +111,7 @@ class IntentRecognition(BaseModel):
     )
     max_cache_length: int = Field(default=int(os.getenv("MAX_CACHE_LENGTH", "50")), description=("缓存的最大长度"))
     max_iterations: int = Field(default=int(os.getenv("MAX_ITERATIONS", "50")), description=("最大迭代次数"))
+    global_llm_model_name: str | None = Field(default="hunyuan", description=("非深度思考LLM模型"))
 
 
 class KnowledgebaseSettings(BaseModel):
