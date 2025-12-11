@@ -29,7 +29,7 @@ from uuid import UUID, uuid4
 import orjson
 import pytz
 from aidev_agent.services.pydantic_models import ExecuteKwargs
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
 from opentelemetry import context as context_api
@@ -199,9 +199,9 @@ class BkAidevAgentInjector:
         end_time_unix_nano = int(now.timestamp() * 1_000_000_000)
 
         # 设置根 Span 的最终属性
-        self.root_span.set_attribute("agent.status", "completed")
-        self.root_span.set_attribute("agent.end_time", end_time_str)
-        self.root_span.set_attribute("agent.end_time_unix_nano", end_time_unix_nano)
+        _set_span_attribute(self.root_span, "agent.status", "completed")
+        _set_span_attribute(self.root_span, "agent.end_time", end_time_str)
+        _set_span_attribute(self.root_span, "agent.end_time_unix_nano", end_time_unix_nano)
 
         # 设置状态为成功
         self.root_span.set_status(Status(StatusCode.OK))
@@ -602,7 +602,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         if is_top_level and self.root_span:
             # 顶层 chain 错误，也标记根 Span 为失败
             try:
-                self.root_span.set_attribute("agent.status", "failed")
+                _set_span_attribute(self.root_span, "agent.status", "failed")
                 self.root_span.set_status(Status(StatusCode.ERROR, str(error)))
                 self.root_span.record_exception(error)
                 self.root_span.end()
@@ -758,8 +758,8 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
         span = self._get_span(run_id)
-        span.set_attribute("tool.output", output)
-        span.set_attribute("tool.execution_status", "success")
+        _set_span_attribute(span, "tool.output", output)
+        _set_span_attribute(span, "tool.execution_status", "success")
         span.set_status(Status(StatusCode.OK))
         self._end_span(span, run_id)
 
@@ -776,8 +776,8 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         if not self.enabled or not self.enable_traces:
             return
         span = self._get_span(run_id)
-        span.set_attribute("tool.execution_status", "failed")
-        span.set_attribute("tool.error_message", traceback.format_exc())
+        _set_span_attribute(span, "tool.execution_status", "failed")
+        _set_span_attribute(span, "tool.error_message", traceback.format_exc())
         # 使用统一的错误处理
         self._handle_error(error, run_id, parent_run_id, **kwargs)
 

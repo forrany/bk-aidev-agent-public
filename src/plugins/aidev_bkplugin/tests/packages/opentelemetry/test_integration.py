@@ -16,18 +16,15 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
-import pytest
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
 
-from opentelemetry import trace
+import pytest
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.outputs import LLMResult, ChatGeneration
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.outputs import LLMResult, ChatGeneration
 
 from aidev_bkplugin.packages.opentelemetry.callback_handler import (
     BkAidevAgentInjector,

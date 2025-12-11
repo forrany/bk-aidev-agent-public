@@ -133,6 +133,7 @@ def _safe_detach_context(token):
 
 
 def _set_span_attribute(span: Span, key: str, value: Any) -> None:
+    value = _sanitize_metadata_value(value)
     if value is not None:
         if value != "":
             span.set_attribute(key, value)

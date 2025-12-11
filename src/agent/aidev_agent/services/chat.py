@@ -1,28 +1,26 @@
 import json
 import re
+import uuid
 from collections import deque
 from logging import getLogger
 from time import time
 from typing import Any, ClassVar, Generator, Optional
 from uuid import uuid4
 
-from langchain.memory.token_buffer import ConversationTokenBufferMemory
-from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool
 from langchain_openai.chat_models.base import _convert_message_to_dict
 from pydantic import BaseModel, Field
 
-from aidev_agent.core.agent.multimodal import EnhancedAgentExecutor
-from aidev_agent.core.extend.agent.qa import CommonQAAgent
-from aidev_agent.core.utils.loop import get_event_loop
 from aidev_agent.enums import PromptRole, StreamEventType
 from aidev_agent.exceptions import AgentException, streaming_chunk_exception_handling
+from aidev_agent.services.common_agent import CommonQAAgent
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
+from aidev_agent.utils.loop import get_event_loop
 
 logger = getLogger(__name__)
 
@@ -141,30 +139,39 @@ class ChatCompletionAgent(BaseModel):
     def execute(self, execute_kwargs: ExecuteKwargs) -> dict | Generator[str, None, None] | str:
         # 执行agent操作
         messages = self.convert_history_to_messages()
-        if execute_kwargs.run_agent or self.is_run_by_agent():
-            return self._execute_by_agent(messages, stream=execute_kwargs.stream, execute_kwargs=execute_kwargs)
-        if self.callbacks:
-            self.chat_model.callbacks = self.callbacks
-        if execute_kwargs.stream:
-            return self._stream(messages)
-        return self._invoke(messages)
+        self.chat_model.callbacks = self.callbacks
+        return self._execute(messages, execute_kwargs)
 
-    def _execute_by_agent(self, messages: list[BaseMessage], stream: bool = False, execute_kwargs: ExecuteKwargs=None):
+    def _execute(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs = None):
         if not messages:
             raise ValueError("The messages list cannot be empty.")
-        agent_e, cfg = self._get_agent(messages)
-        if stream:
+        agent_e, cfg = self._get_agent(messages, execute_kwargs=execute_kwargs)
+        cfg.setdefault("configurable", {})
+        cfg["configurable"]["thread_id"] = execute_kwargs.session_code or uuid.uuid4().hex
+        cfg["configurable"]["execute_kwargs"] = execute_kwargs
+        if execute_kwargs.stream:
             return agent_e.agent.stream_standard_event(
                 agent_e,
                 cfg,
-                {"input": messages[-1].content, "execute_kwargs": execute_kwargs},
+                {"messages": messages},
                 timeout=self.agent_options.intent_recognition_options.heartbeats_interval,
             )
         else:
             loop = get_event_loop()
-            result = loop.run_until_complete(agent_e.ainvoke({"input": messages[-1].content, "execute_kwargs": execute_kwargs}, cfg))
+            result = loop.run_until_complete(
+                agent_e.ainvoke(
+                    {
+                        "messages": messages,
+                    },
+                    cfg,
+                )
+            )
+            if len(result["messages"]) >= 1:
+                last_message = result["messages"][-1].content
+            else:
+                raise ValueError(" messages 对象没有任何输出")
             return_data = {
-                "choices": [{"delta": {"role": "assistant", "content": result["output"]}}],
+                "choices": [{"delta": {"role": "assistant", "content": last_message}}],
                 "model": self.model_name,
                 "id": str(uuid4()),
                 "reference_doc": result.get("reference_doc", []),
@@ -230,7 +237,13 @@ class ChatCompletionAgent(BaseModel):
             "id": result.id,
         }
 
-    def _get_agent(self, messages: list[BaseMessage]) -> tuple[EnhancedAgentExecutor, RunnableConfig]:
+    def _get_agent(
+        self, messages: list[BaseMessage], *, execute_kwargs: ExecuteKwargs
+    ) -> tuple[Runnable, RunnableConfig]:
+        """
+        由于在流式的时候，Response 立即返回会导致 trace 断掉，所以在_get_agent中添加 execute_kwargs
+        execute_kwargs 有携带了 trace 上下文，以便于不要让 trace 断掉
+        """
         if self.knowledge_bases:
             self.agent_options.knowledge_query_options.knowledge_bases = self.knowledge_bases
         if self.knowledges:
@@ -248,23 +261,5 @@ class ChatCompletionAgent(BaseModel):
             agent_prompt=self.agent_prompt,
             callbacks=self.callbacks,
             agent_options=self.agent_options,
+            execute_kwargs=execute_kwargs,
         )
-
-    def get_memory_window(
-        self,
-        memory=None,
-        max_token_limit=4096,
-    ) -> int:
-        """返回window内可以保留的有效条目数"""
-        history = ChatMessageHistory()
-        history.add_messages(self.chat_history)
-        memory = memory or ConversationTokenBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            input_key="input",
-            output_key="output",
-            chat_memory=history,
-            llm=self.chat_model,
-            max_token_limit=max_token_limit,
-        )
-        return len(memory.buffer) - len(self.chat_history)

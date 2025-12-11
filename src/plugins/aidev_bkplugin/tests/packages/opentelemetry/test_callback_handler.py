@@ -16,18 +16,15 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
-import pytest
 from unittest.mock import MagicMock
 from uuid import uuid4
-import os
 
-from opentelemetry import trace
+import pytest
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.outputs import LLMResult, ChatGeneration
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.outputs import LLMResult, ChatGeneration
 
 from aidev_bkplugin.packages.opentelemetry.callback_handler import (
     BkAidevAgentInjector,
@@ -72,11 +69,12 @@ class TestBkAidevAgentInjector:
 
         # 准备测试数据 - 使用 Mock 对象代替真实的 ExecuteKwargs
         execute_kwargs = MagicMock()
+        execute_kwargs.executor = 'test-executor'
         execute_kwargs.session_code = "test-session-123"
-        execute_kwargs.caller_executor = "test-user"
         execute_kwargs.caller_bk_app_code = "test-app"
         execute_kwargs.caller_bk_biz_env = "domestic_biz"
         execute_kwargs.caller_bk_biz_id = 123
+        execute_kwargs.caller_executor = "test-user"
         execute_kwargs.caller_order_type = "ai_chat"
 
         agent_info = {
@@ -123,8 +121,8 @@ class TestBkAidevAgentInjector:
         assert "agent.info.agent_info" in span.attributes
 
         # 验证 agent.session.* 属性
+        assert span.attributes["agent.session.executor"] == "test-executor"
         assert span.attributes["agent.session.session_code"] == "test-session-123"
-        assert span.attributes["agent.session.executor"] == "test-user"
         assert span.attributes["agent.session.caller_bk_app_code"] == "test-app"
         assert span.attributes["agent.session.caller_bk_biz_env"] == "domestic_biz"
         assert span.attributes["agent.session.caller_bk_biz_id"] == 123
@@ -269,6 +267,60 @@ class TestBkAidevAgentCallbackHandler:
         assert span.attributes["tool.output"] == "2"
         assert span.attributes["tool.name"] == "calculator"
 
+    def test_tool_execution_with_dict_output(self, tracer_and_exporter):
+        """测试 tool.execution span 当 output 为字典时，tool.output 正确转换为字符串"""
+        tracer, exporter = tracer_and_exporter
+
+        # 创建回调处理器
+        handler = BkAidevAgentCallbackHandler(tracer=tracer, debug=True)
+
+        # 模拟工具调用
+        run_id = uuid4()
+        parent_run_id = None
+
+        # 工具开始
+        handler.on_tool_start(
+            serialized={"name": "json_processor"},
+            input_str='{"action": "process", "data": [1, 2, 3]}',
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+        )
+
+        # 工具结束 - 输出为字典
+        output_dict = {
+            "status": "success",
+            "result": {"sum": 6, "count": 3},
+            "message": "处理完成",
+        }
+        handler.on_tool_end(
+            output=output_dict, # type: ignore[assignment]
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+        )
+
+        # 获取导出的 spans
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+
+        span = spans[0]
+
+        # 验证 span 名称
+        assert span.name == "tool.execution"
+
+        # 验证 tool.output 存在且为字符串类型
+        assert "tool.output" in span.attributes
+        tool_output = span.attributes["tool.output"]
+        assert isinstance(tool_output, str), f"tool.output should be str, but got {type(tool_output)}"
+
+        # 验证输出字符串包含字典的关键信息
+        assert "status" in tool_output
+        assert "success" in tool_output
+        assert "result" in tool_output
+
+        # 验证其他属性
+        assert span.attributes["tool.name"] == "json_processor"
+        assert span.attributes["tool.input"] == '{"action": "process", "data": [1, 2, 3]}'
+        assert span.attributes["tool.execution_status"] == "success"
 
     def test_rag_retrieval_span_attributes(self, tracer_and_exporter):
         """测试 rag.retrieval span 包含 rag.knowledge_bases 和 rag.knowledge_items 属性"""

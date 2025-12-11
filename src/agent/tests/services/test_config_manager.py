@@ -111,7 +111,7 @@ def test_cache_expiration():
 
     # Manually expire the cache entry
     cached_entry = AgentConfigManager._config_cache["test_agent_2"]
-    cached_entry.timestamp = time.time() - 61  # Make it 61 seconds old
+    cached_entry.timestamp = time.time() - AgentConfigManager.CACHE_TTL - 1  # Make it 61 seconds old
 
     # Get config again (should refresh due to expiration)
     config2 = AgentConfigManager.get_config("test_agent_2", mock_manager)

@@ -3,8 +3,8 @@ import json
 import pytest
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.config import settings
-from aidev_agent.core.extend.agent.qa import CommonQAAgent
-from aidev_agent.core.extend.models.llm_gateway import ChatModel
+from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.services.chat import ChatCompletionAgent, ExecuteKwargs
 from aidev_agent.services.pydantic_models import (
     AgentOptions,
@@ -43,6 +43,7 @@ def add_session():
     not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
+@pytest.mark.stag_gw
 def test_common_agent_chat_streaming(add_session):
     llm = ChatModel.get_setup_instance(model="hunyuan-turbos")
     client = BKAidevApi.get_client()
@@ -70,6 +71,7 @@ def test_common_agent_chat_streaming(add_session):
     not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
+@pytest.mark.stag_gw
 def test_CommonQAAgent_chat_streaming():
     # 设置chat_model实例
     chat_model = ChatModel.get_setup_instance(
@@ -144,6 +146,7 @@ def test_CommonQAAgent_chat_streaming():
     not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
+@pytest.mark.stag_gw
 def test_qa_response(test_input, expected_kb_ids):
     # 初始化聊天模型
     chat_model = ChatModel.get_setup_instance(
@@ -202,6 +205,7 @@ def test_qa_response(test_input, expected_kb_ids):
     not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
+@pytest.mark.stag_gw
 def test_qa_response_sequence():
     """按特定顺序执行测试用例"""
     test_cases = [
