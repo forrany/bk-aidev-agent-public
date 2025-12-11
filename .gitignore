@@ -188,3 +188,19 @@ src/frontend/ai-blueking/lesscode-dist/
 
 .aider*
 .vscode/
+
+# static files
+src/plugins/aidev_ai_blueking/aidev_ai_blueking/static/
+
+# tmp files
+src/agent/docs/temp
+src/agent/tests/core/memory
+
+# open spec files
+src/agent/.codebuddy
+src/agent/.claude
+src/agent/openspec
+src/agent/AGENTS.md
+src/agent/CODEBUDDY.md
+
+

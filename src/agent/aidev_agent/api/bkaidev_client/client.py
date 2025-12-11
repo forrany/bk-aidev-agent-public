@@ -9,7 +9,7 @@ from bkapi_client_core.property import bind_property
 from aidev_agent.api.abstract_client import AbstractBKAidevResourceManager
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
-from aidev_agent.packages.langchain.tools.base import Tool, ToolExtra, make_structured_tool
+from aidev_agent.packages.langchain_core.tools import Tool, ToolExtra, make_structured_tool
 
 
 class OpenApiGroup(OperationGroup):

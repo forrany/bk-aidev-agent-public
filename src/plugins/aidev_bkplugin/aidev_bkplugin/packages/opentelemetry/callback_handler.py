@@ -29,7 +29,7 @@ from uuid import UUID, uuid4
 import orjson
 import pytz
 from aidev_agent.services.pydantic_models import ExecuteKwargs
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
 from opentelemetry import context as context_api

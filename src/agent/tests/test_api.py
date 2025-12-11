@@ -1,13 +1,14 @@
 import pytest
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.config import settings
-from aidev_agent.core.extend.models.llm_gateway import ChatModel, Embeddings
+from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel, Embeddings
 
 
 @pytest.mark.skipif(
     not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
+@pytest.mark.stag_gw
 def test_live_test():
     llm = ChatModel.get_setup_instance(model="hunyuan")
     assert llm.invoke("test")
@@ -20,6 +21,7 @@ def test_live_test():
     not all([settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
+@pytest.mark.stag_gw
 def test_bkaidev_api():
     client = BKAidevApi.get_client()
     result = client.api.appspace_retrieve_knowledgebase(path_params={"id": 72})
@@ -30,6 +32,7 @@ def test_bkaidev_api():
     not all([settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
+@pytest.mark.stag_gw
 class TestAPI:
     def test_bkaidev_api_chat(self):
         client = BKAidevApi.get_client()

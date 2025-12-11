@@ -1,0 +1,423 @@
+# -*- coding: utf-8 -*-
+"""
+TencentBlueKing is pleased to support the open source community by making
+蓝鲸智云 - AIDev (BlueKing - AIDev) available.
+Copyright (C) 2025 THL A29 Limited,
+a Tencent company. All rights reserved.
+Licensed under the MIT License (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at http://opensource.org/licenses/MIT
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+We undertake not to change the open source license (MIT license) applicable
+to the current version of the project delivered to anyone in the future.
+"""
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
+from langgraph._internal._runnable import RunnableCallable
+
+from aidev_agent.core.nodes.context_processor import ContextProcessor
+from aidev_agent.core.nodes.model import ModelState, build_model_node
+
+
+class TestModelState:
+    """测试 ModelState TypedDict 定义"""
+
+    def test_model_state_structure(self):
+        """测试 ModelState 的结构"""
+        # 验证 ModelState 可以被正确实例化
+        state: ModelState = {"messages": [HumanMessage(content="test")]}
+        assert "messages" in state
+        assert len(state["messages"]) == 1
+
+
+class TestBuildModelNode:
+    """测试 build_model_node 函数（使用 Mock）"""
+
+    @pytest.fixture
+    def mock_llm(self):
+        """Mock LLM"""
+        llm = Mock()
+
+        # Configure invoke to return AIMessage
+        llm.invoke = Mock(return_value=AIMessage(content="Mocked response"))
+        llm.ainvoke = AsyncMock(return_value=AIMessage(content="Mocked async response"))
+
+        # Mock bind_tools to return a mock that also has invoke/ainvoke
+        bound_llm = Mock()
+        bound_llm.invoke = Mock(return_value=AIMessage(content="Mocked response"))
+        bound_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Mocked async response"))
+
+        # Support for chaining with | operator
+        llm.__or__ = Mock(return_value=llm)
+        bound_llm.__or__ = Mock(return_value=bound_llm)
+
+        llm.bind_tools = Mock(return_value=bound_llm)
+        return llm
+
+    @pytest.fixture
+    def sample_tools(self):
+        """示例工具列表"""
+
+        @tool
+        def search_tool(query: str) -> str:
+            """Search for information"""
+            return f"Search results for: {query}"
+
+        @tool
+        def calculator(expression: str) -> str:
+            """Calculate mathematical expression"""
+            return f"Result: {expression}"
+
+        return [search_tool, calculator]
+
+    @pytest.fixture
+    def mock_context_processor(self, sample_tools, mock_llm):
+        """Mock ContextProcessor"""
+        processor = Mock(spec=ContextProcessor)
+        processor.get_choice_tools = Mock(return_value=sample_tools)
+
+        # Create a mock template that returns a chain when | with LLM
+        mock_template = Mock()
+
+        # Create a mock chain that will be returned by template | llm
+        mock_chain = Mock()
+        mock_chain.invoke = Mock(return_value=AIMessage(content="Mocked response"))
+        mock_chain.ainvoke = AsyncMock(return_value=AIMessage(content="Mocked async response"))
+
+        # When template | anything, return the chain
+        mock_template.__or__ = Mock(return_value=mock_chain)
+        mock_template.input_variables = ["input", "chat_history", "agent_scratchpad"]
+
+        processor.get_chat_prompt_template = Mock(return_value=mock_template)
+        processor.get_chat_prompt_variables = Mock(
+            return_value={
+                "input": "test query",
+                "chat_history": [],
+                "agent_scratchpad": [],
+            }
+        )
+        return processor
+
+    @pytest.fixture
+    def mock_store(self):
+        """Mock BaseStore"""
+        return Mock()
+
+    def test_build_model_node_returns_runnable_callable(self, mock_llm, mock_context_processor):
+        """测试 build_model_node 返回 RunnableCallable"""
+        node = build_model_node(
+            llm=mock_llm,
+            context_processor=mock_context_processor,
+            use_structured_response=False,
+        )
+        assert isinstance(node, RunnableCallable)
+
+    def test_model_node_sync_with_tool_calling(self, mock_llm, mock_context_processor, mock_store):
+        """测试同步模型节点（tool_calling 模式）"""
+        node = build_model_node(
+            llm=mock_llm,
+            context_processor=mock_context_processor,
+            use_structured_response=False,
+        )
+
+        state: ModelState = {
+            "messages": [HumanMessage(content="test query")],
+        }
+        config = RunnableConfig()
+
+        result = node.invoke(state, config=config, store=mock_store)
+
+        # 验证返回结构
+        assert "messages" in result
+        assert len(result["messages"]) == 1
+        assert isinstance(result["messages"][0], AIMessage)
+        assert result["messages"][0].content == "Mocked response"
+
+        # 验证调用了正确的方法
+        mock_context_processor.get_choice_tools.assert_called_once()
+        mock_context_processor.get_chat_prompt_template.assert_called_once()
+        mock_context_processor.get_chat_prompt_variables.assert_called_once()
+        mock_llm.bind_tools.assert_called_once()
+
+    def test_model_node_sync_with_structured_response(self, mock_llm, mock_store):
+        """测试同步模型节点（structured_response 模式）"""
+        # Create a separate context processor for this test
+        processor = Mock(spec=ContextProcessor)
+        processor.get_choice_tools = Mock(return_value=[])
+
+        # Create mock template and chain for structured response mode
+        mock_template = Mock()
+        mock_parser = Mock()
+
+        # Create nested chain: template | llm | parser
+        mock_chain_step1 = Mock()  # template | llm
+        mock_chain_final = Mock()  # (template | llm) | parser
+        mock_chain_final.invoke = Mock(return_value=AIMessage(content="Structured response"))
+
+        mock_template.__or__ = Mock(return_value=mock_chain_step1)
+        mock_chain_step1.__or__ = Mock(return_value=mock_chain_final)
+        mock_template.input_variables = ["input", "chat_history", "agent_scratchpad"]
+
+        processor.get_chat_prompt_template = Mock(return_value=mock_template)
+        processor.get_chat_prompt_variables = Mock(
+            return_value={
+                "input": "test query",
+                "chat_history": [],
+                "agent_scratchpad": [],
+            }
+        )
+
+        with patch(
+            "aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"
+        ) as mock_parser_class:
+            mock_parser_class.return_value = mock_parser
+
+            node = build_model_node(
+                llm=mock_llm,
+                context_processor=processor,
+                use_structured_response=True,
+            )
+
+            state: ModelState = {
+                "messages": [HumanMessage(content="test query")],
+            }
+            config = RunnableConfig()
+
+            result = node.invoke(state, config=config, store=mock_store)
+
+            # 验证返回结构
+            assert "messages" in result
+            assert len(result["messages"]) == 1
+
+            # 验证创建了 StructuredOutputToToolMessageParser
+            mock_parser_class.assert_called_once()
+            call_kwargs = mock_parser_class.call_args[1]
+            assert call_kwargs["llm"] == mock_llm
+            assert call_kwargs["enable_parallel_tool_calls"] is False
+
+            # 验证没有调用 bind_tools（structured_response 模式不使用）
+            mock_llm.bind_tools.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_model_node_async_with_tool_calling(self, mock_llm, mock_context_processor, mock_store):
+        """测试异步模型节点（tool_calling 模式）"""
+        # Patch StructuredOutputToToolMessageParser as it's created in async code even when not used
+        with patch("aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"):
+            node = build_model_node(
+                llm=mock_llm,
+                context_processor=mock_context_processor,
+                use_structured_response=False,
+            )
+
+            state: ModelState = {
+                "messages": [HumanMessage(content="test query")],
+            }
+            config = RunnableConfig()
+
+            result = await node.ainvoke(state, config=config, store=mock_store)
+
+            # 验证返回结构
+            assert "messages" in result
+            assert len(result["messages"]) == 1
+            assert isinstance(result["messages"][0], AIMessage)
+            assert result["messages"][0].content == "Mocked async response"
+
+            # 验证调用了正确的方法
+            mock_context_processor.get_choice_tools.assert_called()
+            mock_context_processor.get_chat_prompt_template.assert_called()
+            mock_context_processor.get_chat_prompt_variables.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_model_node_async_with_structured_response(self, mock_llm, mock_store):
+        """测试异步模型节点（structured_response 模式）"""
+        # Create a separate context processor for this test
+        processor = Mock(spec=ContextProcessor)
+        processor.get_choice_tools = Mock(return_value=[])
+
+        # Create mock template and chain for structured response mode
+        mock_template = Mock()
+        mock_parser = Mock()
+
+        # Create nested chain: template | llm | parser
+        mock_chain_step1 = Mock()  # template | llm
+        mock_chain_final = Mock()  # (template | llm) | parser
+        mock_chain_final.ainvoke = AsyncMock(return_value=AIMessage(content="Structured async response"))
+
+        mock_template.__or__ = Mock(return_value=mock_chain_step1)
+        mock_chain_step1.__or__ = Mock(return_value=mock_chain_final)
+        mock_template.input_variables = ["input", "chat_history", "agent_scratchpad"]
+
+        processor.get_chat_prompt_template = Mock(return_value=mock_template)
+        processor.get_chat_prompt_variables = Mock(
+            return_value={
+                "input": "test query",
+                "chat_history": [],
+                "agent_scratchpad": [],
+            }
+        )
+
+        with patch(
+            "aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"
+        ) as mock_parser_class:
+            mock_parser_class.return_value = mock_parser
+
+            node = build_model_node(
+                llm=mock_llm,
+                context_processor=processor,
+                use_structured_response=True,
+                enable_parallel_tool_calls=True,
+            )
+
+            state: ModelState = {
+                "messages": [HumanMessage(content="test query")],
+            }
+            config = RunnableConfig()
+
+            result = await node.ainvoke(state, config=config, store=mock_store)
+
+            # 验证返回结构
+            assert "messages" in result
+            assert len(result["messages"]) == 1
+
+            # 验证创建了 StructuredOutputToToolMessageParser，并启用了并行工具调用
+            mock_parser_class.assert_called()
+            call_kwargs = mock_parser_class.call_args[1]
+            assert call_kwargs["enable_parallel_tool_calls"] is True
+
+    def test_model_node_without_tools(self, mock_llm, mock_context_processor, mock_store):
+        """测试没有工具的情况"""
+        # 设置返回空工具列表
+        mock_context_processor.get_choice_tools.return_value = []
+
+        node = build_model_node(
+            llm=mock_llm,
+            context_processor=mock_context_processor,
+            use_structured_response=False,
+        )
+
+        state: ModelState = {
+            "messages": [HumanMessage(content="test query")],
+        }
+        config = RunnableConfig()
+
+        result = node.invoke(state, config=config, store=mock_store)
+
+        # 验证返回结构
+        assert "messages" in result
+        assert len(result["messages"]) == 1
+
+        # 验证在没有工具时，不调用 bind_tools
+        mock_llm.bind_tools.assert_not_called()
+
+    def test_model_node_with_parallel_tool_calls_enabled(self, mock_llm, mock_store):
+        """测试启用并行工具调用"""
+        # Create a separate context processor for this test
+        processor = Mock(spec=ContextProcessor)
+        processor.get_choice_tools = Mock(return_value=[])
+
+        # Create mock template and chain for structured response mode
+        mock_template = Mock()
+        mock_parser = Mock()
+
+        # Create nested chain: template | llm | parser
+        mock_chain_step1 = Mock()  # template | llm
+        mock_chain_final = Mock()  # (template | llm) | parser
+        mock_chain_final.invoke = Mock(return_value=AIMessage(content="Response with parallel calls"))
+
+        mock_template.__or__ = Mock(return_value=mock_chain_step1)
+        mock_chain_step1.__or__ = Mock(return_value=mock_chain_final)
+        mock_template.input_variables = ["input", "chat_history", "agent_scratchpad"]
+
+        processor.get_chat_prompt_template = Mock(return_value=mock_template)
+        processor.get_chat_prompt_variables = Mock(
+            return_value={
+                "input": "test query",
+                "chat_history": [],
+                "agent_scratchpad": [],
+            }
+        )
+
+        with patch(
+            "aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"
+        ) as mock_parser_class:
+            mock_parser_class.return_value = mock_parser
+
+            node = build_model_node(
+                llm=mock_llm,
+                context_processor=processor,
+                use_structured_response=True,
+                enable_parallel_tool_calls=True,
+            )
+
+            state: ModelState = {
+                "messages": [HumanMessage(content="test query")],
+            }
+            config = RunnableConfig()
+
+            node.invoke(state, config=config, store=mock_store)
+
+            # 验证 enable_parallel_tool_calls 参数被正确传递
+            call_kwargs = mock_parser_class.call_args[1]
+            assert call_kwargs["enable_parallel_tool_calls"] is True
+
+    def test_model_node_state_with_decision(self, mock_llm, mock_context_processor, mock_store):
+        """测试 state 中包含 decision 的情况"""
+        from aidev_agent.enums import Decision
+
+        node = build_model_node(
+            llm=mock_llm,
+            context_processor=mock_context_processor,
+            use_structured_response=False,
+        )
+
+        state: ModelState = {
+            "messages": [HumanMessage(content="test query")],
+            "decision": Decision.PRIVATE_QA,  # type: ignore
+        }
+        config = RunnableConfig()
+
+        result = node.invoke(state, config=config, store=mock_store)
+
+        # 验证 context_processor 接收到了包含 decision 的 state
+        call_args = mock_context_processor.get_chat_prompt_template.call_args[0]
+        assert call_args[0]["decision"] == Decision.PRIVATE_QA
+
+        assert "messages" in result
+        assert len(result["messages"]) == 1
+
+    def test_model_node_context_variables_integration(self, mock_llm, mock_context_processor, mock_store):
+        """测试上下文变量的集成"""
+        # 设置更复杂的上下文变量
+        mock_context_processor.get_chat_prompt_variables.return_value = {
+            "input": "test query",
+            "chat_history": [HumanMessage(content="previous question")],
+            "agent_scratchpad": [],
+            "context": "Some knowledge base content",
+            "beijing_now": "2025-01-08 12:00:00",
+        }
+
+        node = build_model_node(
+            llm=mock_llm,
+            context_processor=mock_context_processor,
+            use_structured_response=False,
+        )
+
+        state: ModelState = {
+            "messages": [HumanMessage(content="test query")],
+            "knowledge_content": "Some knowledge base content",
+        }
+        config = RunnableConfig()
+
+        result = node.invoke(state, config=config, store=mock_store)
+
+        # 验证上下文变量被正确使用
+        mock_context_processor.get_chat_prompt_variables.assert_called_once()
+        assert "messages" in result

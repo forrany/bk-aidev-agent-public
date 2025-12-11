@@ -4,13 +4,13 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 # Add the src directory to the path so we can import the module
-from aidev_agent.core.utils.loop import get_event_loop
+from aidev_agent.utils.loop import get_event_loop
 
 
 def test_get_event_loop():
     """Test that get_event_loop returns a valid event loop."""
     # Import the thread local storage to reset it
-    from aidev_agent.core.utils.loop import _thread_local
+    from aidev_agent.utils.loop import _thread_local
 
     # Reset the thread-local loop reference
     if hasattr(_thread_local, "loop"):
@@ -31,7 +31,7 @@ def test_get_event_loop():
 def test_loop_creation():
     """Test that a new loop is created if one doesn't exist."""
     # Import the thread local storage to reset it
-    from aidev_agent.core.utils.loop import _thread_local
+    from aidev_agent.utils.loop import _thread_local
 
     # Reset the thread-local loop reference
     if hasattr(_thread_local, "loop"):

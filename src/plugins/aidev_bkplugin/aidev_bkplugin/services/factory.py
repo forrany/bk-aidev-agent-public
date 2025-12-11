@@ -3,7 +3,7 @@
 import os
 from typing import Type
 
-from aidev_agent.core.extend.agent.qa import CommonQAAgent
+from aidev_agent.services.common_agent import CommonQAAgent
 from aidev_agent.services.config_manager import AgentConfigManager
 from aidev_agent.utils.factory import SimpleFactory
 

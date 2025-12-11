@@ -4,10 +4,10 @@ from typing import Any, Callable, Dict, List, Optional, Type, cast
 from aidev_agent.api import BKAidevApi
 from aidev_agent.api.abstract_client import AbstractBKAidevResourceManager
 from aidev_agent.config import settings
-from aidev_agent.core.extend.agent.qa import CommonQAAgent
-from aidev_agent.core.extend.models.llm_gateway import ChatModel
+from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
+from aidev_agent.packages.langchain_core.tools import make_mcp_tools
 from aidev_agent.enums import AgentBuildType, AgentType
-from aidev_agent.packages.langchain.tools.base import make_mcp_tools
 from aidev_agent.services.chat import ChatCompletionAgent
 from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt

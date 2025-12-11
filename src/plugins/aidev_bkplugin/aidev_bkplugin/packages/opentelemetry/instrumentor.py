@@ -20,7 +20,7 @@ import logging
 from typing import Any, Collection, Dict, Optional
 
 import orjson
-from aidev_agent.core.utils.local import request_local
+from aidev_agent.utils.local import request_local
 from aidev_agent.services.pydantic_models import ExecuteKwargs
 from asgiref.sync import sync_to_async
 from langchain_core.runnables import RunnableConfig
@@ -71,28 +71,28 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
 
         # 根据 aidev_agent 的包版本注入到不同的对象中
         # 意图识别注入 - 用于获取知识库查询结果
-        wrap_function_wrapper(
-            module="aidev_agent.core.extend.intent.intent_recognition",
-            name="IntentRecognition.exec_intent_recognition",
-            wrapper=IntentRecognitionMixinIntentRecognition(),
-        )
-
-        # 注入启动时的各个Agent
-        wrap_function_wrapper(
-            module="aidev_agent.core.agent.multimodal",
-            name="LiteEnhancedAgentExecutor.stream_events",
-            wrapper=LiteEnhancedAgentExecutorStreamEventsWrapper(tracer, self._otel_service_config),
-        )
-        wrap_function_wrapper(
-            module="aidev_agent.core.agent.multimodal",
-            name="EnhancedAgentExecutor.invoke",
-            wrapper=LiteEnhancedAgentExecutorInvokeWrapper(tracer, self._otel_service_config),
-        )
-        wrap_function_wrapper(
-            module="aidev_agent.core.agent.multimodal",
-            name="EnhancedAgentExecutor.ainvoke",
-            wrapper=LiteEnhancedAgentExecutorAInvokeWrapper(tracer, self._otel_service_config),
-        )
+        # wrap_function_wrapper(
+        #     module="aidev_agent.core.extend.intent.intent_recognition",
+        #     name="IntentRecognition.exec_intent_recognition",
+        #     wrapper=IntentRecognitionMixinIntentRecognition(),
+        # )
+        #
+        # # 注入启动时的各个Agent
+        # wrap_function_wrapper(
+        #     module="aidev_agent.packages.langgraph.graphs.common_v1",
+        #     name="AgentStreamAdapter.stream_standard_event",
+        #     wrapper=LiteEnhancedAgentExecutorStreamEventsWrapper(tracer, self._otel_service_config),
+        # )
+        # wrap_function_wrapper(
+        #     module="aidev_agent.core.agent.multimodal",
+        #     name="EnhancedAgentExecutor.invoke",
+        #     wrapper=LiteEnhancedAgentExecutorInvokeWrapper(tracer, self._otel_service_config),
+        # )
+        # wrap_function_wrapper(
+        #     module="aidev_agent.core.agent.multimodal",
+        #     name="EnhancedAgentExecutor.ainvoke",
+        #     wrapper=LiteEnhancedAgentExecutorAInvokeWrapper(tracer, self._otel_service_config),
+        # )
 
     def _uninstrument(self, **kwargs):
         """
@@ -185,7 +185,7 @@ class LiteEnhancedAgentExecutorWrapper:
         self.tracer = tracer
         self.config = config
 
-    def get_config(self, input: dict[str, Any], config: Optional[RunnableConfig] = None, **kwargs: Any):
+    def get_config(self, input: dict[str, Any], config: Optional[RunnableConfig] = None, *args, **kwargs: Any):
         return config
 
     def get_values(self, agent, input: dict[str, Any] = None, *args, **kwargs):
@@ -194,7 +194,7 @@ class LiteEnhancedAgentExecutorWrapper:
             input = {}
 
         # 用户输入
-        user_input = input.get("input")
+        user_input = input
         # 调用相关参数
         execute_kwargs = ExecuteKwargs()
         if isinstance(input, dict) and "execute_kwargs" in input and isinstance(execute_kwargs, ExecuteKwargs):
@@ -218,6 +218,7 @@ class LiteEnhancedAgentExecutorWrapper:
         return ret
 
     def create_callback_handler(self, *args, **kwargs):
+        print("create_callback_handler", args, kwargs)
         config = self.get_config(*args, **kwargs)
         if config is None:
             raise ValueError("LiteEnhancedAgentExecutor 调用过程中 必须传入config")
@@ -243,7 +244,7 @@ class LiteEnhancedAgentExecutorStreamEventsWrapper(LiteEnhancedAgentExecutorWrap
         args,
         kwargs,
     ):
-        values = self.get_values(instance.agent, *args, **kwargs)
+        values = self.get_values(instance, *args, **kwargs)
         base_handler = BkAidevAgentInjector(tracer=self.tracer, parent_trace_context=values.get("parent_trace_context"))
         self.create_callback_handler(*args, **kwargs)
         try:

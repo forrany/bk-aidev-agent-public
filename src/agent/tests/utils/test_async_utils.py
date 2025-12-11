@@ -18,8 +18,8 @@ to the current version of the project delivered to anyone in the future.
 import asyncio
 
 import pytest
-from aidev_agent.core.utils.async_utils import async_generator_with_timeout, async_to_sync_generator
-from aidev_agent.core.utils.local import request_local
+from aidev_agent.utils.async_utils import async_generator_with_timeout, async_to_sync_generator
+from aidev_agent.utils.local import request_local
 from aidev_agent.utils import (
     Empty,
 )
