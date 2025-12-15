@@ -6,7 +6,6 @@
     >
       <vue-draggable-resizable
         v-if="isShow"
-        ref="resizeWrapper"
         :active="isShow"
         :draggable="props.draggable"
         :h="height"
@@ -214,26 +213,10 @@
   // ===================================================================
   // 1. 导入和类型定义
   // ===================================================================
-  import { SessionContentRole } from '@blueking/ai-ui-sdk/enums';
-  import type { ISessionContent } from '@blueking/ai-ui-sdk/types';
   import { useChat, useStyle, useClickProxy } from '@blueking/ai-ui-sdk/hooks';
   import { Button as BkButton, Checkbox as BkCheckbox, Exception as BkException } from 'bkui-vue';
-  import { useCopyCode } from 'markdown-it-copy-code';
   import { motion } from 'motion-v';
-  import {
-    computed,
-    defineEmits,
-    defineExpose,
-    defineProps,
-    nextTick,
-    onBeforeUnmount,
-    onMounted,
-    provide,
-    ref,
-    Ref,
-    watch,
-    withDefaults,
-  } from 'vue';
+  import { computed, nextTick, provide, ref, Ref, watch } from 'vue';
   import VueDraggableResizable from 'vue-draggable-resizable';
 
   // 组件导入
@@ -246,7 +229,9 @@
   import MessageList from './components/message-list.vue';
   import RenderPopup from './components/render-popup.vue';
   // Composable导入
+  import { useChatCore } from './composables/use-chat-core';
   import { useGreetingHeight } from './composables/use-greeting-height';
+  import { useIframeDragResize } from './composables/use-iframe-drag-resize';
   import { useKeyboardShortcut } from './composables/use-keyboard-shortcut';
   import { useMarkdown } from './composables/use-markdown';
   import { useMessageList } from './composables/use-message-list';
@@ -257,159 +242,22 @@
   import { provideSessionStore } from './composables/use-session-store';
   import { useShortcut } from './composables/use-shortcut';
   // 配置和工具导入
-  import { HIDE_ROLE_LIST } from './config';
+  import { aiBluekingPropsDefaults } from './config/props-defaults';
   import { t } from './lang';
-  import type { IRequestOptions, IShortcut } from './types';
-  import { escapeHtml, normalizeUrl } from './utils';
+  import type { AiBluekingProps, AiBluekingEmits } from './types/ai-blueking-props';
+  import type { IShortcut } from './types';
+  import { normalizeUrl } from './utils';
   import Nimbus from './views/nimbus.vue';
 
   // 样式导入
   import 'vue-draggable-resizable/style.css';
-  import { AddNewSessionOptions } from './store/types';
-
-  // 类型定义
-  interface Props {
-    extCls?: string;
-    title?: string;
-    helloText?: string;
-    enablePopup?: boolean;
-    shortcuts?: IShortcut[];
-    shortcutLimit?: number;
-    shortcutFilter?: (shortcut: IShortcut, selectedText: string) => boolean;
-    hideDefaultTrigger?: boolean;
-    url?: string;
-    prompts?: string[];
-    hideNimbus?: boolean;
-    requestOptions?: IRequestOptions;
-    defaultMinimize?: boolean;
-    teleportTo?: string;
-    draggable?: boolean;
-    defaultWidth?: number;
-    defaultHeight?: number;
-    defaultTop?: number;
-    defaultLeft?: number;
-    hideHeader?: boolean;
-    disabledInput?: boolean;
-    nimbusSize?: 'small' | 'normal' | 'large';
-    showHistoryIcon?: boolean;
-    showNewChatIcon?: boolean;
-    placeholder?: string;
-    miniPadding?: number;
-    initialSessionCode?: string;
-    autoSwitchToInitialSession?: boolean;
-    loadRecentSessionOnMount?: boolean;
-    dropdownMenuConfig?: {
-      showRename?: boolean;
-      showAutoGenerate?: boolean;
-      showShare?: boolean;
-    };
-
-    /**
-     * 是否显示缩放图标
-     * @since v1.2.9
-     * @default true
-     * @description 如果未定义，则显示压缩图标
-     * @example
-     * - true: 显示压缩图标
-     * - false: 不显示压缩图标
-     */
-    showCompressionIcon?: boolean;
-
-    /**
-     * 是否显示更多图标
-     * @since v1.2.9
-     * @default true
-     * @description 如果未定义，则显示更多图标
-     * @example
-     * - true: 显示更多图标
-     * - false: 不显示更多图标
-     */
-    showMoreIcon?: boolean;
-
-    /**
-     * 默认输入框位置
-     * @since v1.2.9
-     * @default undefined
-     * @description 如果未定义，则根据是否有会话内容自动判断位置
-     * @example
-     * - undefined: 根据是否有会话内容自动判断位置
-     * - 'bottom': 底部
-     */
-    defaultChatInputPosition?: 'bottom' | undefined;
-
-    /**
-     * 最大宽度
-     * @since v1.2.9
-     * @default undefined
-     * @description 如果未定义，1000px
-     * @example
-     * - undefined: 1000px
-     * - 100: 最大宽度为 100px
-     * - 100%: 最大宽度为视窗宽度
-     */
-    maxWidth?: number | string;
-  }
 
   // ===================================================================
   // 2. Props 和 Emits 定义
   // ===================================================================
-  const props = withDefaults(defineProps<Props>(), {
-    title: '',
-    extCls: '',
-    helloText: t('你好，我是小鲸'),
-    enablePopup: true,
-    shortcuts: () => [],
-    shortcutLimit: 3,
-    shortcutFilter: undefined,
-    hideDefaultTrigger: false,
-    url: '',
-    prompts: () => [],
-    hideNimbus: false,
-    requestOptions: () => ({}),
-    defaultMinimize: false,
-    teleportTo: 'body',
-    draggable: true,
-    defaultWidth: undefined,
-    defaultHeight: undefined,
-    defaultTop: undefined,
-    defaultLeft: undefined,
-    hideHeader: false,
-    disabledInput: false,
-    nimbusSize: 'normal',
-    showHistoryIcon: true,
-    showNewChatIcon: true,
-    showCompressionIcon: true,
-    showMoreIcon: true,
-    placeholder: t('输入 "/" 唤出 Prompt\n通过 Shift + Enter 进行换行输入'),
-    miniPadding: 0,
-    initialSessionCode: '',
-    autoSwitchToInitialSession: false,
-    loadRecentSessionOnMount: false,
-    dropdownMenuConfig: () => ({
-      showRename: true,
-      showAutoGenerate: true,
-      showShare: true,
-    }),
-    defaultChatInputPosition: undefined,
-    maxWidth: 1000,
-  });
+  const props = withDefaults(defineProps<AiBluekingProps>(), aiBluekingPropsDefaults);
 
-  const emit = defineEmits<{
-    (e: 'shortcut-click', data: { shortcut: IShortcut; source: 'popup' | 'main' }): void;
-    (e: 'close' | 'show' | 'stop' | 'receive-start' | 'receive-text' | 'receive-end'): void;
-    (e: 'send-message', message: string): void;
-    (
-      e: 'session-initialized',
-      data: { openingRemark: string; predefinedQuestions: string[] }
-    ): void;
-    (e: 'sdk-error', data: { apiName: string; code: number; message: string; data: unknown }): void;
-    (e: 'transfer-messages', messageIds: string[]): void;
-    (e: 'share-messages', messageIds: string[]): void;
-    (e: 'dragging', position: { x: number; y: number; width: number; height: number }): void;
-    (e: 'resizing', position: { x: number; y: number; width: number; height: number }): void;
-    (e: 'drag-stop', position: { x: number; y: number; width: number; height: number }): void;
-    (e: 'resize-stop', position: { x: number; y: number; width: number; height: number }): void;
-  }>();
+  const emit = defineEmits<AiBluekingEmits>();
 
   // ===================================================================
   // 3. 依赖注入
@@ -428,7 +276,6 @@
   // 4. 核心状态管理
   // ===================================================================
   // DOM引用
-  const resizeWrapper = ref<InstanceType<typeof VueDraggableResizable>>();
   const chatInputBoxRef = ref<InstanceType<typeof ChatInputBox>>();
   const rootNode: Ref<HTMLElement | undefined> = ref();
 
@@ -436,17 +283,6 @@
   const isShow = ref(false);
   const isNimbusMinimize = ref(props.defaultMinimize);
   const inputMessage = ref('');
-  const showScrollToBottom = ref(false);
-  const isDraggingOrResizing = ref(false);
-
-  // 会话状态
-  const isSessionInitialized = ref(false);
-  let initSessionPromise: Promise<void> | null = null;
-  const openingRemark = ref('');
-  const predefinedQuestions: Ref<string[]> = ref([]);
-
-  // 窗口状态
-  const windowHeight = ref(window.innerHeight);
 
   // 输入状态
   const inputHeight = ref(68);
@@ -582,14 +418,27 @@
     }
   );
 
+  // 使用 iframe 拖拽调整大小处理
+  const {
+    handleDraggingWithIframe,
+    handleResizingWithIframe,
+    handleDragStopWithIframe,
+    handleResizeStopWithIframe,
+  } = useIframeDragResize({
+    handleDragging,
+    handleResizing,
+    handleDragStop,
+    handleResizeStop,
+  });
+
   // 动态计算 greeting 最大高度
-  const greetingMaxHeight = computed(() => windowHeight.value - 367);
+  const windowHeightForGreeting = ref(window.innerHeight);
+  const greetingMaxHeight = computed(() => windowHeightForGreeting.value - 367);
 
   // 使用问候语高度计算功能
-  const { greetingSectionRef, updateGreetingTextHeight, getInputContainerStyle } =
-    useGreetingHeight({
-      greetingMaxHeight: greetingMaxHeight.value,
-    });
+  const { updateGreetingTextHeight, getInputContainerStyle } = useGreetingHeight({
+    greetingMaxHeight: greetingMaxHeight.value,
+  });
 
   // 计算输入框的动态位置
   const inputContainerStyle = computed(() => {
@@ -700,14 +549,80 @@
     emit('sdk-error', error);
   });
 
-  // 提示列表
-  const promptList = computed(() => {
-    return [...props.prompts, ...predefinedQuestions.value];
-  });
-
-  // 是否有会话内容
-  const hasSessionContents = computed(() => {
-    return sessionContents.value.filter(item => !HIDE_ROLE_LIST.includes(item.role)).length > 0;
+  // ===================================================================
+  // 9. 核心聊天逻辑 (使用 useChatCore 整合)
+  // ===================================================================
+  const {
+    // 状态
+    showScrollToBottom,
+    // 计算属性
+    promptList,
+    hasSessionContents,
+    greetingText,
+    // 会话管理方法
+    switchToSession,
+    handleNewChat,
+    handleAutoGenerateName,
+    // 消息操作方法
+    handleSendMessage,
+    handleRegenerate,
+    handleResend,
+    handleStop,
+    handleSubmitShortcut,
+    handleDelete,
+    handleUpdateSessionContent,
+    // UI 事件处理
+    handleShow,
+    handleClose,
+    handleScrollMainToBottom,
+    handleScrollPositionChange,
+  } = useChatCore({
+    normalizedUrl,
+    sessionStore,
+    props: {
+      loadRecentSessionOnMount: props.loadRecentSessionOnMount,
+      initialSessionCode: props.initialSessionCode,
+      autoSwitchToInitialSession: props.autoSwitchToInitialSession,
+      prompts: props.prompts,
+      requestOptions: props.requestOptions,
+    },
+    chatMethods: {
+      currentSession,
+      sessionContents,
+      currentSessionLoading,
+      plusSessionContent: plusSessionContent as any,
+      chat: chat as any,
+      stopChat: stopChat as any,
+      reGenerateChat: reGenerateChat as any,
+      reSendChat: reSendChat as any,
+      deleteChat: deleteChat as any,
+      renameSessionApi,
+      stopSessionContentApi,
+      setSessionContents,
+      updateRequestOptions,
+    },
+    messageListMethods: {
+      scrollMainToBottom,
+      scrollToBottomIfNeeded,
+      resetUserScrolling,
+      messageListRef: messageListRef as any,
+    },
+    selectMethods: {
+      citeText,
+      setCiteText,
+    },
+    shortcutMethods: {
+      handleCancelShortcut,
+    },
+    selectionModeMethods: {
+      enterSelectMode,
+    },
+    greetingMethods: {
+      updateGreetingTextHeight,
+    },
+    inputMessage,
+    isShow,
+    emit: (e: any, data?: any) => emit(e, data),
   });
 
   // 是否启用会话管理
@@ -720,78 +635,9 @@
     return sessionStore.hasPermission.value;
   });
 
-  // 问候文本
-  const greetingText = computed(() => openingRemark.value || t('输入你的问题，助你高效的完成工作'));
-
   // ===================================================================
-  // 9. 会话初始化逻辑
+  // 10. Watcher 监听器 (isShow 变化时聚焦输入框)
   // ===================================================================
-  const initSession = async (loadRecentSession = false) => {
-    if (initSessionPromise) {
-      await initSessionPromise;
-      return;
-    }
-    if (isSessionInitialized.value && !initSessionPromise) {
-      return;
-    }
-
-    initSessionPromise = (async () => {
-      try {
-        const { conversationSettings } = await sessionStore.initSession(true, loadRecentSession);
-        openingRemark.value = conversationSettings?.openingRemark || '';
-        predefinedQuestions.value = conversationSettings?.predefinedQuestions || [];
-        isSessionInitialized.value = true;
-
-        emit('session-initialized', {
-          openingRemark: openingRemark.value,
-          predefinedQuestions: predefinedQuestions.value,
-        });
-      } finally {
-        initSessionPromise = null;
-        updateGreetingTextHeight();
-      }
-    })();
-
-    await initSessionPromise;
-  };
-
-  // ===================================================================
-  // 10. Watcher 监听器
-  // ===================================================================
-  watch(
-    () => normalizedUrl.value,
-    (newUrl, oldUrl) => {
-      if (newUrl !== oldUrl && newUrl) {
-        updateRequestOptions({
-          url: newUrl,
-          ...props.requestOptions,
-        });
-        isSessionInitialized.value = false;
-        initSessionPromise = null;
-        initSession();
-      }
-    }
-  );
-
-  watch(
-    () => props.requestOptions,
-    newOptions => {
-      updateRequestOptions({
-        url: normalizedUrl.value,
-        ...newOptions,
-      });
-    },
-    { deep: true }
-  );
-
-  watch(
-    sessionContents,
-    () => {
-      nextTick(scrollToBottomIfNeeded);
-    },
-    { deep: true }
-  );
-
   watch(
     () => isShow.value,
     newValue => {
@@ -804,143 +650,8 @@
   );
 
   // ===================================================================
-  // 11. 生命周期钩子
+  // 11. 事件处理函数
   // ===================================================================
-  const _switchToSession = async (sessionCode: string) => {
-    if (!sessionCode) return;
-    //确保在切换会话之前，会话列表已初始化
-    if (!isSessionInitialized.value) {
-      await initSession();
-    }
-    const targetSession = sessionStore.sessionList.value.find(s => s.sessionCode === sessionCode);
-    if (targetSession) {
-      await sessionStore.switchSessionWithContents(targetSession);
-      return true;
-    }
-    return false;
-  };
-  const handleWindowResize = () => {
-    windowHeight.value = window.innerHeight;
-  };
-
-  // 处理进入选择模式的自定义事件
-  const handleEnterSelectMode = (event: CustomEvent<{ type: 'transfer' | 'share' }>) => {
-    const { type } = event.detail;
-    enterSelectMode(type);
-  };
-
-  // 使用 sendBeacon 发送停止会话请求
-  const sendStopSessionRequest = () => {
-    if (navigator.sendBeacon && normalizedUrl.value) {
-      const stopUrl = `${normalizedUrl.value}/session_content/stop/`;
-
-      // 使用 sendBeacon 发送 POST 请求
-      const success = navigator.sendBeacon(stopUrl, new Blob(['{}'], { type: 'application/json' }));
-
-      return success;
-    } else {
-      // 降级到普通的停止API调用
-      stopSessionContentApi();
-      return false;
-    }
-  };
-
-  // 处理页面卸载事件
-  const handleUnload = () => {
-    sendStopSessionRequest();
-  };
-
-  onMounted(async () => {
-    // 使用 unload 事件配合 sendBeacon，确保请求能够成功发送
-    window.addEventListener('unload', handleUnload);
-    window.addEventListener('resize', handleWindowResize);
-    window.addEventListener('enter-select-mode', handleEnterSelectMode as EventListener);
-    if (normalizedUrl.value) {
-      await initSession(props.loadRecentSessionOnMount);
-
-      // 如果设置了初始会话代码且需要自动切换，则切换到初始会话
-      if (props.initialSessionCode && props.autoSwitchToInitialSession) {
-        await _switchToSession(props.initialSessionCode);
-      }
-    }
-
-    useCopyCode();
-  });
-
-  onBeforeUnmount(() => {
-    window.removeEventListener('resize', handleWindowResize);
-    window.removeEventListener('enter-select-mode', handleEnterSelectMode as EventListener);
-
-    // 清理页面卸载相关的事件监听器
-    window.removeEventListener('unload', handleUnload);
-  });
-
-  // ===================================================================
-  // 12. 事件处理函数
-  // ===================================================================
-
-  /**
-   * 禁用页面中所有 iframe 的指针事件
-   * 用于解决拖拽时鼠标经过 iframe 导致事件丢失的问题
-   */
-  const disableIframePointerEvents = () => {
-    const iframes = document.querySelectorAll('iframe');
-    iframes.forEach(iframe => {
-      iframe.style.pointerEvents = 'none';
-    });
-  };
-
-  /**
-   * 恢复页面中所有 iframe 的指针事件
-   */
-  const enableIframePointerEvents = () => {
-    const iframes = document.querySelectorAll('iframe');
-    iframes.forEach(iframe => {
-      iframe.style.pointerEvents = '';
-    });
-  };
-
-  /**
-   * 拖拽时的处理（包含 iframe 禁用）
-   */
-  const handleDraggingWithIframe = (x: number, y: number) => {
-    // 首次拖拽时禁用 iframe 的指针事件
-    if (!isDraggingOrResizing.value) {
-      isDraggingOrResizing.value = true;
-      disableIframePointerEvents();
-    }
-    handleDragging(x, y);
-  };
-
-  /**
-   * 调整大小时的处理（包含 iframe 禁用）
-   */
-  const handleResizingWithIframe = (x: number, y: number, width: number, height: number) => {
-    // 首次调整大小时禁用 iframe 的指针事件
-    if (!isDraggingOrResizing.value) {
-      isDraggingOrResizing.value = true;
-      disableIframePointerEvents();
-    }
-    handleResizing(x, y, width, height);
-  };
-
-  /**
-   * 拖拽停止时的处理（包含 iframe 恢复）
-   */
-  const handleDragStopWithIframe = (x: number, y: number) => {
-    handleDragStop(x, y);
-    isDraggingOrResizing.value = false;
-    enableIframePointerEvents();
-  };
-
-  /**
-   * 调整大小停止时的处理（包含 iframe 恢复）
-   */
-  const handleResizeStopWithIframe = (x: number, y: number, width: number, height: number) => {
-    handleResizeStop(x, y, width, height);
-    isDraggingOrResizing.value = false;
-    enableIframePointerEvents();
-  };
 
   const handlePopupShortcutClick = (data: { shortcut: IShortcut; source: 'popup' | 'main' }) => {
     // 来自 render-popup 的快捷方式点击事件
@@ -962,53 +673,8 @@
     inputHeight.value = height;
   };
 
-  const handleClose = () => {
-    isShow.value = false;
-    emit('close');
-  };
-
-  /**
-   * @param sessionCode session code
-   * @param options 创建会话参数配置
-   */
-  const handleShow = async (
-    sessionCode?: string,
-    options?: AddNewSessionOptions
-  ): Promise<void> => {
-    // 如果是强制新会话，先创建会话再打开面板，避免显示旧内容
-    if (options?.isTemporary) {
-      if (!isSessionInitialized.value) {
-        await initSession();
-      }
-
-      stopChat(currentSession.value?.sessionCode);
-      inputMessage.value = '';
-      setCiteText('');
-      // 支持用指定的 sessionCode 创建新会话，如果不提供则自动生成
-      await sessionStore.addNewSession(sessionCode, options);
-
-      // 新会话创建成功后再打开面板
-      isShow.value = true;
-      emit('show');
-    } else {
-      // 非强制新会话的情况，保持原有逻辑：先打开面板
-      isShow.value = true;
-      emit('show');
-
-      if (!isSessionInitialized.value) {
-        await initSession();
-      }
-
-      if (sessionCode) {
-        await _switchToSession(sessionCode);
-      }
-    }
-
-    updateGreetingTextHeight();
-  };
-
   // ===================================================================
-  // 8. 快捷键管理
+  // 12. 快捷键管理
   // ===================================================================
   useKeyboardShortcut({
     enabled: computed(() => !props.hideNimbus),
@@ -1019,227 +685,6 @@
 
   const handleNimbusClick = () => {
     handleShow();
-  };
-
-  const handleScrollMainToBottom = () => {
-    scrollMainToBottom();
-    // 滚动到底部后隐藏按钮
-    showScrollToBottom.value = false;
-  };
-
-  const handleScrollPositionChange = (isNearBottom: boolean) => {
-    // 只有当消息容器有内容且不在底部时，才显示返回底部按钮
-    const messageWrapper = messageListRef.value?.messageWrapper;
-    if (!messageWrapper) return;
-
-    const { scrollHeight, clientHeight } = messageWrapper;
-    showScrollToBottom.value = !isNearBottom && scrollHeight > clientHeight;
-  };
-
-  const handleSendMessage = async (message: string) => {
-    if (!message.trim()) return;
-
-    if (!isSessionInitialized.value && normalizedUrl.value) {
-      await initSession();
-    }
-
-    resetUserScrolling();
-    const escapedMessage = escapeHtml(message);
-
-    await plusSessionContent(currentSession.value?.sessionCode, {
-      role: SessionContentRole.User,
-      content: escapedMessage,
-      sessionCode: currentSession.value?.sessionCode,
-      property: {
-        extra: {
-          cite: citeText.value,
-          ...(typeof props.requestOptions?.context === 'function'
-            ? props.requestOptions?.context()
-            : props.requestOptions?.context),
-        },
-      },
-    });
-
-    // 检查是否为当前会话中的第一条用户消息
-    const shouldAutoRename = isFirstUserMessageInSession();
-
-    chat({
-      sessionCode: currentSession.value?.sessionCode,
-      ...props.requestOptions,
-    });
-
-    // 在发送第一条用户消息后调用renameSessionApi
-    if (shouldAutoRename) {
-      try {
-        await autoRenameCurrentSession();
-      } catch (error) {
-        console.error('自动命名会话失败:', error);
-      }
-    }
-
-    emit('send-message', escapedMessage);
-    inputMessage.value = '';
-    setCiteText('');
-  };
-
-  const handleRegenerate = (index: number) => {
-    const sessionContent = sessionContents.value[index];
-    if (sessionContent) {
-      reGenerateChat(sessionContent.sessionCode, sessionContent, index);
-    }
-  };
-
-  const handleResend = (index: number, { message }: { message: string }) => {
-    const sessionContent = sessionContents.value[index];
-    if (sessionContent) {
-      sessionContent.content = escapeHtml(message);
-      reSendChat(sessionContent.sessionCode, sessionContent, index);
-    }
-  };
-
-  const handleStop = () => {
-    if (currentSession?.value?.sessionCode) {
-      stopChat(currentSession.value.sessionCode);
-      emit('stop');
-    }
-  };
-
-  const handleSubmitShortcut = async (data: {
-    shortcut: IShortcut;
-    formData: Record<string, any>[];
-    citeFormData?: Record<string, any>[];
-  }) => {
-    const { shortcut, formData, citeFormData } = data;
-    handleCancelShortcut();
-    !isShow.value && handleShow();
-    currentSessionLoading.value && handleStop();
-
-    if (!isSessionInitialized.value && normalizedUrl.value) {
-      await initSession();
-    }
-
-    // 使用 citeFormData（如果提供）否则回退到 formData
-    const citeData = citeFormData || formData;
-
-    await plusSessionContent(currentSession.value?.sessionCode, {
-      role: SessionContentRole.User,
-      content: shortcut.name,
-      sessionCode: currentSession.value?.sessionCode,
-      property: {
-        extra: {
-          cite: {
-            type: 'structured',
-            title: shortcut.name,
-            data: citeData.map(item => ({
-              key: item.__label,
-              value: item.__value,
-            })),
-          },
-          command: shortcut.id,
-          context: [
-            ...formData,
-            ...(Array.isArray(props.requestOptions?.context) ? props.requestOptions.context : []),
-          ],
-          ...(typeof props.requestOptions?.context === 'function'
-            ? props.requestOptions?.context()
-            : props.requestOptions?.context),
-        },
-      },
-    });
-
-    // 检查是否为当前会话中的第一条用户消息
-    const shouldAutoRename = isFirstUserMessageInSession();
-
-    chat({
-      sessionCode: currentSession.value?.sessionCode,
-      ...props.requestOptions,
-    });
-
-    // 在发送第一条用户消息后调用renameSessionApi
-    if (shouldAutoRename) {
-      try {
-        await autoRenameCurrentSession();
-      } catch (error) {
-        console.error('自动命名会话失败:', error);
-      }
-    }
-
-    emit('send-message', shortcut.name);
-  };
-
-  const handleDelete = (index: number) => {
-    deleteChat(index, currentSession.value?.sessionCode);
-  };
-
-  const handleUpdateSessionContent = (data: {
-    messageId: number | undefined;
-    updates: Partial<ISessionContent>;
-  }) => {
-    if (data.messageId) {
-      // Find the message in sessionContents and update it
-      const index = sessionContents.value.findIndex(content => content.id === data.messageId);
-      if (index !== -1) {
-        // Update the message properties
-        const updatedContent = { ...sessionContents.value[index], ...data.updates };
-        sessionContents.value[index] = updatedContent;
-
-        // Trigger reactivity by replacing the array reference
-        sessionContents.value = [...sessionContents.value];
-      }
-    }
-  };
-
-  // 检查是否为第一条用户消息（排除隐藏角色）
-  const isFirstUserMessageInSession = () => {
-    const visibleMessages = sessionContents.value.filter(
-      item => !HIDE_ROLE_LIST.includes(item.role)
-    );
-    return visibleMessages.length === 1 && visibleMessages[0].role === SessionContentRole.User;
-  };
-
-  // 自动重命名当前会话
-  const autoRenameCurrentSession = async () => {
-    try {
-      if (currentSession.value?.sessionCode) {
-        const updatedSession = await renameSessionApi(currentSession.value.sessionCode);
-        if (updatedSession?.sessionName) {
-          // 更新会话存储中的会话名称
-          await sessionStore.getSessionList();
-        }
-      }
-    } catch (error) {
-      console.error('自动命名会话失败:', error);
-    }
-  };
-
-  // 处理自动生成命名
-  const handleAutoGenerateName = async (sessionCode?: string) => {
-    try {
-      // 如果没有传入 sessionCode，使用当前会话的 sessionCode
-      const targetSessionCode = sessionCode || currentSession.value?.sessionCode;
-
-      if (!targetSessionCode) {
-        console.error('无法获取会话代码');
-        return;
-      }
-
-      console.log('开始自动生成命名，会话代码:', targetSessionCode);
-      const updatedSession = await renameSessionApi(targetSessionCode);
-
-      if (updatedSession?.sessionName) {
-        // 刷新会话列表以获取最新的会话信息
-        await sessionStore.getSessionList();
-      }
-    } catch (error) {
-      console.error('自动命名失败:', error);
-    }
-  };
-
-  const handleNewChat = async () => {
-    stopChat(currentSession.value?.sessionCode);
-    inputMessage.value = '';
-    setCiteText('');
-    setSessionContents([]);
   };
 
   // ===================================================================
@@ -1272,7 +717,7 @@
       return sessionStore.updateSession(sessionCode, { sessionName: newName });
     },
     // 切换到指定会话
-    switchToSession: _switchToSession,
+    switchToSession,
     // 获取会话列表
     getSessionList: sessionStore.getSessionList,
     sessionList: sessionStore.sessionList,

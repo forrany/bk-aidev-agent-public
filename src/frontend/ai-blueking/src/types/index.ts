@@ -168,3 +168,11 @@ export interface FormRule {
 export interface ValidationStrategy {
   (component: IShortcutComponent): FormRule | FormRule[] | null;
 }
+
+// 导出组件 Props 和 Emits 类型
+export type {
+  AiBluekingProps,
+  AiBluekingEmits,
+  DropdownMenuConfig,
+  PositionInfo,
+} from './ai-blueking-props';
