@@ -1,6 +1,6 @@
 {
   "name": "@blueking/ai-blueking",
-  "version": "1.3.1-beta.1",
+  "version": "1.3.1-beta.2",
   "description": "AI 小鲸",
   "license": "MIT",
   "author": "Tencent BlueKing",
@@ -65,10 +65,6 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "peerDependencies": {
-    "dayjs": "^1.10.7",
-    "markdown-it": "^13.0.1"
-  },
   "devDependencies": {
     "@types/highlight.js": "^10.1.0",
     "@types/node": "^20.14.2",
@@ -90,7 +86,9 @@
   "dependencies": {
     "@blueking/ai-ui-sdk": " 0.1.18-beta.26",
     "@blueking/bkui-library": "0.0.0-beta.6",
+    "dayjs": "^1.10.7",
     "dompurify": ">=3.2.4",
+    "markdown-it": "^13.0.1",
     "markdown-it-copy-code": "^0.1.3",
     "mermaid": "10.9.3",
     "motion-v": "^0.11.3",

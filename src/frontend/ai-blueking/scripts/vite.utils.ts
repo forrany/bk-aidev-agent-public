@@ -65,11 +65,8 @@ function getExternal(formats: LibraryFormats[], version: VueVersion) {
     }
     if (
       /^x-mavon-editor/.test(id) ||
-      /^dayjs[/]?\w*/.test(id) ||
       (isVue3 && (/^bkui-vue/.test(id) || /^vue$/.test(id))) ||
-      (!isVue3 && /^@blueking\/bkui-library/.test(id)) ||
-      /^highlight.js/.test(id) ||
-      /^markdown-it/.test(id)
+      (!isVue3 && /^@blueking\/bkui-library/.test(id))
     ) {
       return true;
     }
@@ -133,9 +130,6 @@ export const createBuildConfig = (
               vue: 'Vue',
               'x-mavon-editor': 'XMaonEditor',
               '@blueking/ai-ui-sdk': 'BKAIUISDK',
-              dayjs: 'dayjs',
-              'highlight.js': 'hljs',
-              'markdown-it': 'MarkdownIt',
               'bkui-vue': 'BKUIVUE',
               '@blueking/bkui-library': 'BKUI',
             },
