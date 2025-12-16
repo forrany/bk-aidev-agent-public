@@ -1,6 +1,6 @@
 /**
  * useChatCore - 聊天核心逻辑 Composable
- * 
+ *
  * 整合了会话管理、消息操作、生命周期事件等核心逻辑
  * 解决了各模块之间的循环依赖问题
  */
@@ -74,7 +74,10 @@ export interface UseChatCoreOptions {
   isShow: Ref<boolean>;
   /** 事件发射器 */
   emit: {
-    (e: 'session-initialized', data: { openingRemark: string; predefinedQuestions: string[] }): void;
+    (
+      e: 'session-initialized',
+      data: { openingRemark: string; predefinedQuestions: string[] }
+    ): void;
     (e: 'send-message', message: string): void;
     (e: 'stop'): void;
     (e: 'show'): void;
@@ -85,18 +88,19 @@ export interface UseChatCoreOptions {
 export interface UseChatCoreReturn {
   // 会话状态
   showScrollToBottom: Ref<boolean>;
-  
+
   // 计算属性
   promptList: ComputedRef<string[]>;
   hasSessionContents: ComputedRef<boolean>;
   greetingText: ComputedRef<string>;
-  
+  enableChatSession: ComputedRef<boolean>;
+
   // 会话管理方法
   initSession: (loadRecentSession?: boolean) => Promise<void>;
   switchToSession: (sessionCode: string) => Promise<boolean>;
   handleNewChat: () => Promise<void>;
   handleAutoGenerateName: (sessionCode?: string) => Promise<void>;
-  
+
   // 消息操作方法
   handleSendMessage: (message: string) => Promise<void>;
   handleRegenerate: (index: number) => void;
@@ -112,7 +116,7 @@ export interface UseChatCoreReturn {
     messageId: number | undefined;
     updates: Partial<ISessionContent>;
   }) => void;
-  
+
   // UI 事件处理
   handleShow: (sessionCode?: string, options?: AddNewSessionOptions) => Promise<void>;
   handleClose: () => void;
@@ -152,12 +156,8 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
     updateRequestOptions,
   } = chatMethods;
 
-  const {
-    scrollMainToBottom,
-    scrollToBottomIfNeeded,
-    resetUserScrolling,
-    messageListRef,
-  } = messageListMethods;
+  const { scrollMainToBottom, scrollToBottomIfNeeded, resetUserScrolling, messageListRef } =
+    messageListMethods;
 
   const { citeText, setCiteText } = selectMethods;
   const { handleCancelShortcut } = shortcutMethods;
@@ -186,6 +186,11 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
   });
 
   const greetingText = computed(() => openingRemark.value || t('输入你的问题，助你高效的完成工作'));
+
+  // 是否启用会话管理
+  const enableChatSession = computed(() => {
+    return sessionStore.agentInfo.value?.conversationSettings?.enableChatSession ?? true;
+  });
 
   // ===================================================================
   // 会话管理方法
@@ -221,12 +226,14 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
 
   const switchToSession = async (sessionCode: string): Promise<boolean> => {
     if (!sessionCode) return false;
-    
+
     if (!isSessionInitialized.value) {
       await initSession();
     }
-    
-    const targetSession = sessionStore.sessionList.value.find((s: { sessionCode: string }) => s.sessionCode === sessionCode);
+
+    const targetSession = sessionStore.sessionList.value.find(
+      (s: { sessionCode: string }) => s.sessionCode === sessionCode
+    );
     if (targetSession) {
       await sessionStore.switchSessionWithContents(targetSession);
       return true;
@@ -368,12 +375,12 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
   }): Promise<void> => {
     const { shortcut, formData, citeFormData } = data;
     handleCancelShortcut();
-    
+
     if (!isShow.value) {
       isShow.value = true;
       emit('show');
     }
-    
+
     if (currentSessionLoading.value) {
       handleStop();
     }
@@ -383,6 +390,17 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
     }
 
     const citeData = citeFormData || formData;
+
+    // 处理 requestOptions.context 的不同类型情况
+    // context 可能是：数组、函数、对象或 undefined
+    const requestContext = props.requestOptions?.context;
+
+    // 如果 context 是数组，则合并到 context 数组中；否则使用空数组
+    const contextArray = Array.isArray(requestContext) ? requestContext : [];
+
+    // 如果 context 是函数，则执行函数获取返回值；否则直接使用原值（可能是对象或 undefined）
+    // 用于展开到 extra 对象中
+    const contextExtra = typeof requestContext === 'function' ? requestContext() : requestContext;
 
     await plusSessionContent(currentSession.value?.sessionCode, {
       role: SessionContentRole.User,
@@ -399,13 +417,10 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
             })),
           },
           command: shortcut.id,
-          context: [
-            ...formData,
-            ...(Array.isArray(props.requestOptions?.context) ? props.requestOptions.context : []),
-          ],
-          ...(typeof props.requestOptions?.context === 'function'
-            ? props.requestOptions?.context()
-            : props.requestOptions?.context),
+          // 合并表单数据和请求选项中的数组类型 context
+          context: [...formData, ...contextArray],
+          // 展开函数返回的对象或直接展开对象类型的 context
+          ...contextExtra,
         },
       },
     });
@@ -556,7 +571,7 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
     window.addEventListener('unload', handleUnload);
     window.addEventListener('resize', handleWindowResize);
     window.addEventListener('enter-select-mode', handleEnterSelectMode as EventListener);
-    
+
     if (normalizedUrl.value) {
       await initSession(props.loadRecentSessionOnMount);
 
@@ -577,18 +592,19 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
   return {
     // 状态
     showScrollToBottom,
-    
+
     // 计算属性
     promptList,
     hasSessionContents,
     greetingText,
-    
+    enableChatSession,
+
     // 会话管理方法
     initSession,
     switchToSession,
     handleNewChat,
     handleAutoGenerateName,
-    
+
     // 消息操作方法
     handleSendMessage,
     handleRegenerate,
@@ -597,7 +613,7 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
     handleSubmitShortcut,
     handleDelete,
     handleUpdateSessionContent,
-    
+
     // UI 事件处理
     handleShow,
     handleClose,

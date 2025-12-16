@@ -305,10 +305,11 @@
   const { messageListRef, scrollMainToBottom, scrollToBottomIfNeeded, resetUserScrolling } =
     useMessageList();
 
-  // 使用快捷方式功能
-  const { currentShortcut, handleShortcutClick, handleCancelShortcut } = useShortcut({
+  // 使用快捷方式功能 (包含动态合并的 mergedShortcut)
+  const { mergedShortcut, handleShortcutClick, handleCancelShortcut } = useShortcut({
     selectedText: selectedText,
     isShow: isShow,
+    shortcuts: props.shortcuts,
     handleShow: () => {
       handleShow();
     },
@@ -317,39 +318,10 @@
     },
   });
 
-  // 动态合并 currentShortcut 和原始 shortcuts 的最新数据
-  // 当 props.shortcuts 变化时，自动更新 options 等动态属性
-  const mergedShortcut = computed(() => {
-    if (!currentShortcut.value) return undefined;
-
-    // 从原始 shortcuts 中找到对应的 shortcut
-    const originalShortcut = props.shortcuts?.find(s => s.id === currentShortcut.value?.id);
-    if (!originalShortcut) return currentShortcut.value;
-
-    // 合并 components，保留 currentShortcut 中的运行时属性（如 selectedText），更新 options 等配置属性
-    const mergedComponents = currentShortcut.value.components?.map((comp, index) => {
-      const originalComp = originalShortcut.components?.[index];
-      if (originalComp && comp.key === originalComp.key) {
-        // 合并：currentShortcut 的运行时属性 + originalShortcut 的最新配置
-        return {
-          ...originalComp, // 最新的配置（options、placeholder 等）
-          selectedText: (comp as any).selectedText, // 保留运行时添加的 selectedText
-        };
-      }
-      return comp;
-    });
-
-    return {
-      ...currentShortcut.value,
-      components: mergedComponents,
-      bindKey: currentShortcut.value.id + '_' + Date.now(),
-    };
-  });
-
   /**
-   * 计算根元素的样式变量
+   * 计算根元素的样式变量 (UI 相关，保留在组件中)
    * @since v1.2.9
-   * @description 计算根元素的样式变量
+   * @description 计算根元素的 CSS 变量，用于响应式布局
    * @example
    * - maxWidth: 1000px
    * - maxWidth: 100%
@@ -553,12 +525,13 @@
   // 9. 核心聊天逻辑 (使用 useChatCore 整合)
   // ===================================================================
   const {
-    // 状态
+    // UI 状态
     showScrollToBottom,
-    // 计算属性
+    // 业务计算属性
     promptList,
     hasSessionContents,
     greetingText,
+    enableChatSession, // 是否启用会话管理 (从 use-chat-core 获取)
     // 会话管理方法
     switchToSession,
     handleNewChat,
@@ -625,18 +598,13 @@
     emit: (e: any, data?: any) => emit(e, data),
   });
 
-  // 是否启用会话管理
-  const enableChatSession = computed(() => {
-    return sessionStore.agentInfo.value?.conversationSettings?.enableChatSession ?? true;
-  });
-
-  // 是否有权限
+  // 是否有权限 (组件级状态派生，保留在组件中)
   const hasPermission = computed(() => {
     return sessionStore.hasPermission.value;
   });
 
   // ===================================================================
-  // 10. Watcher 监听器 (isShow 变化时聚焦输入框)
+  // 10. UI 交互 Watcher (isShow 变化时聚焦输入框)
   // ===================================================================
   watch(
     () => isShow.value,
