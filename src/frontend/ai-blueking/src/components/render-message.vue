@@ -27,20 +27,32 @@
           />
         </div>
         <div :class="`message-content-container ${message.role}`">
-          <ai-cite-structured
-            v-if="isStructuredCite(message?.property?.extra?.cite)"
-            :cite-data="message?.property?.extra?.cite"
-          />
+          <!-- 用户消息区域 -->
           <template
-            v-else-if="[SessionContentRole.User, SessionContentRole.Role].includes(message.role)"
+            v-if="[SessionContentRole.User, SessionContentRole.Role].includes(message.role)"
           >
+            <!-- 编辑 shortcut 消息时显示表单 -->
+            <custom-inputs
+              v-if="isEdit && isShortcutMessage && editableShortcut"
+              :shortcut="editableShortcut"
+              :root-node="messageMainRef ?? undefined"
+              @submit="handleEditShortcut"
+              @cancel="isEdit = false"
+            />
+            <!-- 编辑普通消息时显示文本编辑器 -->
             <bk-text-editor
-              v-if="isEdit"
+              v-else-if="isEdit && !isShortcutMessage"
               :auto-focus="true"
               :model-value="message.content"
               @cancel="isEdit = false"
               @submit="handleEditMessage"
             />
+            <!-- 非编辑模式下，如果是 shortcut 消息显示结构化 cite -->
+            <ai-cite-structured
+              v-else-if="!isEdit && isStructuredCite(message?.property?.extra?.cite)"
+              :cite-data="message?.property?.extra?.cite"
+            />
+            <!-- 非编辑模式显示普通消息内容 -->
             <p
               v-else
               class="message-content user"
@@ -57,6 +69,7 @@
               ></span>
             </p>
           </template>
+          <!-- AI 消息区域 -->
           <template v-else>
             <p class="message-content ai">
               <span
@@ -115,7 +128,7 @@
               <template v-if="message.role === SessionContentRole.User">
                 <i
                   class="bkai-icon bkai-bianji tool-icon"
-                  @click="isEdit = true"
+                  @click="handleEditClick"
                 />
               </template>
               <i
@@ -165,7 +178,6 @@
     onMounted,
     ref,
     watch,
-    defineEmits,
     onBeforeUnmount,
     nextTick,
     inject,
@@ -188,8 +200,10 @@
   import { createDeleteConfirm, closeAllDeleteConfirms } from '../utils/delete-confirm';
   import { RenderLike } from '@blueking/ai-ui-sdk/components';
   import { removeThinkingSections } from '../utils';
+  import type { IShortcut } from '../types';
 
   import BkTextEditor from './text-editor.vue';
+  import CustomInputs from './custom-inputs/index.vue';
 
   // 类型定义
   interface Props {
@@ -221,7 +235,14 @@
 
   const emit = defineEmits<{
     regenerate: [index: number];
-    resend: [index: number, value: { message: string }];
+    resend: [
+      index: number,
+      value: {
+        message: string;
+        shortcut?: IShortcut;
+        formData?: Record<string, any>[];
+      },
+    ];
     delete: [index: number];
     'message-select': [messageId: string];
     'update-session-content': [
@@ -241,6 +262,9 @@
 
   // 注入动态 URL (可选，用于独立使用时提供默认值)
   const normalizedUrl = inject<ComputedRef<string> | undefined>('normalizedUrl', undefined);
+
+  // 注入 shortcuts 列表 (可选，用于编辑 shortcut 消息时恢复表单)
+  const shortcuts = inject<ComputedRef<IShortcut[]> | undefined>('shortcuts', undefined);
 
   // 将 normalizedUrl 赋值给 apiPrefix
   const apiPrefix = computed(() => normalizedUrl?.value || '');
@@ -267,6 +291,61 @@
     if (!cite || isStructuredCite(cite)) return '';
     return removeThinkingSections(cite);
   });
+
+  /**
+   * 判断消息是否来自 shortcut
+   */
+  const isShortcutMessage = computed(() => {
+    const cite = props.message?.property?.extra?.cite;
+    const command = props.message?.property?.extra?.command;
+    return isStructuredCite(cite) && !!command;
+  });
+
+  /**
+   * 恢复 shortcut 数据用于编辑
+   */
+  const editableShortcut = computed<IShortcut | null>(() => {
+    // 如果不是 shortcut 消息或者没有 shortcuts 列表，直接返回 null
+    if (!isShortcutMessage.value || !shortcuts?.value) {
+      return null;
+    }
+
+    const command = props.message?.property?.extra?.command;
+    const context = props.message?.property?.extra?.context;
+
+    // 从 shortcuts 列表中找到对应的 shortcut
+    const originalShortcut = shortcuts.value.find(s => s.id === command);
+    if (!originalShortcut) {
+      return null;
+    }
+
+    // 深拷贝 shortcut
+    let shortcut: IShortcut;
+    try {
+      shortcut = JSON.parse(JSON.stringify(originalShortcut)) as IShortcut;
+    } catch (e) {
+      console.error('[render-message] 深拷贝 shortcut 失败:', e);
+      return null;
+    }
+
+    // 将 formData 恢复到 shortcut 的 components 中
+    if (context && Array.isArray(context) && shortcut.components) {
+      shortcut.components = shortcut.components.map((component, index) => {
+        const formItem = context[index];
+        if (formItem && formItem[component.key] !== undefined) {
+          // 将存储的值恢复为 default 值
+          return {
+            ...component,
+            default: formItem[component.key],
+          };
+        }
+        return component;
+      });
+    }
+
+    return shortcut;
+  });
+
   // 组合式函数
   const { enablePopup } = usePopup();
   const { setCiteText } = useSelect(enablePopup);
@@ -350,9 +429,34 @@
   });
 
   // 事件处理
+  /**
+   * 处理编辑按钮点击
+   */
+  const handleEditClick = () => {
+    isEdit.value = true;
+  };
+
   const handleEditMessage = (value: string) => {
     isEdit.value = false;
     emit('resend', props.index, { message: value });
+  };
+
+  /**
+   * 处理 shortcut 编辑提交
+   */
+  const handleEditShortcut = (data: {
+    shortcut: IShortcut;
+    formData: Record<string, any>[];
+    citeFormData: Record<string, any>[];
+  }) => {
+    isEdit.value = false;
+    // 将 shortcut 数据转换为消息格式，触发 resend 事件
+    // 这里传递 shortcut 信息，让父组件通过 handleSubmitShortcut 处理
+    emit('resend', props.index, {
+      message: data.shortcut.name,
+      shortcut: data.shortcut,
+      formData: data.formData,
+    });
   };
 
   /**

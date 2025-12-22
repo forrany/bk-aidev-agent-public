@@ -353,7 +353,31 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
     }
   };
 
-  const handleResend = (index: number, { message }: { message: string }): void => {
+  const handleResend = (
+    index: number,
+    data: {
+      message: string;
+      shortcut?: any;
+      formData?: Record<string, any>[];
+    }
+  ): void => {
+    const { message, shortcut, formData } = data;
+
+    // 如果是 shortcut 类型的消息，先删除原消息，然后重新提交 shortcut
+    if (shortcut && formData) {
+      // 删除当前消息和后续的 AI 回复
+      deleteChat(index, currentSession.value?.sessionCode);
+
+      // 重新提交 shortcut
+      handleSubmitShortcut({
+        shortcut,
+        formData,
+        citeFormData: formData, // 这里简化处理，实际应该根据可见字段过滤
+      });
+      return;
+    }
+
+    // 普通消息的处理逻辑
     const sessionContent = sessionContents.value[index];
     if (sessionContent) {
       sessionContent.content = escapeHtml(message);

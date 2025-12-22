@@ -272,6 +272,10 @@
   // 提供给子组件使用
   provide('normalizedUrl', normalizedUrl);
 
+  // 提供 shortcuts 给子组件使用（用于编辑 shortcut 消息）
+  const shortcutsRef = computed(() => props.shortcuts || []);
+  provide('shortcuts', shortcutsRef);
+
   // ===================================================================
   // 4. 核心状态管理
   // ===================================================================

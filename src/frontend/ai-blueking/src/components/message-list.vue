@@ -33,6 +33,7 @@
 
   import renderMessage from './render-message.vue';
   import { useMessageListStandalone } from '../composables/use-message-list-standalone';
+  import type { IShortcut } from '../types';
 
   interface Props {
     sessionContents: ISessionContent[];
@@ -54,7 +55,15 @@
   interface Emits {
     (e: 'delete', index: number): void;
     (e: 'regenerate', index: number): void;
-    (e: 'resend', index: number, data: { message: string }): void;
+    (
+      e: 'resend',
+      index: number,
+      data: {
+        message: string;
+        shortcut?: IShortcut;
+        formData?: Record<string, any>[];
+      }
+    ): void;
     (e: 'message-select', messageId: string): void;
     (e: 'scroll-position-change', isNearBottom: boolean): void;
     (
@@ -125,7 +134,14 @@
     emit('regenerate', index);
   };
 
-  const handleResend = (index: number, data: { message: string }) => {
+  const handleResend = (
+    index: number,
+    data: {
+      message: string;
+      shortcut?: IShortcut;
+      formData?: Record<string, any>[];
+    }
+  ) => {
     emit('resend', index, data);
   };
 
