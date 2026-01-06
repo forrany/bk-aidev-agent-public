@@ -20,6 +20,7 @@
 | `send-message`     | `message: string`             | 发送消息时触发，参数为发送的消息内容。                                                           |
 | `session-init`     | `sessionId: string`           | 会话初始化完成时触发，参数为当前会话ID。从 v1.1.6 开始支持。                                      |
 | `session-initialized` | `{ openingRemark: string; predefinedQuestions: string[] }` | 会话初始化完成时触发，参数为欢迎语和预设问题列表。从 v1.1.6 开始支持。                                      |
+| `init-session-finished` | -                             | 会话初始化流程完全结束时触发（无参数），通知外部会话已准备就绪，可进行后续操作。从 v1.3.1 开始支持。                                      |
 | `sdk-error`        | `{ apiName: string; code: number; message: string; data: unknown }` | SDK错误发生时触发，参数包含API名称、错误代码、错误信息和相关数据。从 v1.2.8 开始支持。                                    |
 | `transfer-messages`| `messageIds: string[]`        | 消息转移操作完成时触发，参数为转移的消息ID列表。从 v1.2.8 开始支持。                                |
 | `share-messages`   | `messageIds: string[]`        | 消息分享操作完成时触发，参数为分享的消息ID列表。从 v1.2.8 开始支持。                                |
@@ -58,6 +59,7 @@ interface ShortCut {
     @send-message="onSendMessage"
     @session-init="onSessionInit"
     @session-initialized="onSessionInitialized"
+    @init-session-finished="onInitSessionFinished"
     @sdk-error="onSdkError"
     @transfer-messages="onTransferMessages"
     @share-messages="onShareMessages"
@@ -86,6 +88,7 @@ const onReceiveEnd = () => console.log('Event: receive-end');
 const onSendMessage = (message) => console.log('Event: send-message', message);
 const onSessionInit = (sessionId) => console.log('Event: session-init', sessionId);
 const onSessionInitialized = (data) => console.log('Event: session-initialized', data.openingRemark, data.predefinedQuestions);
+const onInitSessionFinished = () => console.log('Event: init-session-finished');
 const onSdkError = (error) => console.log('Event: sdk-error', error.apiName, error.code, error.message, error.data);
 const onTransferMessages = (messageIds) => console.log('Event: transfer-messages', messageIds);
 const onShareMessages = (messageIds) => console.log('Event: share-messages', messageIds);
@@ -111,6 +114,7 @@ const onResizing = (position) => console.log('Event: resizing', position);
     @send-message="onSendMessage"
     @session-init="onSessionInit"
     @session-initialized="onSessionInitialized"
+    @init-session-finished="onInitSessionFinished"
     @sdk-error="onSdkError"
     @transfer-messages="onTransferMessages"
     @share-messages="onShareMessages"
@@ -141,6 +145,7 @@ export default {
     onSendMessage(message) { console.log('Event: send-message', message); },
     onSessionInit(sessionId) { console.log('Event: session-init', sessionId); },
     onSessionInitialized(data) { console.log('Event: session-initialized', data.openingRemark, data.predefinedQuestions); },
+    onInitSessionFinished() { console.log('Event: init-session-finished'); },
     onSdkError(error) { console.log('Event: sdk-error', error.apiName, error.code, error.message, error.data); },
     onTransferMessages(messageIds) { console.log('Event: transfer-messages', messageIds); },
     onShareMessages(messageIds) { console.log('Event: share-messages', messageIds); },

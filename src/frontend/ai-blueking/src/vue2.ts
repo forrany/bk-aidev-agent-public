@@ -221,6 +221,9 @@ export default {
           onSessionInitialized() {
             emit('session-initialized', ...arguments);
           },
+          onInitSessionFinished() {
+            emit('init-session-finished');
+          },
           onDragStop(...args: [{ x: number; y: number; width: number; height: number }]) {
             emit('drag-stop', ...args);
           },

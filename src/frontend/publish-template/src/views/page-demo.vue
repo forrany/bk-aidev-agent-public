@@ -57,6 +57,7 @@
           :default-top="52"
           :sdk-error="handleSdkError"
           :default-width="defaultWidth"
+          @init-session-finished="handleInitSessionFinished"
         />
       </div>
     </div>
@@ -64,14 +65,18 @@
 </template>
 
 <script setup lang="ts">
-  import { ref, onMounted, reactive, watch, computed } from "vue"
+  import { ref, onMounted, reactive, watch, computed, nextTick } from "vue"
   import { Input as BKInput, Button as BKButton } from "bkui-vue"
   import { Search, Plus } from "bkui-vue/lib/icon"
 
   import AIBlueking, { AIBluekingExpose } from "@blueking/ai-blueking"
   import "@blueking/ai-blueking/dist/vue3/style.css"
   import router from "../router"
+  import { useRoute, useRouter } from "vue-router"
   import { fetchAgentInfo } from "../composables/useAgentInfo"
+
+  const route = useRoute()
+  const routerInstance = useRouter()
 
   const aiBlueking = ref<AIBluekingExpose | null>(null)
   const sessionList = ref<any[]>([])
@@ -79,6 +84,9 @@
   const searchQuery = ref("")
   const agentInfo = ref<any>(null) // 用于存储从agent/info接口获取的数据
   const isComponentReady = ref(false) // 控制 AIBlueking 组件是否准备就绪
+
+  // 存储待发送的问题（来自 URL 参数）
+  const pendingQuestion = ref<string | null>(null)
 
   const url = ref(window.BK_API_PREFIX)
 
@@ -233,21 +241,54 @@
     }, 100) // 延迟以确保 DOM 更新已完成
   }
 
+  // 处理会话初始化完成事件
+  const handleInitSessionFinished = async () => {
+    // 如果有待发送的问题，创建临时会话并发送
+    if (pendingQuestion.value) {
+      const question = pendingQuestion.value
+      pendingQuestion.value = null // 清除，防止重复发送
+
+      // 创建临时会话并发送消息
+      await aiBlueking.value?.handleShow(undefined, { isTemporary: true })
+
+      // 等待临时会话创建完成
+      await nextTick()
+
+      // 发送消息
+      aiBlueking.value?.handleSendMessage(question)
+
+      // 清除 URL 中的 query 参数，防止刷新页面重复发送
+      routerInstance.replace({ query: {} })
+    }
+
+    // 无论是否有 question，都关闭 loading
+    loading.value = false
+  }
+
   onMounted(async () => {
     if (typeof window !== "undefined") {
       window.addEventListener("resize", handleResize)
     }
 
+    // 检查 URL 参数中是否有 question，存储到 pendingQuestion
+    const questionFromUrl = route.query.question as string | undefined
+    if (questionFromUrl) {
+      pendingQuestion.value = questionFromUrl
+    }
+
     // 先获取agent信息
     await getAgentInfo()
 
-    // 设置组件准备就绪标志
+    // 设置组件准备就绪标志，触发 AIBlueking 组件渲染
+    // AIBlueking 组件会自动初始化会话，完成后触发 init-session-finished 事件
     isComponentReady.value = true
 
     // 获取agent信息后再初始化组件
-    setTimeout(() => {
-      aiBlueking.value?.handleShow()
-      loading.value = false
+    setTimeout(async () => {
+      // 正常显示（不带临时会话参数，让组件自己初始化）
+      await aiBlueking.value?.handleShow()
+
+      // 注意：loading.value = false 已移到 handleInitSessionFinished 中
       // 初始化会话列表
       fetchSessionList()
       // 触发一次 resize 事件确保组件宽度正确计算
@@ -419,5 +460,8 @@
     .ai-blueking-container-wrapper {
       box-shadow: none;
     }
+  }
+  .bk-loading-wrapper {
+    z-index: 99999;
   }
 </style>

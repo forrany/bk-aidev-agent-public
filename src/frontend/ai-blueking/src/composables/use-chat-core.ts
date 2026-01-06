@@ -78,6 +78,7 @@ export interface UseChatCoreOptions {
       e: 'session-initialized',
       data: { openingRemark: string; predefinedQuestions: string[] }
     ): void;
+    (e: 'init-session-finished'): void;
     (e: 'send-message', message: string): void;
     (e: 'stop'): void;
     (e: 'show'): void;
@@ -602,6 +603,9 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
       if (props.initialSessionCode && props.autoSwitchToInitialSession) {
         await switchToSession(props.initialSessionCode);
       }
+
+      // 触发初始化完成事件，通知外部会话已准备就绪
+      emit('init-session-finished');
     }
 
     useCopyCode();

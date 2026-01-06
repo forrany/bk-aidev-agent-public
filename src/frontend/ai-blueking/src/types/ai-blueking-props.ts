@@ -187,6 +187,7 @@ export interface AiBluekingEmits {
   (e: 'close' | 'show' | 'stop' | 'receive-start' | 'receive-text' | 'receive-end'): void;
   (e: 'send-message', message: string): void;
   (e: 'session-initialized', data: { openingRemark: string; predefinedQuestions: string[] }): void;
+  (e: 'init-session-finished'): void;
   (e: 'sdk-error', data: { apiName: string; code: number; message: string; data: unknown }): void;
   (e: 'transfer-messages', messageIds: string[]): void;
   (e: 'share-messages', messageIds: string[]): void;

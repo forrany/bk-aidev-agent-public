@@ -540,10 +540,13 @@ export function useSessionStore() {
       targetSessionContents = [];
     } else {
       // 使用现有会话
+      // 注意：这里不能调用 switchSessionWithContents，因为它内部的 setCurrentSessionChain
+      // 会再次请求 session content，导致重复请求
+      // 我们已经获取了 targetSessionContents，直接设置即可
       const setContents = checkSdkMethod('setSessionContents');
 
       setContents(targetSessionContents);
-      switchSessionWithContents(targetSession);
+      setCurrentSession(targetSession);
     }
 
     if (!agentInfo.value || isInitChat) {

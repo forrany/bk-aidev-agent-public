@@ -8,6 +8,28 @@ export default {
     return {
       changelogData: [
         {
+          version: "v1.3.1",
+          date: "2026-01-06",
+          features: [
+            "核心架构重构：提取聊天核心逻辑到独立的 <code>use-chat-core</code> composable，提升代码可维护性和复用性",
+            "新增 <code>use-iframe-drag-resize</code> composable，优化 iframe 内的拖拽和调整大小体验",
+            "Props 类型系统增强：新增独立的 Props 类型定义和默认值配置模块",
+            "快捷方式编辑功能修复：支持 shortcut 消息的编辑和重新发送",
+            "新增 <code>init-session-finished</code> 事件，在会话初始化流程完全结束时触发，通知外部会话已准备就绪"
+          ],
+          improvements: [
+            "优化快捷方式功能，动态合并当前快捷方式与原始快捷方式数据",
+            "重构模板条件判断顺序，编辑模式优先于显示模式",
+            "通过 provide/inject 注入 shortcuts 列表供编辑使用",
+            "更新 resend 事件支持 shortcut 类型数据",
+            "更新 dayjs 和 markdown-it 依赖版本"
+          ],
+          fixes: [
+            "修复 shortcut 消息编辑功能无法显示的问题",
+            "修复 useChatCore 中 TypeScript 类型定义问题"
+          ]
+        },
+        {
           version: "v1.3.0",
           date: "2025-12-12",
           important: "⚠️ <strong>重要提醒</strong>：小鲸 1.3.0 版本必须与后端 SDK 版本 1.0.5.post3 或更高版本匹配使用，否则可能出现兼容性问题",
