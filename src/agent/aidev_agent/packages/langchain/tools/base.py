@@ -468,17 +468,61 @@ class MCPExceptionWrapper:
             _logger.exception(f"failed to run mcp: {err}")
             return (f"[ERROR] MCP工具调用失败: {err}", None)
 
+    def get_status_code_description(self, status_code):
+        """获取HTTP状态码的描述"""
+        status_code_map = {
+            "400": "请求参数或格式错误",
+            "401": "未认证，需要登录",
+            "403": "无访问权限，禁止访问",
+            "404": "请求的资源不存在",
+            "429": "请求过于频繁，被限制",
+            "500": "服务器内部错误",
+            "502": "网关/代理服务器错误",
+            "503": "服务暂时不可用",
+            "504": "网关超时，后端响应慢",
+        }
+        return status_code_map.get(str(status_code), "")
+
     def extract_error_message(self, error_str):
-        """从错误字符串中提取message"""
+        """从错误字符串中提取message和status_code
+
+        Returns:
+            str: 组合后的错误信息，优先级为：
+                1. message + status_code (都存在)
+                2. error_str + status_code (message不存在，status_code存在)
+                3. message (message存在，status_code不存在)
+                4. error_str (都不存在)
+        """
+        # 从错误字符串中提取JSON数据
         match = re.search(r"(\{.*\})", error_str)
-        if match:
-            try:
-                data = json.loads(match.group(1))
-                return data.get("response_body", {}).get("message")
-            except (json.JSONDecodeError, KeyError, AttributeError):
-                # 如果JSON解析失败或预期的键不存在，则返回原始错误
-                return error_str
-        return error_str
+        if not match:
+            return f"错误信息: {error_str}"
+
+        try:
+            data = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return f"错误信息: {error_str}"
+
+        # 安全地提取status_code
+        status_code = data.get("status_code")
+        status_code_info = None
+        if status_code is not None:
+            status_desc = self.get_status_code_description(status_code)
+            status_code_info = f"{status_code} ({status_desc})" if status_desc else str(status_code)
+
+        # 安全地提取message（response_body可能不存在或不是字典）
+        response_body = data.get("response_body", {})
+        message = response_body.get("message") if isinstance(response_body, dict) else None
+
+        # 根据可用的信息组合结果
+        if message and status_code_info:
+            return f"错误信息: {message}, 状态码: {status_code_info}"
+        if status_code_info:
+            return f"错误信息: {error_str}, 状态码: {status_code_info}"
+        if message:
+            return f"错误信息: {message}"
+
+        return f"错误信息: {error_str}"
 
     def extract_all_non_group_exceptions(self, exc):
         """递归提取 ExceptionGroup 中所有非-ExceptionGroup 的底层异常"""

@@ -15,11 +15,7 @@ AGENT_CONFIG = {
     "knowledge_ids": [],
     # 在 AIDev 站点注册工具，然后将对应的工具 tool_code 填在此处，可以在 agent 使用的时候调用相关工具。
     "tool_codes": [],
-    # 在 CommonQAAgent 内置 prompt 的基础上，用户自定义的增量 prompt。
-    # 目前内部实现方式是将用户自定义的增量 prompt 直接拼接到 CommonQAAgent 内置 prompt 上。
-    # 因此，该 prompt 更适合只需简单的、与 CommonQAAgent 内置 prompt 没有冲突的自定义场景，
-    # 例如要求 agent 根据用户最新提问使用的语言（中/英文）进行自适应的答复等场景。
-    # 对于复杂的自定义 prompt 需求，请参考 README_AGENT_PLUGIN.md [情况二] 的内容，
-    # 直接重写完整的 agent prompt 并注册到 CommonQAAgent 中进行替换。
-    "role_prompt": "",
+    # 需要指定的角色
+    # 示例: [{"role": "system", "content": "你是一个帮助用户解决问题的助手。"}]
+    "role_prompts": [],
 }
