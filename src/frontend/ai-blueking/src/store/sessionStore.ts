@@ -268,18 +268,22 @@ export function useSessionStore() {
     // 添加到本地会话列表
     const session = addSession(newSession);
 
-    // 创建 session 并同步到后台
     const plusSession = checkSdkMethod('plusSessionApi');
 
     try {
-      await plusSession(session);
+      // 优化：临时会话也需要先创建，但可以与切换会话并行
+      if (options?.isTemporary) {
+        // 并行执行：创建会话 + 切换会话（新会话内容为空，加载很快）
+        await Promise.all([plusSession(session), switchSessionWithContents(session)]);
+      } else {
+        // 正常会话：先创建，再切换并加载内容
+        await plusSession(session);
+        await switchSessionWithContents(session);
+      }
     } catch (error) {
       handleSdkError('plusSessionApi', error);
       throw error;
     }
-
-    // 切换到新会话
-    await switchSessionWithContents(session);
 
     return session;
   };

@@ -29,7 +29,7 @@
           ref="rootNode"
           class="ai-blueking-container"
         >
-          <loading-overlay :show="isLoadingSessionContents" />
+          <loading-overlay :show="isLoadingSessionContents || isInitializing" />
           <!-- 顶部栏 -->
           <ai-blueking-header
             v-if="!props.hideHeader"
@@ -557,6 +557,7 @@
   const {
     // UI 状态
     showScrollToBottom,
+    isInitializing,
     // 业务计算属性
     promptList,
     hasSessionContents,

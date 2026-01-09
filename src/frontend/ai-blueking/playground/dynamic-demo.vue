@@ -60,6 +60,12 @@
             <div class="test-actions">
               <button
                 class="action-btn"
+                @click="handleShowAgent"
+              >
+                打开临时会话
+              </button>
+              <button
+                class="action-btn"
                 @click="handleAddNewSession"
               >
                 新增会话
@@ -193,7 +199,7 @@
           name: '内容',
           key: 'content',
           type: 'textarea',
-          default: '',
+          default: 'test',
           placeholder: '请输入项目名称',
           required: false,
           fillBack: true,
@@ -224,6 +230,11 @@
 
   const handleClose = () => {
     addLog('close', 'AI chat window closed');
+  };
+
+  const handleShowAgent = async () => {
+    await aiBlueking.value?.handleShow(undefined, { isTemporary: true });
+    aiBlueking.value?.handleShortcutClick({ shortcut: shortcuts[1], source: 'popup' });
   };
 
   const quickActions = (shortcut: { label: string; prompt: string; key: string }, cite: string) => {

@@ -89,6 +89,7 @@ export interface UseChatCoreOptions {
 export interface UseChatCoreReturn {
   // 会话状态
   showScrollToBottom: Ref<boolean>;
+  isInitializing: Ref<boolean>;
 
   // 计算属性
   promptList: ComputedRef<string[]>;
@@ -173,6 +174,7 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
   const openingRemark = ref('');
   const predefinedQuestions: Ref<string[]> = ref([]);
   const showScrollToBottom = ref(false);
+  const isInitializing = ref(false);
 
   // ===================================================================
   // 计算属性
@@ -492,32 +494,38 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
     sessionCode?: string,
     sessionOptions?: AddNewSessionOptions
   ): Promise<void> => {
-    if (sessionOptions?.isTemporary) {
-      if (!isSessionInitialized.value) {
-        await initSession();
-      }
+    // 优化：立即显示弹窗，给用户即时反馈
+    isShow.value = true;
+    emit('show');
 
-      stopChat(currentSession.value?.sessionCode);
-      inputMessage.value = '';
-      setCiteText('');
-      await sessionStore.addNewSession(sessionCode, sessionOptions);
-
-      isShow.value = true;
-      emit('show');
-    } else {
-      isShow.value = true;
-      emit('show');
-
-      if (!isSessionInitialized.value) {
-        await initSession();
-      }
-
-      if (sessionCode) {
-        await switchToSession(sessionCode);
-      }
+    // 优化：立即显示 loading 状态，覆盖整个初始化过程
+    if (sessionOptions?.isTemporary || !isSessionInitialized.value || sessionCode) {
+      isInitializing.value = true;
     }
 
-    updateGreetingTextHeight();
+    try {
+      if (sessionOptions?.isTemporary) {
+        if (!isSessionInitialized.value) {
+          await initSession();
+        }
+
+        stopChat(currentSession.value?.sessionCode);
+        inputMessage.value = '';
+        setCiteText('');
+        await sessionStore.addNewSession(sessionCode, sessionOptions);
+      } else {
+        if (!isSessionInitialized.value) {
+          await initSession();
+        }
+
+        if (sessionCode) {
+          await switchToSession(sessionCode);
+        }
+      }
+    } finally {
+      isInitializing.value = false;
+      updateGreetingTextHeight();
+    }
   };
 
   const handleClose = (): void => {
@@ -613,6 +621,7 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
   return {
     // 状态
     showScrollToBottom,
+    isInitializing,
 
     // 计算属性
     promptList,
