@@ -430,13 +430,13 @@ export function useChatCore(options: UseChatCoreOptions): UseChatCoreReturn {
 
     await plusSessionContent(currentSession.value?.sessionCode, {
       role: SessionContentRole.User,
-      content: shortcut.name,
+      content: shortcut.alias || shortcut.name,
       sessionCode: currentSession.value?.sessionCode,
       property: {
         extra: {
           cite: {
             type: 'structured',
-            title: shortcut.name,
+            title: shortcut.alias || shortcut.name,
             data: citeData.map(item => ({
               key: item.__label,
               value: item.__value,

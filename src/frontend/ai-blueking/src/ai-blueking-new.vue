@@ -286,7 +286,13 @@
   provide('normalizedUrl', normalizedUrl);
 
   // 提供 shortcuts 给子组件使用（用于编辑 shortcut 消息）
-  const shortcutsRef = computed(() => props.shortcuts || []);
+  // 优先使用 props.shortcuts，如果为空则使用后端 conversationSettings.commands
+  const shortcutsRef = computed(() => {
+    if (props.shortcuts && props.shortcuts.length > 0) {
+      return props.shortcuts;
+    }
+    return (sessionStore.agentInfo.value?.conversationSettings?.commands as IShortcut[]) || [];
+  });
   provide('shortcuts', shortcutsRef);
 
   // ===================================================================
