@@ -15,12 +15,12 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
+
 from __future__ import annotations
 
 import logging
 import uuid
-from typing import Dict, List, Optional, Tuple
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Dict, List, Optional, Tuple
 
 from langchain.agents.middleware.types import (
     AgentState,
@@ -30,6 +30,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.stores import ByteStore
 from langchain_core.tools import BaseTool
+from langgraph.cache.base import BaseCache
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END, START
@@ -38,12 +39,12 @@ from langgraph.graph.state import StateGraph
 from langgraph.store.memory import InMemoryStore
 from typing_extensions import Literal, TypedDict, TypeVar
 
-from aidev_agent.core.nodes.context_processor import ContextProcessor
+from aidev_agent.core.nodes.model import ContextProcessor, ModelNodeSettings
 from aidev_agent.core.nodes.model import build_model_node as std_make_model_node
 from aidev_agent.core.nodes.tool import build_tool_node
+from aidev_agent.core.tools.add_image_to_chat_context import add_image_to_chat_context
 from aidev_agent.enums import Decision
 from aidev_agent.packages.langchain_core.models.utils import is_model_without_function_calling
-from aidev_agent.packages.langchain_core.tools.builtin import add_image_to_chat_context
 from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
 from aidev_agent.services.pydantic_models import AgentOptions
 
@@ -82,6 +83,7 @@ class ReActAgent:
     - tool 节点：执行工具调用
     - 条件路由：model → tool / END，tool → model
     """
+
     @staticmethod
     def _prepare_agent_options(
         agent_options: Optional[AgentOptions],
@@ -135,10 +137,7 @@ class ReActAgent:
         return tools
 
     @staticmethod
-    def _prepare_checkpointer(
-        *,
-        checkpointer: BaseCheckpointSaver | None = None
-    ):
+    def _prepare_checkpointer(*, checkpointer: BaseCheckpointSaver | None = None):
         if isinstance(checkpointer, BaseCheckpointSaver):
             return checkpointer
         return MemorySaver()
@@ -236,9 +235,7 @@ class ReActAgent:
         # 处理 enable_query_clarification 的默认值
         if enable_query_clarification is None:
             model_name = getattr(llm, "model_name", "")
-            enable_query_clarification = (
-                model_name == "gpt-4o" or "deepseek" in model_name or "qwq" in model_name
-            )
+            enable_query_clarification = model_name == "gpt-4o" or "deepseek" in model_name or "qwq" in model_name
 
         # 从 agent_options 获取配置
         knowledge_query_options = agent_options.knowledge_query_options
@@ -247,10 +244,7 @@ class ReActAgent:
         use_general_knowledge_on_miss = knowledge_query_options.is_response_when_no_knowledgebase_match
 
         # 检查是否配置了知识库
-        has_knowledge = (
-            knowledge_query_options.knowledge_bases
-            or knowledge_query_options.knowledge_items
-        )
+        has_knowledge = knowledge_query_options.knowledge_bases or knowledge_query_options.knowledge_items
 
         # 构建上下文处理器（传入 tools 参数）
         context_processor = ContextProcessor(
@@ -260,6 +254,7 @@ class ReActAgent:
             role_prompt=role_prompt,
             use_general_knowledge_on_miss=use_general_knowledge_on_miss,
             tools=tools,
+            tool_output_compress_thrd=agent_options.intent_recognition_options.tool_output_compress_thrd,
         )
 
         # 如果配置了知识库,添加 knowledge 节点
@@ -277,7 +272,7 @@ class ReActAgent:
         model_node = std_make_model_node(
             llm=llm,
             context_processor=context_processor,
-            use_structured_response=use_structured_response,
+            node_options=ModelNodeSettings(use_structured_response=use_structured_response),
         )
 
         # 添加模型节点
@@ -351,13 +346,13 @@ class ReActAgent:
         llm_token_limit=28000,
         agent_options: Optional[AgentOptions] = None,
         state_schema: type[AgentState[ResponseT]] | None = None,
-        checkpointer: "Checkpointer | None" = None,
+        checkpointer: BaseCheckpointSaver | None = None,
         store: "BaseStore | None" = None,
         interrupt_before: list[str] | None = None,
         interrupt_after: list[str] | None = None,
         debug: bool = False,
         name: str | None = None,
-        cache: "BaseCache | None" = None,
+        cache: BaseCache | None = None,
         intent_recognition_kwargs=None,
         enable_query_clarification: Optional[bool] = None,
         **kwargs,
@@ -395,7 +390,7 @@ class ReActAgent:
             (CompiledGraph, RunnableConfig) 元组
         """
         callbacks = callbacks or []
-        use_structured_response = is_model_without_function_calling(llm) and extra_tools
+        use_structured_response = bool(is_model_without_function_calling(llm) and extra_tools)
         # 统一处理 agent_options
         prepared_agent_options = cls._prepare_agent_options(
             agent_options,

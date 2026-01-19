@@ -25,19 +25,21 @@ from typing import Any, Dict, List, Optional, Type
 
 import requests
 from langchain_core.prompts import jinja2_formatter
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langchain_core.tools.base import ToolException
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import BaseModel, Field, ValidationError, create_model, field_validator
 from requests.exceptions import JSONDecodeError
+from typing_extensions import Annotated
 
 from aidev_agent.config import settings
+from aidev_agent.enums import CredentialType
 from aidev_agent.utils.local import request_local
 from aidev_agent.utils.loop import get_event_loop
-from aidev_agent.enums import CredentialType
 
-from .exceptions import ToolValidationError
 from .enums import FieldType, FuncType
+from .exceptions import ToolValidationError
 
 COMPLEXED_FIELD_TYPE = ["object", "array"]
 
@@ -155,6 +157,10 @@ class ApiWrapper:
         self._extra = ToolExtra.model_validate(extra or {})
 
     def __call__(self, **kwargs):
+        # 提取 config 和 state (如果通过 InjectedState 和 RunnableConfig 注入)
+        runtime_config = kwargs.pop("config", None)
+        runtime_state = kwargs.pop("state", None)
+
         if self._check_max_call(kwargs):
             return self.CALL_TOO_MUCH_PROMPT
 
@@ -170,10 +176,11 @@ class ApiWrapper:
                 self._body[field] = v
 
         # 补充内置变量
-        self._header = {k: self._render_builtin_variables(v) for k, v in self._header.items()} if self._header else {}
-        self._body = {k: self._render_builtin_variables(v) for k, v in self._body.items()} if self._body else {}
-        self._query = {k: self._render_builtin_variables(v) for k, v in self._query.items()} if self._query else {}
-        self._path = {k: self._render_builtin_variables(v) for k, v in self._path.items()} if self._path else {}
+        context = self._build_render_context(runtime_config, runtime_state)
+        self._header = {k: self._render_variables(v, context) for k, v in self._header.items()} if self._header else {}
+        self._body = {k: self._render_variables(v, context) for k, v in self._body.items()} if self._body else {}
+        self._query = {k: self._render_variables(v, context) for k, v in self._query.items()} if self._query else {}
+        self._path = {k: self._render_variables(v, context) for k, v in self._path.items()} if self._path else {}
         self._load_body()
         if self._extra:
             if self._extra.query:
@@ -256,13 +263,42 @@ class ApiWrapper:
 
         return result_url
 
-    def _render_builtin_variables(self, value: Any):
-        """内部变量暂时只支持渲染 bk_username"""
+    def _build_render_context(self, runtime_config: Optional[RunnableConfig], runtime_state: Optional[dict]) -> dict:
+        """构建模板渲染上下文，包含 builtin_fields, state, config"""
+        context = {}
+
+        # 1. 添加内置字段 (向后兼容)
+        if self._builtin_fields:
+            context.update(self._builtin_fields)
+            # 为了向后兼容，保留 bk_username 的特殊处理
+            username = self._builtin_fields.get("username")
+            if username:
+                context["bk_username"] = username
+
+        # 2. 添加 state (如果有注入)
+        if runtime_state:
+            context["state"] = runtime_state
+
+        # 3. 添加 config (如果有注入)
+        if runtime_config:
+            context["config"] = runtime_config
+            execute_kwargs = runtime_config.get("configurable", {}).get("execute_kwargs")
+            if hasattr(execute_kwargs, "executor"):
+                context["bk_username"] = execute_kwargs.executor
+        return context
+
+    def _render_variables(self, value: Any, context: dict):
+        """使用 Jinja2 渲染变量，支持 builtin_fields, state, config"""
         if not isinstance(value, str):
             return value
-        username = self._builtin_fields.get("username")
-        value = jinja2_formatter(value, bk_username=f'"{username}"')
-        return value
+
+        # 使用 jinja2_formatter 渲染模板
+        try:
+            rendered_value = jinja2_formatter(value, **context)
+            return rendered_value
+        except Exception as e:
+            _logger.warning(f"Failed to render template '{value}': {e}")
+            return value
 
 
 def build_validator(name, rule: Rule):
@@ -319,6 +355,7 @@ def make_structured_tool(
     tool: Tool,
     debug: bool = False,
     builtin_fields: dict | None = None,
+    inject_context: bool = True,
 ) -> StructuredTool:
     """根据Tool的ORM定义构建对应的langchain Tool
     注意的是会将嵌套的字段通过`__`打平,例如:
@@ -328,6 +365,12 @@ def make_structured_tool(
     }
     ```
     对应的字段为: query__test=123
+
+    Args:
+        tool: Tool 定义
+        debug: 是否开启调试模式
+        builtin_fields: 内置字段，用于渲染模板变量
+        inject_context: 是否注入上下文（包括 RunnableConfig 和 State），允许在工具中访问运行时配置和图状态
     """
     default_values: dict[str, dict[str, Any]] = {
         "header": {},
@@ -362,30 +405,61 @@ def make_structured_tool(
         if not _params:
             continue
 
+    # 注意:不要在 _params 中添加 state 和 config,它们通过函数签名自动推断
     _model = build_model("_RequestInput", _params)
 
     def custom_handle_validation_error(__: ValidationError) -> str:
         return f"The input is not valid. Function schema is {_model.model_fields}"
 
-    _tool = StructuredTool.from_function(
-        func=ApiWrapper(
-            tool.method,
-            tool.url,
-            query=default_values.get("query", {}),
-            header=default_values.get("header", {}),
-            body=default_values.get("body", {}),
-            path=default_values.get("path", {}),
-            complex_fields=complex_fields,
-            builtin_fields=builtin_fields,
-            extra=tool.extra,
-        ),
-        description=tool.description,
-        return_direct=debug,
-        name=tool.tool_code,
-        args_schema=_model,
-        handle_validation_error=custom_handle_validation_error if not debug else None,
-        metadata={"tool_name": tool.tool_name},
+    # 创建 ApiWrapper 实例
+    api_wrapper = ApiWrapper(
+        tool.method,
+        tool.url,
+        query=default_values.get("query", {}),
+        header=default_values.get("header", {}),
+        body=default_values.get("body", {}),
+        path=default_values.get("path", {}),
+        complex_fields=complex_fields,
+        builtin_fields=builtin_fields,
+        extra=tool.extra,
     )
+
+    # 如果需要注入上下文（config 和 state），创建一个带注解的wrapper函数
+    _tool = None
+    if inject_context:
+        try:
+            from langgraph.prebuilt import InjectedState
+
+            # 创建一个wrapper函数，同时支持 InjectedState 和 RunnableConfig 注入
+            def tool_func(config: RunnableConfig = None, state: Annotated[dict, InjectedState] = None, **kwargs):
+                # 将 config 和 state 传递给 ApiWrapper
+                return api_wrapper(config=config, state=state, **kwargs)
+
+            _tool = StructuredTool.from_function(
+                func=tool_func,
+                description=tool.description,
+                return_direct=debug,
+                name=tool.tool_code,
+                args_schema=_model,
+                handle_validation_error=custom_handle_validation_error if not debug else None,
+                metadata={"tool_name": tool.tool_name},
+            )
+
+        except ImportError:
+            _logger.warning("langgraph not installed, cannot inject context")
+            # 降级到普通模式
+    if _tool is None:
+        # 不需要注入，直接使用 ApiWrapper
+        _tool = StructuredTool.from_function(
+            func=api_wrapper,
+            description=tool.description,
+            return_direct=debug,
+            name=tool.tool_code,
+            args_schema=_model,
+            handle_validation_error=custom_handle_validation_error if not debug else None,
+            metadata={"tool_name": tool.tool_name},
+        )
+
     return _tool
 
 

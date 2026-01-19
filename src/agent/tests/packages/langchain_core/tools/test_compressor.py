@@ -18,28 +18,26 @@ to the current version of the project delivered to anyone in the future.
 
 import asyncio
 from typing import Any, TypedDict
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from pydantic import BaseModel, Field
-from langchain_core.tools import StructuredTool
-from langchain_core.messages import HumanMessage
-
 from aidev_agent.api import BKAidevApi
 from aidev_agent.config import settings
-from aidev_agent.packages.langchain_core.tools.compressor import (
-    CompressedTool,
-    create_compressed_tool,
-    _build_extended_schema,
-)
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
-from aidev_agent.api.bkaidev_client.client import Client
-
+from aidev_agent.packages.langchain_core.tools.enhance import (
+    _build_extended_schema,
+    create_enhanced_tool,
+)
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 
 # ============== 测试用的工具和压缩函数 ==============
 
+
 class SimpleToolInput(BaseModel):
     """简单工具输入 - BaseModel schema"""
+
     city: str = Field(..., description="城市名称")
 
 
@@ -80,12 +78,10 @@ def error_tool_func(city: str) -> str:
 
 # ============== Schema 构建测试 ==============
 
+
 def test_build_extended_schema_with_basemodel():
     """测试 BaseModel schema 扩展 - 添加 invoke_intent 字段"""
-    extended_schema = _build_extended_schema(
-        SimpleToolInput,
-        intent_description="Test intent description"
-    )
+    extended_schema = _build_extended_schema(SimpleToolInput, intent_description="Test intent description")
 
     # 验证是 BaseModel 类型
     assert issubclass(extended_schema, BaseModel)
@@ -104,19 +100,11 @@ def test_build_extended_schema_with_dict():
     """测试 dict schema 扩展 - 模拟 MCP 工具"""
     original_dict_schema = {
         "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "Location name"
-            }
-        },
-        "required": ["location"]
+        "properties": {"location": {"type": "string", "description": "Location name"}},
+        "required": ["location"],
     }
 
-    extended_schema = _build_extended_schema(
-        original_dict_schema,
-        intent_description="MCP tool intent"
-    )
+    extended_schema = _build_extended_schema(original_dict_schema, intent_description="MCP tool intent")
 
     # 验证是 dict 类型
     assert isinstance(extended_schema, dict)
@@ -132,10 +120,7 @@ def test_build_extended_schema_with_dict():
 
 def test_build_extended_schema_with_none():
     """测试空 schema 扩展"""
-    extended_schema = _build_extended_schema(
-        None,
-        intent_description="Empty tool intent"
-    )
+    extended_schema = _build_extended_schema(None, intent_description="Empty tool intent")
 
     # 验证是 dict 类型
     assert isinstance(extended_schema, dict)
@@ -145,23 +130,19 @@ def test_build_extended_schema_with_none():
     assert "invoke_intent" in extended_schema["required"]
 
 
-# ============== CompressedTool 基础功能测试 ==============
+# ============== EnhancedTool 基础功能测试 ==============
+
 
 def test_compressed_tool_creation():
-    """测试 CompressedTool 创建"""
+    """测试 EnhancedTool 创建"""
     # 创建原始工具
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather information",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather information", args_schema=SimpleToolInput
     )
 
     # 创建压缩工具
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=False
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=False
     )
 
     # 验证基本属性
@@ -174,16 +155,11 @@ def test_compressed_tool_creation():
 def test_compressed_tool_with_intent_schema_basemodel():
     """测试启用 show_intent 后 BaseModel schema 正确修改"""
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=True
     )
 
     # 验证 args_schema 包含 invoke_intent
@@ -197,23 +173,19 @@ def test_compressed_tool_with_intent_schema_dict():
     # 创建使用 dict schema 的工具
     dict_schema = {
         "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Search query"}
-        },
-        "required": ["query"]
+        "properties": {"query": {"type": "string", "description": "Search query"}},
+        "required": ["query"],
     }
 
     original_tool = StructuredTool(
         name="search_tool",
         description="Search tool",
         func=lambda query: f"Results for {query}",
-        args_schema=dict_schema
+        args_schema=dict_schema,
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=True
     )
 
     # 验证 args_schema 包含 invoke_intent
@@ -224,19 +196,15 @@ def test_compressed_tool_with_intent_schema_dict():
 
 # ============== 同步调用测试 ==============
 
+
 def test_compressed_tool_sync_invoke_without_intent():
     """测试同步调用 - 不启用 intent"""
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=False
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=False
     )
 
     # 调用工具
@@ -250,23 +218,15 @@ def test_compressed_tool_sync_invoke_without_intent():
 def test_compressed_tool_sync_invoke_with_intent():
     """测试同步调用 - 启用 intent"""
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=True
     )
 
     # 调用工具时提供 invoke_intent
-    result = compressed_tool.invoke({
-        "city": "Shanghai",
-        "invoke_intent": "Check weather for trip planning"
-    })
+    result = compressed_tool.invoke({"city": "Shanghai", "invoke_intent": "Check weather for trip planning"})
 
     # 验证结果包含 intent 信息
     assert "[Compressed]" in result
@@ -278,16 +238,11 @@ def test_compressed_tool_sync_invoke_missing_intent_raises_error():
     from pydantic import ValidationError
 
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=True
     )
 
     # 未提供 invoke_intent 应抛出 ValidationError（Pydantic 验证错误）
@@ -297,20 +252,16 @@ def test_compressed_tool_sync_invoke_missing_intent_raises_error():
 
 # ============== 异步调用测试 ==============
 
+
 @pytest.mark.asyncio
 async def test_compressed_tool_async_invoke_without_intent():
     """测试异步调用 - 不启用 intent"""
     original_tool = StructuredTool.from_function(
-        coroutine=simple_tool_func_async,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        coroutine=simple_tool_func_async, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=False
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=False
     )
 
     # 异步调用工具
@@ -325,16 +276,13 @@ async def test_compressed_tool_async_invoke_without_intent():
 async def test_compressed_tool_async_invoke_with_async_compressor():
     """测试异步调用 - 使用异步压缩函数"""
     original_tool = StructuredTool.from_function(
-        coroutine=simple_tool_func_async,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        coroutine=simple_tool_func_async, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
+    compressed_tool = create_enhanced_tool(
         original_tool=original_tool,
         compressor_func=mock_compressor_async,  # 异步压缩函数
-        show_intent=False
+        show_intent=False,
     )
 
     # 异步调用工具
@@ -349,23 +297,15 @@ async def test_compressed_tool_async_invoke_with_async_compressor():
 async def test_compressed_tool_async_invoke_with_intent():
     """测试异步调用 - 启用 intent"""
     original_tool = StructuredTool.from_function(
-        coroutine=simple_tool_func_async,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        coroutine=simple_tool_func_async, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor_async,
-        show_intent=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor_async, show_intent=True
     )
 
     # 异步调用工具时提供 invoke_intent
-    result = await compressed_tool.ainvoke({
-        "city": "Guangzhou",
-        "invoke_intent": "Weather check for outdoor event"
-    })
+    result = await compressed_tool.ainvoke({"city": "Guangzhou", "invoke_intent": "Weather check for outdoor event"})
 
     # 验证结果包含 intent 信息
     assert "[Compressed]" in result
@@ -374,19 +314,15 @@ async def test_compressed_tool_async_invoke_with_intent():
 
 # ============== 错误处理测试 ==============
 
+
 def test_original_tool_error_propagates():
     """测试原始工具报错时异常正确传播"""
     original_tool = StructuredTool.from_function(
-        func=error_tool_func,
-        name="error_tool",
-        description="Tool that raises error",
-        args_schema=SimpleToolInput
+        func=error_tool_func, name="error_tool", description="Tool that raises error", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=False
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=False
     )
 
     # 原始工具抛出的异常应该被传播
@@ -397,17 +333,14 @@ def test_original_tool_error_propagates():
 def test_compressor_error_with_fallback_disabled():
     """测试压缩函数报错 - fallback_on_error=False 时抛出异常"""
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
+    compressed_tool = create_enhanced_tool(
         original_tool=original_tool,
         compressor_func=error_compressor,  # 会抛出异常的压缩函数
         show_intent=False,
-        fallback_on_error=False  # 禁用降级
+        fallback_on_error=False,  # 禁用降级
     )
 
     # 压缩函数的异常应该被抛出
@@ -418,17 +351,14 @@ def test_compressor_error_with_fallback_disabled():
 def test_compressor_error_with_fallback_enabled():
     """测试压缩函数报错 - fallback_on_error=True 时返回原始结果"""
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
+    compressed_tool = create_enhanced_tool(
         original_tool=original_tool,
         compressor_func=error_compressor,  # 会抛出异常的压缩函数
         show_intent=False,
-        fallback_on_error=True  # 启用降级
+        fallback_on_error=True,  # 启用降级
     )
 
     # 应该返回原始结果
@@ -442,16 +372,11 @@ def test_compressor_error_with_fallback_enabled():
 def test_compressor_success_returns_compressed_result():
     """测试正常情况 - 返回压缩后的结果"""
     original_tool = StructuredTool.from_function(
-        func=simple_tool_func,
-        name="weather_tool",
-        description="Get weather",
-        args_schema=SimpleToolInput
+        func=simple_tool_func, name="weather_tool", description="Get weather", args_schema=SimpleToolInput
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=False
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=False
     )
 
     result = compressed_tool.invoke({"city": "Beijing"})
@@ -462,22 +387,20 @@ def test_compressor_success_returns_compressed_result():
 
 # ============== 与 ChatModel 集成测试 ==============
 
+
 @pytest.mark.skipif(
     not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
 def test_compressed_tool_with_chatmodel_without_intent():
-    """测试 CompressedTool 与 ChatModel 集成 - 不启用 intent (真实请求)"""
+    """测试 EnhancedTool 与 ChatModel 集成 - 不启用 intent (真实请求)"""
     # 获取 weather-query 工具
     client = BKAidevApi.get_client()
     weather_tool = client.construct_tool("weather-query")
 
     # 创建压缩工具（不启用 intent）
-    compressed_tool = create_compressed_tool(
-        original_tool=weather_tool,
-        compressor_func=mock_compressor,
-        show_intent=False,
-        fallback_on_error=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=weather_tool, compressor_func=mock_compressor, show_intent=False, fallback_on_error=True
     )
 
     # 创建 ChatModel
@@ -506,17 +429,14 @@ def test_compressed_tool_with_chatmodel_without_intent():
     reason="没有配置足够的环境变量,跳过该测试",
 )
 def test_compressed_tool_with_chatmodel_with_intent():
-    """测试 CompressedTool 与 ChatModel 集成 - 启用 intent (真实请求)"""
+    """测试 EnhancedTool 与 ChatModel 集成 - 启用 intent (真实请求)"""
     # 获取 weather-query 工具
     client = BKAidevApi.get_client()
     weather_tool = client.construct_tool("weather-query")
 
     # 创建压缩工具（启用 intent）
-    compressed_tool = create_compressed_tool(
-        original_tool=weather_tool,
-        compressor_func=mock_compressor,
-        show_intent=True,
-        fallback_on_error=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=weather_tool, compressor_func=mock_compressor, show_intent=True, fallback_on_error=True
     )
 
     # 创建 ChatModel
@@ -537,42 +457,34 @@ def test_compressed_tool_with_chatmodel_with_intent():
         tool_call = response.tool_calls[0]
 
         # 验证工具调用包含 invoke_intent 参数
-        assert "invoke_intent" in tool_call.get("args", {}), \
-            "启用 show_intent 后，模型应该输出 invoke_intent 参数"
+        assert "invoke_intent" in tool_call.get("args", {}), "启用 show_intent 后，模型应该输出 invoke_intent 参数"
 
         print(f"[Test] invoke_intent: {tool_call['args']['invoke_intent']}")
 
 
 # ============== Mock 测试 - 模拟模型响应 ==============
 
+
 def test_compressed_tool_with_chatmodel_mock_without_intent():
-    """测试 CompressedTool 与 ChatModel 集成 - Mock 版本 (不启用 intent)"""
+    """测试 EnhancedTool 与 ChatModel 集成 - Mock 版本 (不启用 intent)"""
     # 创建一个简单的工具用于测试
     original_tool = StructuredTool.from_function(
         func=simple_tool_func,
         name="weather_query",
         description="Query weather information",
-        args_schema=SimpleToolInput
+        args_schema=SimpleToolInput,
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=False
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=False
     )
 
     # Mock 模型响应 - 包含工具调用
     mock_response = MagicMock()
     mock_response.content = ""
-    mock_response.tool_calls = [
-        {
-            "name": "weather_query",
-            "args": {"city": "Shenzhen"},
-            "id": "call_123"
-        }
-    ]
+    mock_response.tool_calls = [{"name": "weather_query", "args": {"city": "Shenzhen"}, "id": "call_123"}]
 
-    with patch.object(ChatModel, 'invoke', return_value=mock_response):
+    with patch.object(ChatModel, "invoke", return_value=mock_response):
         chat_model = ChatModel.get_setup_instance(model="qwen3")
         chat_model_with_tool = chat_model.bind_tools([compressed_tool])
 
@@ -586,19 +498,17 @@ def test_compressed_tool_with_chatmodel_mock_without_intent():
 
 
 def test_compressed_tool_with_chatmodel_mock_with_intent():
-    """测试 CompressedTool 与 ChatModel 集成 - Mock 版本 (启用 intent)"""
+    """测试 EnhancedTool 与 ChatModel 集成 - Mock 版本 (启用 intent)"""
     # 创建一个简单的工具用于测试
     original_tool = StructuredTool.from_function(
         func=simple_tool_func,
         name="weather_query",
         description="Query weather information",
-        args_schema=SimpleToolInput
+        args_schema=SimpleToolInput,
     )
 
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=True
     )
 
     # Mock 模型响应 - 包含工具调用和 invoke_intent
@@ -607,15 +517,12 @@ def test_compressed_tool_with_chatmodel_mock_with_intent():
     mock_response.tool_calls = [
         {
             "name": "weather_query",
-            "args": {
-                "city": "Shenzhen",
-                "invoke_intent": "Check weather for travel planning"
-            },
-            "id": "call_456"
+            "args": {"city": "Shenzhen", "invoke_intent": "Check weather for travel planning"},
+            "id": "call_456",
         }
     ]
 
-    with patch.object(ChatModel, 'invoke', return_value=mock_response):
+    with patch.object(ChatModel, "invoke", return_value=mock_response):
         chat_model = ChatModel.get_setup_instance(model="qwen3")
         chat_model_with_tool = chat_model.bind_tools([compressed_tool])
 
@@ -631,19 +538,19 @@ def test_compressed_tool_with_chatmodel_mock_with_intent():
 
 # ============== InjectedState 注解测试 ==============
 def test_compressed_tool_with_injected_state():
-    """测试 CompressedTool 与 InjectedState 注解 - 使用 ToolNode 和 LangGraph"""
-    from typing_extensions import Annotated
-    from langgraph.prebuilt import InjectedState, ToolNode
-    from langgraph.graph import StateGraph, START, END
+    """测试 EnhancedTool 与 InjectedState 注解 - 使用 ToolNode 和 LangGraph"""
     from langchain_core.messages import AIMessage, ToolMessage
     from langchain_core.runnables import RunnableConfig
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.prebuilt import InjectedState, ToolNode
+    from typing_extensions import Annotated
 
     # 定义完整的工具函数，包含所有类型的参数
     def weather_tool_full(
         city: str,
         state: Annotated[dict, InjectedState],
         user: Annotated[str, InjectedState("user")],
-        config: RunnableConfig
+        config: RunnableConfig,
     ) -> str:
         """Complete weather tool with all parameter types"""
         session_id = state.get("session_id", "unknown")
@@ -659,22 +566,16 @@ def test_compressed_tool_with_injected_state():
 
     # 创建原始工具
     original_tool = StructuredTool.from_function(
-        func=weather_tool_full,
-        name="weather_tool",
-        description="Get weather with full state context"
+        func=weather_tool_full, name="weather_tool", description="Get weather with full state context"
     )
 
     # 创建两个压缩工具：一个有 intent，一个没有
-    compressed_tool_no_intent = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=False
+    compressed_tool_no_intent = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=False
     )
 
-    compressed_tool_with_intent = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=True
+    compressed_tool_with_intent = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=True
     )
 
     # 验证 schema 结构
@@ -694,14 +595,13 @@ def test_compressed_tool_with_injected_state():
     assert "invoke_intent" in schema_with_intent
 
     # 验证 InjectedState 标记
-    assert any(isinstance(m, type) and issubclass(m, InjectedState)
-               for m in schema_no_intent["state"].metadata)
-    assert any(isinstance(m, InjectedState)
-               for m in schema_no_intent["user"].metadata)
+    assert any(isinstance(m, type) and issubclass(m, InjectedState) for m in schema_no_intent["state"].metadata)
+    assert any(isinstance(m, InjectedState) for m in schema_no_intent["user"].metadata)
 
     # 构建 LangGraph: START -> ToolNode -> END
     class AgentState(TypedDict):
         """Agent state"""
+
         messages: list
         user: str
         session_id: str
@@ -718,24 +618,12 @@ def test_compressed_tool_with_injected_state():
     # 构造输入：AIMessage 带 tool_calls
     ai_message_no_intent = AIMessage(
         content="",
-        tool_calls=[{
-            "name": "weather_tool",
-            "args": {"city": "Beijing"},
-            "id": "call_001",
-            "type": "tool_call"
-        }]
+        tool_calls=[{"name": "weather_tool", "args": {"city": "Beijing"}, "id": "call_001", "type": "tool_call"}],
     )
 
     # 执行 Graph（state 会自动注入）
-    state: Any = {
-        "messages": [ai_message_no_intent],
-        "user": "alice",
-        "session_id": "session_123",
-        "request_count": 5
-    }
-    result_no_intent = graph_no_intent.invoke(state, config={
-        "configurable": {"thread_id": "thread_id_1234"}
-    })
+    state: Any = {"messages": [ai_message_no_intent], "user": "alice", "session_id": "session_123", "request_count": 5}
+    result_no_intent = graph_no_intent.invoke(state, config={"configurable": {"thread_id": "thread_id_1234"}})
 
     # 验证结果
     tool_messages_no_intent = [m for m in result_no_intent["messages"] if isinstance(m, ToolMessage)]
@@ -747,7 +635,7 @@ def test_compressed_tool_with_injected_state():
     assert "Beijing" in tool_result
     assert "alice" in tool_result
     assert "session_123" in tool_result
-    assert 'thread_id_1234' in tool_result
+    assert "thread_id_1234" in tool_result
 
     # 测试场景 2: 有 intent 工具
     workflow_with_intent = StateGraph(AgentState)
@@ -760,27 +648,19 @@ def test_compressed_tool_with_injected_state():
     # 构造输入：AIMessage 带 tool_calls（包含 invoke_intent）
     ai_message_with_intent = AIMessage(
         content="",
-        tool_calls=[{
-            "name": "weather_tool",
-            "args": {
-                "city": "Shanghai",
-                "invoke_intent": "Check weather for travel planning"
-            },
-            "id": "call_002",
-            "type": "tool_call"
-        }]
+        tool_calls=[
+            {
+                "name": "weather_tool",
+                "args": {"city": "Shanghai", "invoke_intent": "Check weather for travel planning"},
+                "id": "call_002",
+                "type": "tool_call",
+            }
+        ],
     )
 
     # 执行 Graph
-    state = {
-        "messages": [ai_message_with_intent],
-        "user": "bob",
-        "session_id": "session_456",
-        "request_count": 10
-    }
-    result_with_intent = graph_with_intent.invoke(state, config={
-        "configurable": {"thread_id": "thread_id_5678"}
-    })
+    state = {"messages": [ai_message_with_intent], "user": "bob", "session_id": "session_456", "request_count": 10}
+    result_with_intent = graph_with_intent.invoke(state, config={"configurable": {"thread_id": "thread_id_5678"}})
 
     # 验证结果
     tool_messages_with_intent = [m for m in result_with_intent["messages"] if isinstance(m, ToolMessage)]
@@ -798,19 +678,19 @@ def test_compressed_tool_with_injected_state():
 
 @pytest.mark.asyncio
 async def test_compressed_tool_with_injected_state_async():
-    """测试 CompressedTool 异步调用 + InjectedState - 使用 ToolNode 和 LangGraph"""
-    from typing_extensions import Annotated
-    from langgraph.prebuilt import InjectedState, ToolNode
-    from langgraph.graph import StateGraph, START, END
+    """测试 EnhancedTool 异步调用 + InjectedState - 使用 ToolNode 和 LangGraph"""
     from langchain_core.messages import AIMessage, ToolMessage
     from langchain_core.runnables import RunnableConfig
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.prebuilt import InjectedState, ToolNode
+    from typing_extensions import Annotated
 
     # 定义异步工具函数
     async def async_weather_tool_full(
         city: str,
         state: Annotated[dict, InjectedState],
         user: Annotated[str, InjectedState("user")],
-        config: RunnableConfig
+        config: RunnableConfig,
     ) -> str:
         """Async weather tool with all parameter types"""
         await asyncio.sleep(0.1)  # 模拟异步操作
@@ -830,20 +710,18 @@ async def test_compressed_tool_with_injected_state_async():
     original_tool = StructuredTool.from_function(
         coroutine=async_weather_tool_full,
         name="async_weather_tool",
-        description="Get weather async with full state context"
+        description="Get weather async with full state context",
     )
 
     # 创建两个压缩工具：一个有 intent，一个没有
-    compressed_tool_no_intent = create_compressed_tool(
+    compressed_tool_no_intent = create_enhanced_tool(
         original_tool=original_tool,
         compressor_func=mock_compressor_async,  # 使用异步压缩函数
-        show_intent=False
+        show_intent=False,
     )
 
-    compressed_tool_with_intent = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor_async,
-        show_intent=True
+    compressed_tool_with_intent = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor_async, show_intent=True
     )
 
     # 验证 schema 结构
@@ -858,6 +736,7 @@ async def test_compressed_tool_with_injected_state_async():
     # 构建 LangGraph: START -> ToolNode -> END
     class AgentState(dict):
         """Agent state"""
+
         messages: list
         user: str
         session_id: str
@@ -873,12 +752,9 @@ async def test_compressed_tool_with_injected_state_async():
 
     ai_message_no_intent = AIMessage(
         content="",
-        tool_calls=[{
-            "name": "async_weather_tool",
-            "args": {"city": "Guangzhou"},
-            "id": "call_003",
-            "type": "tool_call"
-        }]
+        tool_calls=[
+            {"name": "async_weather_tool", "args": {"city": "Guangzhou"}, "id": "call_003", "type": "tool_call"}
+        ],
     )
 
     # 异步执行 Graph
@@ -886,11 +762,9 @@ async def test_compressed_tool_with_injected_state_async():
         "messages": [ai_message_no_intent],
         "user": "charlie",
         "session_id": "session_789",
-        "request_count": 15
+        "request_count": 15,
     }
-    result_no_intent = await graph_no_intent.ainvoke(state, config={
-        "configurable": {"thread_id": "thread_id_1234"}
-    })
+    result_no_intent = await graph_no_intent.ainvoke(state, config={"configurable": {"thread_id": "thread_id_1234"}})
 
     # 验证结果
     tool_messages = [m for m in result_no_intent["messages"] if isinstance(m, ToolMessage)]
@@ -914,15 +788,14 @@ async def test_compressed_tool_with_injected_state_async():
 
     ai_message_with_intent = AIMessage(
         content="",
-        tool_calls=[{
-            "name": "async_weather_tool",
-            "args": {
-                "city": "Shenzhen",
-                "invoke_intent": "Async weather monitoring"
-            },
-            "id": "call_004",
-            "type": "tool_call"
-        }]
+        tool_calls=[
+            {
+                "name": "async_weather_tool",
+                "args": {"city": "Shenzhen", "invoke_intent": "Async weather monitoring"},
+                "id": "call_004",
+                "type": "tool_call",
+            }
+        ],
     )
 
     # 异步执行 Graph
@@ -930,11 +803,11 @@ async def test_compressed_tool_with_injected_state_async():
         "messages": [ai_message_with_intent],
         "user": "david",
         "session_id": "session_101",
-        "request_count": 20
+        "request_count": 20,
     }
-    result_with_intent = await graph_with_intent.ainvoke(state, config={
-        "configurable": {"thread_id": "thread_id_5678"}
-    })
+    result_with_intent = await graph_with_intent.ainvoke(
+        state, config={"configurable": {"thread_id": "thread_id_5678"}}
+    )
 
     # 验证结果
     tool_messages_intent = [m for m in result_with_intent["messages"] if isinstance(m, ToolMessage)]
@@ -955,10 +828,10 @@ async def test_compressed_tool_with_injected_state_async():
     reason="没有配置足够的环境变量,跳过该测试",
 )
 def test_compressed_tool_injected_state_schema_structure():
-    """测试 InjectedState 参数在 CompressedTool 中的 schema 结构保持正确"""
-    from typing_extensions import Annotated
+    """测试 InjectedState 参数在 EnhancedTool 中的 schema 结构保持正确"""
     from langgraph.prebuilt import InjectedState
     from pydantic import BaseModel, Field
+    from typing_extensions import Annotated
 
     # 定义带 schema 的工具
     class WeatherInput(BaseModel):
@@ -966,9 +839,7 @@ def test_compressed_tool_injected_state_schema_structure():
         units: str = Field(default="celsius", description="Temperature units")
 
     def tool_with_schema_and_state(
-        city: str,
-        units: str = "celsius",
-        state: Annotated[dict, InjectedState] = None
+        city: str, units: str = "celsius", state: Annotated[dict, InjectedState] = None
     ) -> str:
         """Tool with both schema and injected state"""
         user = state.get("user", "guest") if state else "guest"
@@ -979,14 +850,12 @@ def test_compressed_tool_injected_state_schema_structure():
         func=tool_with_schema_and_state,
         name="weather_schema",
         description="Weather query with schema",
-        args_schema=WeatherInput
+        args_schema=WeatherInput,
     )
 
     # 创建压缩工具（启用 intent）
-    compressed_tool = create_compressed_tool(
-        original_tool=original_tool,
-        compressor_func=mock_compressor,
-        show_intent=True
+    compressed_tool = create_enhanced_tool(
+        original_tool=original_tool, compressor_func=mock_compressor, show_intent=True
     )
     # 创建 ChatModel
     chat_model = ChatModel.get_setup_instance(model="qwen3")
@@ -1010,11 +879,13 @@ def test_compressed_tool_injected_state_schema_structure():
     assert "City name" in schema_fields["city"].description
 
     # 调用测试（使用原始 schema 的字段）
-    result = compressed_tool.invoke({
-        "city": "Tokyo",
-        "units": "fahrenheit",
-        "invoke_intent": "International weather check",
-    })
+    result = compressed_tool.invoke(
+        {
+            "city": "Tokyo",
+            "units": "fahrenheit",
+            "invoke_intent": "International weather check",
+        }
+    )
 
     assert "[Compressed]" in result
     assert "Intent: International weather check" in result

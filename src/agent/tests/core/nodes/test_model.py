@@ -15,16 +15,15 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
+
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from aidev_agent.core.nodes.model import ContextProcessor, ModelNodeSettings, ModelState, build_model_node
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph._internal._runnable import RunnableCallable
-
-from aidev_agent.core.nodes.context_processor import ContextProcessor
-from aidev_agent.core.nodes.model import ModelState, build_model_node
 
 
 class TestModelState:
@@ -116,7 +115,6 @@ class TestBuildModelNode:
         node = build_model_node(
             llm=mock_llm,
             context_processor=mock_context_processor,
-            use_structured_response=False,
         )
         assert isinstance(node, RunnableCallable)
 
@@ -125,7 +123,6 @@ class TestBuildModelNode:
         node = build_model_node(
             llm=mock_llm,
             context_processor=mock_context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -175,15 +172,13 @@ class TestBuildModelNode:
             }
         )
 
-        with patch(
-            "aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"
-        ) as mock_parser_class:
+        with patch("aidev_agent.core.nodes.model.node.StructuredOutputToToolMessageParser") as mock_parser_class:
             mock_parser_class.return_value = mock_parser
 
             node = build_model_node(
                 llm=mock_llm,
                 context_processor=processor,
-                use_structured_response=True,
+                node_options=ModelNodeSettings(use_structured_response=True),
             )
 
             state: ModelState = {
@@ -201,7 +196,7 @@ class TestBuildModelNode:
             mock_parser_class.assert_called_once()
             call_kwargs = mock_parser_class.call_args[1]
             assert call_kwargs["llm"] == mock_llm
-            assert call_kwargs["enable_parallel_tool_calls"] is False
+            assert call_kwargs["enable_parallel_tool_calls"] is True
 
             # 验证没有调用 bind_tools（structured_response 模式不使用）
             mock_llm.bind_tools.assert_not_called()
@@ -210,11 +205,10 @@ class TestBuildModelNode:
     async def test_model_node_async_with_tool_calling(self, mock_llm, mock_context_processor, mock_store):
         """测试异步模型节点（tool_calling 模式）"""
         # Patch StructuredOutputToToolMessageParser as it's created in async code even when not used
-        with patch("aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"):
+        with patch("aidev_agent.core.nodes.model.node.StructuredOutputToToolMessageParser"):
             node = build_model_node(
                 llm=mock_llm,
                 context_processor=mock_context_processor,
-                use_structured_response=False,
             )
 
             state: ModelState = {
@@ -264,16 +258,13 @@ class TestBuildModelNode:
             }
         )
 
-        with patch(
-            "aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"
-        ) as mock_parser_class:
+        with patch("aidev_agent.core.nodes.model.node.StructuredOutputToToolMessageParser") as mock_parser_class:
             mock_parser_class.return_value = mock_parser
 
             node = build_model_node(
                 llm=mock_llm,
                 context_processor=processor,
-                use_structured_response=True,
-                enable_parallel_tool_calls=True,
+                node_options=ModelNodeSettings(use_structured_response=True),
             )
 
             state: ModelState = {
@@ -300,7 +291,6 @@ class TestBuildModelNode:
         node = build_model_node(
             llm=mock_llm,
             context_processor=mock_context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -345,16 +335,13 @@ class TestBuildModelNode:
             }
         )
 
-        with patch(
-            "aidev_agent.core.nodes.model.StructuredOutputToToolMessageParser"
-        ) as mock_parser_class:
+        with patch("aidev_agent.core.nodes.model.node.StructuredOutputToToolMessageParser") as mock_parser_class:
             mock_parser_class.return_value = mock_parser
 
             node = build_model_node(
                 llm=mock_llm,
                 context_processor=processor,
-                use_structured_response=True,
-                enable_parallel_tool_calls=True,
+                node_options=ModelNodeSettings(use_structured_response=True),
             )
 
             state: ModelState = {
@@ -375,7 +362,6 @@ class TestBuildModelNode:
         node = build_model_node(
             llm=mock_llm,
             context_processor=mock_context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -407,7 +393,6 @@ class TestBuildModelNode:
         node = build_model_node(
             llm=mock_llm,
             context_processor=mock_context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {

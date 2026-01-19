@@ -16,15 +16,14 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
-import json
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.config import settings
 from aidev_agent.packages.langchain_core.tools.base import Tool, make_mcp_tools, make_structured_tool
+from aidev_agent.services.pydantic_models import ExecuteKwargs
 from langchain_core.tools import StructuredTool
-
 
 # ================== make_structured_tool Mock 测试 ==================
 
@@ -37,16 +36,62 @@ def sample_weather_tool_data():
         "tool_name": "天气查询",
         "description": "查询中国国内天气情况",
         "method": "get",
-        "url": "https://bkaidev.apigw.o.woa.com/prod/bkaidev/scene/tool_proxy/tool_proxy/weather-query/call/",
+        "url": "https://api.example.com/prod/bkaidev/scene/tool_proxy/tool_proxy/weather-query/call/",
         "property": {
-            "body": [{"name": "", "type": "string", "default": "", "required": False, "validate": {"rules": [], "enable": False}, "description": ""}],
-            "query": [
-                {"name": "id", "type": "string", "default": "88888888", "required": True, "validate": {"rules": [], "enable": False}, "description": "固定输入，无需更改"},
-                {"name": "key", "type": "string", "default": "88888888", "required": True, "validate": {"rules": [], "enable": False}, "description": "固定输入，无需更改"},
-                {"name": "sheng", "type": "string", "default": "", "required": True, "validate": {"rules": [], "enable": False}, "description": "省份名"},
-                {"name": "place", "type": "string", "default": "", "required": True, "validate": {"rules": [], "enable": False}, "description": "市区名"},
+            "body": [
+                {
+                    "name": "",
+                    "type": "string",
+                    "default": "",
+                    "required": False,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "",
+                }
             ],
-            "header": [{"name": "", "type": "string", "default": "", "required": False, "validate": {"rules": [], "enable": False}, "description": ""}],
+            "query": [
+                {
+                    "name": "id",
+                    "type": "string",
+                    "default": "88888888",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "固定输入，无需更改",
+                },
+                {
+                    "name": "key",
+                    "type": "string",
+                    "default": "88888888",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "固定输入，无需更改",
+                },
+                {
+                    "name": "sheng",
+                    "type": "string",
+                    "default": "",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "省份名",
+                },
+                {
+                    "name": "place",
+                    "type": "string",
+                    "default": "",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "市区名",
+                },
+            ],
+            "header": [
+                {
+                    "name": "",
+                    "type": "string",
+                    "default": "",
+                    "required": False,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "",
+                }
+            ],
         },
     }
 
@@ -62,11 +107,41 @@ def sample_post_tool_data():
         "url": "https://api.example.com/users",
         "property": {
             "body": [
-                {"name": "username", "type": "string", "default": "", "required": True, "validate": {"rules": [], "enable": False}, "description": "用户名"},
-                {"name": "email", "type": "string", "default": "", "required": True, "validate": {"rules": [], "enable": False}, "description": "邮箱"},
-                {"name": "age", "type": "integer", "default": 18, "required": False, "validate": {"rules": [], "enable": False}, "description": "年龄"},
+                {
+                    "name": "username",
+                    "type": "string",
+                    "default": "",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "用户名",
+                },
+                {
+                    "name": "email",
+                    "type": "string",
+                    "default": "",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "邮箱",
+                },
+                {
+                    "name": "age",
+                    "type": "integer",
+                    "default": 18,
+                    "required": False,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "年龄",
+                },
             ],
-            "header": [{"name": "Content-Type", "type": "string", "default": "application/json", "required": True, "validate": {"rules": [], "enable": False}, "description": "内容类型"}],
+            "header": [
+                {
+                    "name": "Content-Type",
+                    "type": "string",
+                    "default": "application/json",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "内容类型",
+                }
+            ],
             "query": [],
         },
     }
@@ -82,7 +157,16 @@ def sample_path_param_tool_data():
         "method": "get",
         "url": "https://api.example.com/users/{user_id}",
         "property": {
-            "path": [{"name": "user_id", "type": "string", "default": "", "required": True, "validate": {"rules": [], "enable": False}, "description": "用户ID"}],
+            "path": [
+                {
+                    "name": "user_id",
+                    "type": "string",
+                    "default": "",
+                    "required": True,
+                    "validate": {"rules": [], "enable": False},
+                    "description": "用户ID",
+                }
+            ],
             "query": [],
             "header": [],
         },
@@ -495,37 +579,6 @@ def test_make_mcp_tools_multiple_servers(mock_get_loop, mock_mcp_client_class):
     assert tools[1].name == "tool2"
 
 
-# ================== make_mcp_tools 真实测试 ==================
-
-
-@pytest.mark.skipif(
-    not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
-    reason="没有配置足够的环境变量,跳过该测试",
-)
-def test_make_mcp_tools_real_execution():
-    """测试真实的 MCP 工具执行"""
-    # 真实的 MCP 服务器配置
-    mcp_config = {"tencentcloud-doc-mcp": {"url": "http://portal-mcp-server.woa.com/mcp", "transport": "streamable_http"}}
-
-    try:
-        # 调用 make_mcp_tools
-        tools = make_mcp_tools(mcp_config)
-
-        # 验证工具列表
-        print(f"\n获取到的 MCP 工具数量: {len(tools)}")
-        for tool in tools:
-            print(f"- 工具名称: {tool.name}")
-            print(f"  描述: {tool.description}")
-
-        assert len(tools) > 0
-        assert all(isinstance(tool, StructuredTool) for tool in tools)
-
-    except Exception as e:
-        # 如果真实环境不可用，打印错误但不失败测试
-        print(f"\n真实 MCP 测试执行失败（可能是环境不可用）: {e}")
-        pytest.skip(f"MCP 服务不可用: {e}")
-
-
 # ================== MCPExceptionWrapper 测试 ==================
 
 
@@ -590,3 +643,353 @@ async def test_mcp_exception_wrapper_timeout_error():
     assert isinstance(result, tuple)
     assert "[ERROR]" in result[0]
     assert "超时异常" in result[0]
+
+
+def test_make_structured_tool_with_inject_config_and_state():
+    """测试 make_structured_tool 支持注入 context (config 和 state)"""
+
+    import inspect
+
+    # 创建一个测试工具
+    tool = Tool(
+        tool_code="test_tool",
+        tool_name="测试工具",
+        description="用于测试 context 注入的工具",
+        method="POST",
+        url="https://example.com/api/test",
+        property={
+            "header": [
+                {
+                    "name": "X-User-Id",
+                    "type": "string",
+                    "required": False,
+                    "default": "{{ state.user_id }}",
+                    "description": "用户ID (从 state 注入)",
+                    "validate": {"enable": False, "rules": []},
+                },
+                {
+                    "name": "X-Thread-Id",
+                    "type": "string",
+                    "required": False,
+                    "default": "{{ config.configurable.thread_id }}",
+                    "description": "线程ID (从 config 注入)",
+                    "validate": {"enable": False, "rules": []},
+                },
+            ],
+            "body": [
+                {
+                    "name": "message",
+                    "type": "string",
+                    "required": True,
+                    "default": None,
+                    "description": "消息内容",
+                    "validate": {"enable": False, "rules": []},
+                },
+                {
+                    "name": "tenant",
+                    "type": "string",
+                    "required": False,
+                    "default": "{{ state.tenant }}",
+                    "description": "租户 (从 state 注入)",
+                    "validate": {"enable": False, "rules": []},
+                },
+            ],
+        },
+        extra=None,
+    )
+
+    # 构建工具 - 启用 context 注入
+    structured_tool = make_structured_tool(
+        tool=tool,
+        inject_context=True,
+    )
+
+    # 验证工具的基本属性
+    assert structured_tool.name == "test_tool"
+    assert structured_tool.description == "用于测试 context 注入的工具"
+
+    # 验证函数签名包含 state 和 config
+    sig = inspect.signature(structured_tool.func)
+    assert "state" in sig.parameters, "函数签名应该包含 state 参数"
+    assert "config" in sig.parameters, "函数签名应该包含 config 参数"
+
+    # 验证 args_schema 包含正常的业务字段
+    schema_fields = structured_tool.args_schema.model_fields
+    assert "body__message" in schema_fields
+    assert "header__X-User-Id" in schema_fields
+
+    print(f"✓ 工具创建成功，函数签名: {sig}")
+    print(f"✓ args_schema 字段: {list(schema_fields.keys())}")
+
+
+def test_make_structured_tool_inject_context():
+    """测试 make_structured_tool 注入 context"""
+
+    import inspect
+
+    tool = Tool(
+        tool_code="test_tool_state_only",
+        tool_name="Context 注入工具",
+        description="测试注入 context",
+        method="GET",
+        url="https://example.com/api/data",
+        property={
+            "query": [
+                {
+                    "name": "user_id",
+                    "type": "string",
+                    "required": False,
+                    "default": "{{ state.user_id }}",
+                    "description": "用户ID",
+                    "validate": {"enable": False, "rules": []},
+                }
+            ]
+        },
+        extra=None,
+    )
+
+    structured_tool = make_structured_tool(
+        tool=tool,
+        inject_context=True,
+    )
+
+    sig = inspect.signature(structured_tool.func)
+    assert "state" in sig.parameters, "函数签名应该包含 state 参数"
+    assert "config" in sig.parameters, "函数签名应该包含 config 参数"
+
+    schema_fields = structured_tool.args_schema.model_fields
+    assert "query__user_id" in schema_fields
+
+    print(f"✓ Context 注入成功，函数签名: {sig}")
+
+
+def test_make_structured_tool_no_injection():
+    """测试 make_structured_tool 不注入 (向后兼容)"""
+
+    tool = Tool(
+        tool_code="test_tool_no_injection",
+        tool_name="无注入工具",
+        description="测试不注入",
+        method="GET",
+        url="https://example.com/api/legacy",
+        property={
+            "query": [
+                {
+                    "name": "param1",
+                    "type": "string",
+                    "required": True,
+                    "default": None,
+                    "description": "参数1",
+                    "validate": {"enable": False, "rules": []},
+                }
+            ]
+        },
+        extra=None,
+    )
+
+    structured_tool = make_structured_tool(
+        tool=tool,
+        inject_context=False,
+    )
+
+    schema_fields = structured_tool.args_schema.model_fields
+    assert "state" not in schema_fields, "不应该包含 state 字段"
+    assert "config" not in schema_fields, "不应该包含 config 字段"
+    assert "query__param1" in schema_fields
+
+    print(f"✓ 无注入测试成功 (向后兼容)，schema 字段: {list(schema_fields.keys())}")
+
+
+@pytest.mark.asyncio
+async def test_tool_invocation_with_state_and_config():
+    """测试工具调用时 state 和 config 的渲染"""
+
+    # Mock HTTP 请求
+    with patch("requests.Session.request") as mock_request:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {"status": "success"}
+        mock_request.return_value = mock_response
+
+        tool = Tool(
+            tool_code="test_render_tool",
+            tool_name="渲染测试工具",
+            description="测试变量渲染",
+            method="POST",
+            url="https://example.com/api/test",
+            property={
+                "header": [
+                    {
+                        "name": "X-User-Id",
+                        "type": "string",
+                        "required": False,
+                        "default": "{{ state.user_id }}",
+                        "description": "用户ID",
+                        "validate": {"enable": False, "rules": []},
+                    },
+                    {
+                        "name": "X-Thread-Id",
+                        "type": "string",
+                        "required": False,
+                        "default": "{{ config.configurable.thread_id }}",
+                        "description": "线程ID",
+                        "validate": {"enable": False, "rules": []},
+                    },
+                ],
+                "body": [
+                    {
+                        "name": "tenant",
+                        "type": "string",
+                        "required": False,
+                        "default": "{{ state.tenant }}",
+                        "description": "租户",
+                        "validate": {"enable": False, "rules": []},
+                    },
+                    {
+                        "name": "username",
+                        "type": "string",
+                        "required": False,
+                        "default": "{{ bk_username }}",
+                        "description": "租户",
+                        "validate": {"enable": False, "rules": []},
+                    },
+                ],
+            },
+            extra=None,
+        )
+
+        structured_tool = make_structured_tool(
+            tool=tool,
+            inject_context=True,
+        )
+
+        # 模拟调用 - 注意:config 通过 RunnableConfig 参数传递,不是通过 input
+        from langchain_core.runnables import RunnableConfig
+
+        a = ExecuteKwargs()
+        a.executor = "bk_username-X"
+        structured_tool.invoke(
+            {"state": {"user_id": "user_123", "tenant": "tenant_abc"}},
+            config=RunnableConfig(configurable={"thread_id": "thread_456", "execute_kwargs": a}),
+        )
+
+        # 验证请求被正确调用
+        assert mock_request.called
+        call_kwargs = mock_request.call_args.kwargs
+
+        # 验证 headers 和 body 中的模板被正确渲染
+        print("✓ 工具调用成功")
+        print(f"  - Headers: {call_kwargs.get('headers')}")
+        print(f"  - Body: {call_kwargs.get('json')}")
+
+        # 验证渲染结果
+        headers = call_kwargs.get("headers", {})
+        body = call_kwargs.get("json", {})
+
+        assert headers.get("X-User-Id") == "user_123", "X-User-Id 应该从 state.user_id 渲染"
+        assert headers.get("X-Thread-Id") == "thread_456", "X-Thread-Id 应该从 config 渲染"
+        assert body.get("tenant") == "tenant_abc", "tenant 应该从 state.tenant 渲染"
+        assert body.get("username") == "bk_username-X", "tenant 应该从 config 渲染"
+
+
+@pytest.mark.asyncio
+async def test_tool_with_langgraph_integration():
+    """测试与 LangGraph 的集成 (使用 InjectedState)"""
+
+    try:
+        import inspect
+        from typing import TypedDict
+
+        from langchain_core.messages import AIMessage
+        from langgraph.graph import END, START, StateGraph
+        from langgraph.prebuilt import ToolNode
+    except ImportError:
+        pytest.skip("langgraph not installed")
+
+    # Mock HTTP 请求
+    with patch("requests.Session.request") as mock_request:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {"result": "mocked"}
+        mock_request.return_value = mock_response
+
+        tool = Tool(
+            tool_code="langgraph_test_tool",
+            tool_name="LangGraph 集成工具",
+            description="测试 LangGraph 集成",
+            method="POST",
+            url="https://example.com/api/langgraph",
+            property={
+                "header": [
+                    {
+                        "name": "X-User",
+                        "type": "string",
+                        "required": False,
+                        "default": "{{ state.user }}",
+                        "description": "用户",
+                        "validate": {"enable": False, "rules": []},
+                    }
+                ],
+                "body": [
+                    {
+                        "name": "session_id",
+                        "type": "string",
+                        "required": False,
+                        "default": "{{ state.session_id }}",
+                        "description": "会话ID",
+                        "validate": {"enable": False, "rules": []},
+                    }
+                ],
+            },
+            extra=None,
+        )
+
+        structured_tool = make_structured_tool(
+            tool=tool,
+            inject_context=True,
+        )
+
+        # DEBUG: 检查工具函数签名
+        print(f"Tool function: {structured_tool.func}")
+        print(f"Function signature: {inspect.signature(structured_tool.func)}")
+        print(f"Function annotations: {structured_tool.func.__annotations__}")
+
+        # 构建 LangGraph
+        class AgentState(TypedDict):
+            messages: list
+            user: str
+            session_id: str
+
+        workflow = StateGraph(AgentState)
+        tool_node = ToolNode([structured_tool])
+        workflow.add_node("tools", tool_node)
+        workflow.add_edge(START, "tools")
+        workflow.add_edge("tools", END)
+        graph = workflow.compile()
+
+        # 构造输入
+        ai_message = AIMessage(
+            content="", tool_calls=[{"name": "langgraph_test_tool", "args": {}, "id": "call_001", "type": "tool_call"}]
+        )
+
+        # 执行 Graph
+        state = {"messages": [ai_message], "user": "alice", "session_id": "session_789"}
+
+        await graph.ainvoke(state, config={"configurable": {"thread_id": "thread_123"}})
+
+        # 验证工具被调用
+        assert mock_request.called
+        call_kwargs = mock_request.call_args.kwargs
+
+        headers = call_kwargs.get("headers", {})
+        body = call_kwargs.get("json", {})
+
+        print("✓ LangGraph 集成测试成功")
+        print(f"  - Headers: {headers}")
+        print(f"  - Body: {body}")
+
+        # 验证 state 被正确注入和渲染
+        assert headers.get("X-User") == "alice", "X-User 应该从 state.user 渲染"
+        assert body.get("session_id") == "session_789", "session_id 应该从 state.session_id 渲染"

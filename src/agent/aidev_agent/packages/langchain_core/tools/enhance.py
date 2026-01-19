@@ -15,23 +15,24 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 
-工具压缩器模块 - 技术实现层
+工具执行增强模块 - 技术实现层
 
-本模块提供工具结果压缩的技术实现，包括：
-- CompressedTool: 压缩工具包装类
-- create_compressed_tool: 创建压缩工具的便利函数
+本模块提供对工具执行结果的“后处理增强”能力，包括：
+- EnhancedTool: 增强工具包装类（执行原工具后，对结果做二次处理）
+- create_enhanced_tool: 创建增强工具的便利函数
 
-注意：压缩策略的业务逻辑（包括 LLM 压缩、关键词压缩等）
-已移至 aidev_agent.core.nodes.tool 模块。
+注意：结果压缩策略的业务逻辑（包括 LLM 压缩、关键词压缩等）
+已移至 aidev_agent.packages.langchain_core.tools.compressor_func 模块。
 """
+
 import copy
 import inspect
 import logging
-from typing import Any, Optional, Callable, Protocol, Type, Union, Coroutine
+from typing import Any, Callable, Coroutine, Optional, Protocol, Type, Union
 
-from langchain_core.callbacks import CallbackManagerForToolRun, AsyncCallbackManagerForToolRun
+from langchain_core.callbacks import AsyncCallbackManagerForToolRun, CallbackManagerForToolRun
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, ArgsSchema
+from langchain_core.tools import ArgsSchema, BaseTool
 from pydantic import BaseModel, Field, create_model
 
 logger = logging.getLogger(__name__)
@@ -43,25 +44,17 @@ class CompressorFunc(Protocol):
     压缩函数接收原始结果和工具名称，返回压缩后的字符串结果。
     支持同步和异步两种实现方式。
     """
+
     def __call__(
-        self,
-        original_result: Any,
-        tool_name: str,
-        *,
-        invoke_intent: Optional[str] = None,
-        **kwargs
+        self, original_result: Any, tool_name: str, *, invoke_intent: Optional[str] = None, **kwargs
     ) -> str: ...
 
 
 class AsyncCompressorFunc(Protocol):
     """异步压缩函数的协议定义"""
+
     async def __call__(
-        self,
-        original_result: Any,
-        tool_name: str,
-        *,
-        invoke_intent: Optional[str] = None,
-        **kwargs
+        self, original_result: Any, tool_name: str, *, invoke_intent: Optional[str] = None, **kwargs
     ) -> str: ...
 
 
@@ -80,10 +73,7 @@ def _build_extended_schema(
     """
     # 情况 1: 原始 schema 是 BaseModel
     if isinstance(original_schema, type) and issubclass(original_schema, BaseModel):
-        fields = {
-            name: (field.annotation, field)
-            for name, field in original_schema.model_fields.items()
-        }
+        fields = {name: (field.annotation, field) for name, field in original_schema.model_fields.items()}
         # invoke_intent 作为必填字段
         fields["invoke_intent"] = (str, Field(..., description=intent_description))
         return create_model(f"{original_schema.__name__}WithIntent", **fields)
@@ -93,10 +83,7 @@ def _build_extended_schema(
         schema.setdefault("type", "object")
         schema.setdefault("properties", {})
         # invoke_intent 作为必填字段
-        schema["properties"]["invoke_intent"] = {
-            "type": "string",
-            "description": intent_description
-        }
+        schema["properties"]["invoke_intent"] = {"type": "string", "description": intent_description}
         schema.setdefault("required", [])
         if "invoke_intent" not in schema["required"]:
             schema["required"].append("invoke_intent")
@@ -106,26 +93,21 @@ def _build_extended_schema(
         return {
             "title": "ToolArgs",
             "type": "object",
-            "properties": {
-                "invoke_intent": {
-                    "type": "string",
-                    "description": intent_description
-                }
-            },
-            "required": ["invoke_intent"]
+            "properties": {"invoke_intent": {"type": "string", "description": intent_description}},
+            "required": ["invoke_intent"],
         }
 
 
-class CompressedTool(BaseTool):
+class EnhancedTool(BaseTool):
     """
-    带结果压缩功能的工具包装器
+    带结果后处理能力的增强工具包装器
 
-    这个类包装一个现有的工具，在执行后自动压缩其返回结果。
-    压缩函数需要由调用方显式提供。
+    这个类包装一个现有的工具，在执行后对其返回结果做二次处理（例如压缩、格式化等）。
+    后处理函数需要由调用方显式提供。
 
     特性：
-    - 支持同步和异步压缩函数
-    - 压缩失败时可降级返回原始结果（通过 fallback_on_error 控制）
+    - 支持同步和异步后处理函数
+    - 后处理失败时可降级返回原始结果（通过 fallback_on_error 控制）
     - 支持 invoke_intent 参数用于传递调用意图（当 show_intent=True 时强制启用）
     """
 
@@ -141,10 +123,10 @@ class CompressedTool(BaseTool):
         show_intent: bool = False,
         intent_description: Optional[str] = None,
         fallback_on_error: bool = True,
-        **kwargs
+        **kwargs,
     ):
         """
-        初始化压缩工具
+        初始化增强工具
 
         Args:
             original_tool: 原始工具
@@ -172,17 +154,17 @@ class CompressedTool(BaseTool):
             name=original_tool.name,
             description=original_tool.description,
             args_schema=args_schema,
-            return_direct=getattr(original_tool, 'return_direct', False),
-            verbose=getattr(original_tool, 'verbose', False),
-            callbacks=getattr(original_tool, 'callbacks', None),
-            tags=getattr(original_tool, 'tags', None),
-            metadata=getattr(original_tool, 'metadata', None),
-            handle_tool_error=getattr(original_tool, 'handle_tool_error', False),
+            return_direct=getattr(original_tool, "return_direct", False),
+            verbose=getattr(original_tool, "verbose", False),
+            callbacks=getattr(original_tool, "callbacks", None),
+            tags=getattr(original_tool, "tags", None),
+            metadata=getattr(original_tool, "metadata", None),
+            handle_tool_error=getattr(original_tool, "handle_tool_error", False),
             original_tool=original_tool,
             compressor_func=compressor_func,
             show_intent=show_intent,
             fallback_on_error=fallback_on_error,
-            **kwargs
+            **kwargs,
         )
 
     def _extract_invoke_intent(self, kwargs: dict) -> Optional[str]:
@@ -199,10 +181,10 @@ class CompressedTool(BaseTool):
         """
         if not self.show_intent:
             # 即使不显示意图，也要清理可能存在的 invoke_intent 参数
-            kwargs.pop('invoke_intent', None)
+            kwargs.pop("invoke_intent", None)
             return None
 
-        invoke_intent = kwargs.pop('invoke_intent', None)
+        invoke_intent = kwargs.pop("invoke_intent", None)
 
         # show_intent=True 时强制要求 invoke_intent
         if not invoke_intent:
@@ -266,9 +248,7 @@ class CompressedTool(BaseTool):
         logger.debug(f"工具 {self.original_tool.name} 将执行压缩")
         try:
             compressed_result = self.compressor_func(
-                original_result,
-                tool_name=self.original_tool.name,
-                invoke_intent=invoke_intent
+                original_result, tool_name=self.original_tool.name, invoke_intent=invoke_intent
             )
             logger.debug(f"工具 {self.original_tool.name} 结果压缩成功")
             return compressed_result
@@ -290,15 +270,11 @@ class CompressedTool(BaseTool):
         try:
             if inspect.iscoroutinefunction(self.compressor_func):
                 compressed_result = await self.compressor_func(
-                    original_result,
-                    tool_name=self.original_tool.name,
-                    invoke_intent=invoke_intent
+                    original_result, tool_name=self.original_tool.name, invoke_intent=invoke_intent
                 )
             else:
                 compressed_result = self.compressor_func(
-                    original_result,
-                    tool_name=self.original_tool.name,
-                    invoke_intent=invoke_intent
+                    original_result, tool_name=self.original_tool.name, invoke_intent=invoke_intent
                 )
             logger.debug(f"工具 {self.original_tool.name} 结果压缩成功")
             return compressed_result
@@ -327,16 +303,16 @@ class CompressedTool(BaseTool):
             raise
 
 
-def create_compressed_tool(
+def create_enhanced_tool(
     original_tool: BaseTool,
-    compressor_func: Optional[Callable[..., str] | Coroutine[Any, Any, str]] = None,
+    compressor_func: Callable[..., str] | Coroutine[Any, Any, str],
     show_intent: bool = False,
     intent_description: Optional[str] = None,
     fallback_on_error: bool = True,
-    **kwargs
-) -> CompressedTool:
+    **kwargs,
+) -> EnhancedTool:
     """
-    创建压缩工具的便利函数
+    创建增强工具的便利函数
 
     Args:
         original_tool: 原始工具
@@ -347,20 +323,16 @@ def create_compressed_tool(
         **kwargs: 其他参数
 
     Returns:
-        压缩后的工具
+        增强后的工具
 
     Raises:
         ValueError: 如果 compressor_func 为 None
     """
-    # 压缩函数必须显式提供（业务逻辑应在调用处指定）
-    if compressor_func is None:
-        raise ValueError("使用compressed_tool对 tool 进行增强时，必须使提供压缩工具")
-
-    return CompressedTool(
+    return EnhancedTool(
         original_tool=original_tool,
         compressor_func=compressor_func,
         show_intent=show_intent,
         intent_description=intent_description,
         fallback_on_error=fallback_on_error,
-        **kwargs
+        **kwargs,
     )

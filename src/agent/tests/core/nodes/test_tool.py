@@ -2,31 +2,33 @@
 """
 测试 build_tool_node 功能
 """
+
 import time
 from typing import List
 
 import pytest
+from aidev_agent.core.nodes.tool import ToolNodeSettings, build_tool_node
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import Annotated, TypedDict
-
-from aidev_agent.core.nodes.tool import build_tool_node
-
 
 # ============================================================================
 # 测试状态定义
 # ============================================================================
 
+
 class AgentState(TypedDict):
     """Agent 状态"""
+
     messages: Annotated[List, add_messages]
 
 
 # ============================================================================
 # 测试工具定义
 # ============================================================================
+
 
 @tool
 def calculator(a: int, b: int) -> int:
@@ -53,9 +55,16 @@ def slow_tool(duration_ms: int = 100) -> str:
     return f"Slept for {duration_ms}ms"
 
 
+@tool
+def long_text_tool(length: int = 2000) -> str:
+    """Return a long text."""
+    return "x" * length
+
+
 # ============================================================================
 # 辅助函数
 # ============================================================================
+
 
 def run_tool_node_in_graph(tool_node, state: dict) -> dict:
     """在图中运行 tool_node 并返回结果"""
@@ -86,6 +95,7 @@ async def arun_tool_node_in_graph(tool_node, state: dict) -> dict:
 # ============================================================================
 # 测试用例
 # ============================================================================
+
 
 class TestBuildToolNode:
     """测试 build_tool_node 函数"""
@@ -129,7 +139,7 @@ class TestBuildToolNode:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -157,6 +167,102 @@ class TestBuildToolNode:
         assert "description" in tool_msg.additional_kwargs
         assert tool_msg.additional_kwargs["description"] == "Add two numbers."
 
+    def test_timer_wrapper_can_be_disabled(self):
+        """测试2++: 关闭 timer_wrapper 后不应注入元数据"""
+        tool_node = build_tool_node(
+            tools=[calculator],
+            node_options=ToolNodeSettings(use_timer=False),
+        )
+
+        state = {
+            "messages": [
+                HumanMessage(content="What is 2 + 3?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "calculator",
+                            "args": {"a": 2, "b": 3},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ]
+        }
+
+        result = run_tool_node_in_graph(tool_node, state)
+        tool_messages = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
+        assert len(tool_messages) == 1
+
+        tool_msg = tool_messages[0]
+        assert tool_msg.content == "5"
+        assert "duration" not in tool_msg.additional_kwargs
+        assert "description" not in tool_msg.additional_kwargs
+
+    def test_result_limit_wrapper_truncates_long_result(self):
+        """测试2++: 开启 result_limit_wrapper 后超长结果应被替换"""
+        tool_node = build_tool_node(
+            tools=[long_text_tool],
+            node_options=ToolNodeSettings(use_result_limit=True, result_limit_thrd=10),
+        )
+
+        state = {
+            "messages": [
+                HumanMessage(content="Return long text"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "long_text_tool",
+                            "args": {"length": 50},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ]
+        }
+
+        result = run_tool_node_in_graph(tool_node, state)
+        tool_messages = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
+        assert len(tool_messages) == 1
+
+        tool_msg = tool_messages[0]
+        assert tool_msg.content == "本次工具调用返回结果超长，请重新调整调用参数"
+        assert tool_msg.tool_call_id == "call_1"
+        assert tool_msg.name == "long_text_tool"
+        assert "duration" in tool_msg.additional_kwargs
+
+    def test_result_limit_wrapper_keeps_short_result(self):
+        """测试2++: 开启 result_limit_wrapper 后短结果应保持不变"""
+        tool_node = build_tool_node(
+            tools=[long_text_tool],
+            node_options=ToolNodeSettings(use_result_limit=True, result_limit_thrd=10),
+        )
+
+        state = {
+            "messages": [
+                HumanMessage(content="Return short text"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "long_text_tool",
+                            "args": {"length": 5},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ]
+        }
+
+        result = run_tool_node_in_graph(tool_node, state)
+        tool_messages = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
+        assert len(tool_messages) == 1
+        assert tool_messages[0].content == "x" * 5
+
     def test_single_tool_call_with_exception(self):
         """测试3: 模型返回一个工具调用，工具抛出异常"""
         tool_node = build_tool_node(tools=[failing_tool], handle_tool_errors=True)
@@ -174,7 +280,7 @@ class TestBuildToolNode:
                             "id": "call_fail",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -221,7 +327,7 @@ class TestBuildToolNode:
                             "id": "call_2",
                             "type": "tool_call",
                         },
-                    ]
+                    ],
                 ),
             ]
         }
@@ -252,10 +358,7 @@ class TestBuildToolNode:
 
     def test_multiple_tool_calls_with_failures(self):
         """测试5: 模型返回多个工具调用，部分工具抛出异常"""
-        tool_node = build_tool_node(
-            tools=[calculator, failing_tool],
-            handle_tool_errors=True
-        )
+        tool_node = build_tool_node(tools=[calculator, failing_tool], handle_tool_errors=True)
 
         # 构造状态：包含一个成功和一个失败的工具调用
         state = {
@@ -276,7 +379,7 @@ class TestBuildToolNode:
                             "id": "call_fail",
                             "type": "tool_call",
                         },
-                    ]
+                    ],
                 ),
             ]
         }
@@ -321,7 +424,7 @@ class TestBuildToolNode:
                             "id": "call_slow",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -343,10 +446,7 @@ class TestBuildToolNode:
 
     def test_handle_tool_errors_false(self):
         """测试7: 当 handle_tool_errors=False 时，异常应该被抛出"""
-        tool_node = build_tool_node(
-            tools=[failing_tool],
-            handle_tool_errors=False
-        )
+        tool_node = build_tool_node(tools=[failing_tool], handle_tool_errors=False)
 
         # 构造状态：包含一个会失败的工具调用
         state = {
@@ -361,7 +461,7 @@ class TestBuildToolNode:
                             "id": "call_fail",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -381,10 +481,7 @@ class TestBuildToolNode:
             call_log.append(f"after:{request.tool_call['name']}")
             return result
 
-        tool_node = build_tool_node(
-            tools=[calculator],
-            wrappers=[logging_wrapper]
-        )
+        tool_node = build_tool_node(tools=[calculator], wrappers=[logging_wrapper])
 
         # 构造状态
         state = {
@@ -399,7 +496,7 @@ class TestBuildToolNode:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -437,10 +534,7 @@ class TestBuildToolNode:
             execution_order.append("wrapper2_end")
             return result
 
-        tool_node = build_tool_node(
-            tools=[calculator],
-            wrappers=[wrapper1, wrapper2]
-        )
+        tool_node = build_tool_node(tools=[calculator], wrappers=[wrapper1, wrapper2])
 
         # 构造状态
         state = {
@@ -455,13 +549,13 @@ class TestBuildToolNode:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
 
         # 执行 tool_node
-        result = run_tool_node_in_graph(tool_node, state)
+        run_tool_node_in_graph(tool_node, state)
 
         # 验证执行顺序：timer -> wrapper1 -> wrapper2 -> tool -> wrapper2 -> wrapper1 -> timer
         # (我们只能看到 wrapper1 和 wrapper2 的顺序)
@@ -474,6 +568,7 @@ class TestBuildToolNode:
 
     def test_wrapper_can_modify_request(self):
         """测试8++: 包装器可以修改请求"""
+
         def doubling_wrapper(request, execute):
             # 将参数翻倍
             modified_request = request.override(
@@ -482,15 +577,12 @@ class TestBuildToolNode:
                     "args": {
                         "a": request.tool_call["args"]["a"] * 2,
                         "b": request.tool_call["args"]["b"] * 2,
-                    }
+                    },
                 }
             )
             return execute(modified_request)
 
-        tool_node = build_tool_node(
-            tools=[calculator],
-            wrappers=[doubling_wrapper]
-        )
+        tool_node = build_tool_node(tools=[calculator], wrappers=[doubling_wrapper])
 
         # 构造状态：原始请求是 2 + 3
         state = {
@@ -505,7 +597,7 @@ class TestBuildToolNode:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -522,6 +614,7 @@ class TestBuildToolNode:
 # ============================================================================
 # 异步测试
 # ============================================================================
+
 
 @pytest.mark.asyncio
 class TestBuildToolNodeAsync:
@@ -566,7 +659,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -594,6 +687,72 @@ class TestBuildToolNodeAsync:
         assert "description" in tool_msg.additional_kwargs
         assert tool_msg.additional_kwargs["description"] == "Add two numbers."
 
+    async def test_timer_wrapper_can_be_disabled_async(self):
+        """测试2++: 关闭 timer_wrapper 后不应注入元数据（异步）"""
+        tool_node = build_tool_node(
+            tools=[calculator],
+            node_options=ToolNodeSettings(use_timer=False),
+        )
+
+        state = {
+            "messages": [
+                HumanMessage(content="What is 2 + 3?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "calculator",
+                            "args": {"a": 2, "b": 3},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ]
+        }
+
+        result = await arun_tool_node_in_graph(tool_node, state)
+        tool_messages = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
+        assert len(tool_messages) == 1
+
+        tool_msg = tool_messages[0]
+        assert tool_msg.content == "5"
+        assert "duration" not in tool_msg.additional_kwargs
+        assert "description" not in tool_msg.additional_kwargs
+
+    async def test_result_limit_wrapper_truncates_long_result_async(self):
+        """测试2++: 开启 result_limit_wrapper 后超长结果应被替换（异步）"""
+        tool_node = build_tool_node(
+            tools=[long_text_tool],
+            node_options=ToolNodeSettings(use_result_limit=True, result_limit_thrd=10),
+        )
+
+        state = {
+            "messages": [
+                HumanMessage(content="Return long text"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "long_text_tool",
+                            "args": {"length": 50},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ]
+        }
+
+        result = await arun_tool_node_in_graph(tool_node, state)
+        tool_messages = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
+        assert len(tool_messages) == 1
+
+        tool_msg = tool_messages[0]
+        assert tool_msg.content == "本次工具调用返回结果超长，请重新调整调用参数"
+        assert tool_msg.tool_call_id == "call_1"
+        assert tool_msg.name == "long_text_tool"
+
     async def test_single_tool_call_with_exception_async(self):
         """测试3: 模型返回一个工具调用，工具抛出异常（异步）"""
         tool_node = build_tool_node(tools=[failing_tool], handle_tool_errors=True)
@@ -611,7 +770,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_fail",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -658,7 +817,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_2",
                             "type": "tool_call",
                         },
-                    ]
+                    ],
                 ),
             ]
         }
@@ -689,10 +848,7 @@ class TestBuildToolNodeAsync:
 
     async def test_multiple_tool_calls_with_failures_async(self):
         """测试5: 模型返回多个工具调用，部分工具抛出异常（异步）"""
-        tool_node = build_tool_node(
-            tools=[calculator, failing_tool],
-            handle_tool_errors=True
-        )
+        tool_node = build_tool_node(tools=[calculator, failing_tool], handle_tool_errors=True)
 
         # 构造状态：包含一个成功和一个失败的工具调用
         state = {
@@ -713,7 +869,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_fail",
                             "type": "tool_call",
                         },
-                    ]
+                    ],
                 ),
             ]
         }
@@ -758,7 +914,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_slow",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -780,10 +936,7 @@ class TestBuildToolNodeAsync:
 
     async def test_handle_tool_errors_true_async(self):
         """测试7: 当 handle_tool_errors=True 时，异步异常不应该被抛出"""
-        tool_node = build_tool_node(
-            tools=[failing_tool],
-            handle_tool_errors=True
-        )
+        tool_node = build_tool_node(tools=[failing_tool], handle_tool_errors=True)
 
         # 构造状态：包含一个会失败的工具调用
         state = {
@@ -798,7 +951,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_fail",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -822,10 +975,7 @@ class TestBuildToolNodeAsync:
             call_log.append(f"async_after:{request.tool_call['name']}")
             return result
 
-        tool_node = build_tool_node(
-            tools=[calculator],
-            async_wrappers=[async_logging_wrapper]
-        )
+        tool_node = build_tool_node(tools=[calculator], async_wrappers=[async_logging_wrapper])
 
         # 构造状态
         state = {
@@ -840,7 +990,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -878,10 +1028,7 @@ class TestBuildToolNodeAsync:
             execution_order.append("async_wrapper2_end")
             return result
 
-        tool_node = build_tool_node(
-            tools=[calculator],
-            async_wrappers=[async_wrapper1, async_wrapper2]
-        )
+        tool_node = build_tool_node(tools=[calculator], async_wrappers=[async_wrapper1, async_wrapper2])
 
         # 构造状态
         state = {
@@ -896,13 +1043,13 @@ class TestBuildToolNodeAsync:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
 
         # 异步执行 tool_node
-        result = await arun_tool_node_in_graph(tool_node, state)
+        await arun_tool_node_in_graph(tool_node, state)
 
         # 验证执行顺序：timer -> wrapper1 -> wrapper2 -> tool -> wrapper2 -> wrapper1 -> timer
         # (我们只能看到 wrapper1 和 wrapper2 的顺序)
@@ -915,6 +1062,7 @@ class TestBuildToolNodeAsync:
 
     async def test_async_wrapper_can_modify_request(self):
         """测试8++: 异步包装器可以修改请求"""
+
         async def async_doubling_wrapper(request, execute):
             # 将参数翻倍
             modified_request = request.override(
@@ -923,15 +1071,12 @@ class TestBuildToolNodeAsync:
                     "args": {
                         "a": request.tool_call["args"]["a"] * 2,
                         "b": request.tool_call["args"]["b"] * 2,
-                    }
+                    },
                 }
             )
             return await execute(modified_request)
 
-        tool_node = build_tool_node(
-            tools=[calculator],
-            async_wrappers=[async_doubling_wrapper]
-        )
+        tool_node = build_tool_node(tools=[calculator], async_wrappers=[async_doubling_wrapper])
 
         # 构造状态：原始请求是 2 + 3
         state = {
@@ -946,7 +1091,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }
@@ -973,11 +1118,7 @@ class TestBuildToolNodeAsync:
             result = await execute(request)
             return result
 
-        tool_node = build_tool_node(
-            tools=[calculator],
-            wrappers=[sync_wrapper],
-            async_wrappers=[async_wrapper]
-        )
+        tool_node = build_tool_node(tools=[calculator], wrappers=[sync_wrapper], async_wrappers=[async_wrapper])
 
         # 构造状态
         state = {
@@ -992,7 +1133,7 @@ class TestBuildToolNodeAsync:
                             "id": "call_1",
                             "type": "tool_call",
                         }
-                    ]
+                    ],
                 ),
             ]
         }

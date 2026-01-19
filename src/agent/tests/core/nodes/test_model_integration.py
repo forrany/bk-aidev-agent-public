@@ -15,16 +15,14 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
+
 import pytest
+from aidev_agent.config import settings
+from aidev_agent.core.nodes.model import ContextProcessor, ModelNodeSettings, ModelState, build_model_node
+from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-
-from aidev_agent.config import settings
-from aidev_agent.core.nodes.context_processor import ContextProcessor
-from aidev_agent.core.nodes.model import ModelState, build_model_node
-from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
-
 
 # 测试模型列表
 TEST_MODELS = ["hunyuan-turbo", "qwen3", "deepseek-v3"]
@@ -83,7 +81,6 @@ class TestBuildModelNodeIntegration:
         node = build_model_node(
             llm=real_llm,
             context_processor=real_context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -101,7 +98,9 @@ class TestBuildModelNodeIntegration:
         # 验证返回了有效的内容
         message = result["messages"][0]
         assert message.content or message.tool_calls  # 应该有内容或工具调用
-        print(f"\n[{model_name}] Tool calling mode response: {message.content[:100] if message.content else 'Tool calls'}")
+        print(
+            f"\n[{model_name}] Tool calling mode response: {message.content[:100] if message.content else 'Tool calls'}"
+        )
 
     @pytest.mark.parametrize("model_name", TEST_MODELS)
     def test_model_node_real_llm_structured_response(self, model_name, real_store):
@@ -121,7 +120,7 @@ class TestBuildModelNodeIntegration:
         node = build_model_node(
             llm=real_llm,
             context_processor=context_processor,
-            use_structured_response=True,
+            node_options=ModelNodeSettings(use_structured_response=True),
         )
 
         state: ModelState = {
@@ -150,7 +149,6 @@ class TestBuildModelNodeIntegration:
         node = build_model_node(
             llm=real_llm,
             context_processor=real_context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -179,7 +177,6 @@ class TestBuildModelNodeIntegration:
         node = build_model_node(
             llm=real_llm,
             context_processor=real_context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -222,7 +219,6 @@ class TestBuildModelNodeIntegration:
         node = build_model_node(
             llm=real_llm,
             context_processor=context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -261,7 +257,6 @@ class TestBuildModelNodeIntegration:
         node = build_model_node(
             llm=real_llm,
             context_processor=context_processor,
-            use_structured_response=False,
         )
 
         state: ModelState = {
@@ -289,8 +284,6 @@ class TestBuildModelNodeIntegration:
         node = build_model_node(
             llm=real_llm,
             context_processor=real_context_processor,
-            use_structured_response=False,
-            enable_parallel_tool_calls=True,
         )
 
         state: ModelState = {
@@ -308,4 +301,6 @@ class TestBuildModelNodeIntegration:
         # 验证返回了有效的内容或工具调用
         message = result["messages"][0]
         assert message.content or message.tool_calls
-        print(f"\n[{model_name}] Parallel tool calls test: {message.content[:100] if message.content else f'Tool calls: {len(message.tool_calls)}'}")
+        print(
+            f"\n[{model_name}] Parallel tool calls test: {message.content[:100] if message.content else f'Tool calls: {len(message.tool_calls)}'}"
+        )

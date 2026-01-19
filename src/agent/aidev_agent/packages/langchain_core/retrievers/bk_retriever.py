@@ -7,7 +7,7 @@ from langchain_core.retrievers import BaseRetriever
 
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.packages.langchain_core.retrievers.protocol import VectorFilter, ScalarFilter, Filter
-from aidev_agent.packages.utils.decorator import timeit
+from aidev_agent.utils.decorator import timeit
 from aidev_agent.utils.module_loading import import_string
 
 logger = logging.getLogger(__name__)

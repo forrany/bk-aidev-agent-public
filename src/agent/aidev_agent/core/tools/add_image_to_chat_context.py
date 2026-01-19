@@ -25,8 +25,8 @@ from typing import List, cast
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool, ToolException
 
-from aidev_agent.utils.local import request_local
 from aidev_agent.packages.langchain_core.tools.exceptions import TooMuchToolException
+from aidev_agent.utils.local import request_local
 
 IMAGE_SUFFIXES = ("jpg", "jpeg", "png", "gif")
 

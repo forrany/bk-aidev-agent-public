@@ -18,16 +18,16 @@ to the current version of the project delivered to anyone in the future.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict, NotRequired, List
 
 from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 
-from aidev_agent.enums import Decision
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
-from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
-from aidev_agent.packages.langchain_core.retrievers.utils import deduplicate_knowledge_file_paths
+from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag, \
+    KnowledgeRagRetrieveResult
 from aidev_agent.services.pydantic_models import AgentOptions
 
 if TYPE_CHECKING:
@@ -36,10 +36,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class KnowledgeInputState(TypedDict):
+    """
+    知识库召回的 State 输入字段
+    """
+    query: NotRequired[str]
+    input: NotRequired[str]
+    messages: NotRequired[List[BaseMessage]]
+
+
+class KnowledgeOutputState(KnowledgeRagRetrieveResult):
+    pass
+
+
 def make_knowledge_node(
     llm: BaseChatModel,
     agent_options: AgentOptions,
-) -> Callable[[Dict[str, Any], RunnableConfig, Any], Dict[str, Any]]:
+) -> Callable[[KnowledgeInputState, RunnableConfig, Any],KnowledgeOutputState]:
     """构建知识库检索节点。
 
     该节点负责:
@@ -76,28 +89,15 @@ def make_knowledge_node(
         return empty_knowledge_node
 
     def knowledge_rag_std_node(
-        state: Dict[str, Any],
+        state: KnowledgeInputState,
         config: RunnableConfig,
         *,
         store,
-    ) -> Dict[str, Any]:
+    ) -> KnowledgeOutputState:
         """知识检索节点实现。
 
         从 state 中获取用户查询,使用 KnowledgeRag 进行知识库检索,
         并返回包含决策类型、知识内容、引用文档等信息的状态字典。
-
-        State 输入字段:
-            - query 或 input: 用户查询文本
-
-        State 输出字段:
-            - decision: Decision 枚举 (GENERAL_QA/PRIVATE_QA/QUERY_CLARIFICATION)
-            - reference_doc: 去重后的知识文件路径列表
-            - knowledge_content: 高相关性知识内容
-            - knowledge_qa_content: QA 对知识内容
-            - knowledge_resources_highly_relevant: 高相关性资源
-            - knowledge_resources_moderately_relevant: 中等相关性资源
-            - knowledge_resources_lowly_relevant: 低相关性资源
-            - with_qa_response: QA 响应标记
         """
         # 获取查询文本,优先使用 query 字段,否则使用 input 字段
         query = state.get("query")
@@ -112,35 +112,7 @@ def make_knowledge_node(
 
         # 执行知识库检索,将原始 input 传入便于后续打分等逻辑复用
         ret = retriever.retrieve(query, agent_options, input=query)
-
-        decision = ret["decision"]
-        reference_doc = None
-
-        # 根据决策类型处理知识资源
-        if decision == Decision.PRIVATE_QA:
-            # 私有知识问答:处理高相关性资源
-            ret.update(
-                retriever.handle_knowledge_resources(
-                    ret,
-                    "knowledge_resources_highly_relevant",
-                    agent_options=agent_options,
-                )
-            )
-            reference_doc = deduplicate_knowledge_file_paths(
-                ret["knowledge_resources_highly_relevant"]
-            )
-        elif decision == Decision.QUERY_CLARIFICATION:
-            # 查询澄清:处理中等相关性资源
-            ret.update(
-                retriever.handle_knowledge_resources(
-                    ret,
-                    "knowledge_resources_moderately_relevant",
-                    agent_options=agent_options,
-                )
-            )
-            reference_doc = deduplicate_knowledge_file_paths(
-                ret["knowledge_resources_moderately_relevant"]
-            )
+        reference_doc = ret.get("reference_doc")
 
         # 如果有引用文档,进行派发和存储
         if reference_doc:

@@ -16,25 +16,22 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
-import os
-import pytest
-from unittest.mock import MagicMock, patch
 from typing import Dict, Any
+from unittest.mock import MagicMock, patch
 
-from pydantic import BaseModel, Field
-
-from opentelemetry import trace
+import pytest
+from aidev_agent.utils.local import request_local
+from langchain_core.messages import HumanMessage
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import BaseModel, Field
 
-from aidev_agent.core.utils.local import request_local
-from aidev_bkplugin.packages.opentelemetry.instrumentor import (
-    LiteEnhancedAgentExecutorWrapper,
-    LiteEnhancedAgentExecutorStreamEventsWrapper,
-    LiteEnhancedAgentExecutorAInvokeWrapper,
-)
 from aidev_bkplugin.packages.opentelemetry.config import OTelConfig
+from aidev_bkplugin.packages.opentelemetry.instrumentor import (
+    ChatCompletionAgentExecuteByAgentWrapper,
+    ChatCompletionAgentGetAgentWrapper,
+)
 
 
 # Mock ExecuteKwargs with the new definition
@@ -49,6 +46,7 @@ class ExecuteKwargs(BaseModel):
     run_agent: bool = False
     # 新增参数
     session_code: str | None = Field(default=None, description="调用时的会话 ID")
+    executor: str | None = Field(default=None, description="执行人")
     caller_bk_app_code: str | None = Field(default=None, description="调用者BK应用ID")
     caller_bk_biz_env: str | None = Field(default=None, description="调用者BK业务环境")
     caller_bk_biz_id: int | None = Field(default=None, description="调用者BK业务ID")
@@ -141,8 +139,8 @@ def verify_get_values_result(result):
     assert "updated_by" in agent_info
 
 
-class TestLiteEnhancedAgentExecutorWrapper:
-    """测试 LiteEnhancedAgentExecutorWrapper 基类"""
+class TestChatCompletionAgentExecuteByAgentWrapper:
+    """测试 ChatCompletionAgentExecuteByAgentWrapper 包装器"""
 
     @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.get_agent_config_info")
     def test_get_values_with_request_local(self, mock_get_agent_config_info, tracer_and_config):
@@ -173,16 +171,13 @@ class TestLiteEnhancedAgentExecutorWrapper:
         }
 
         # 创建包装器
-        wrapper = LiteEnhancedAgentExecutorWrapper(tracer, config)
+        wrapper = ChatCompletionAgentExecuteByAgentWrapper(tracer, config)
 
-        # 模拟 agent 对象
-        mock_agent = MagicMock()
-
-        # 准备输入
-        input_data = {"input": "测试问题"}
+        # 准备输入 - 使用 BaseMessage list
+        messages = [HumanMessage(content="测试问题")]
 
         # 调用 get_values
-        result = wrapper.get_values(mock_agent, input=input_data)
+        result = wrapper.get_values(messages=messages, execute_kwargs=None)
 
         # 使用公共验证函数
         verify_get_values_result(result)
@@ -200,8 +195,8 @@ class TestLiteEnhancedAgentExecutorWrapper:
         delattr(request_local, "otel_info")
 
     @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.get_agent_config_info")
-    def test_get_values_with_input_execute_kwargs(self, mock_get_agent_config_info, tracer_and_config):
-        """测试 get_values 从 input 中的 execute_kwargs 参数获取"""
+    def test_get_values_with_execute_kwargs_param(self, mock_get_agent_config_info, tracer_and_config):
+        """测试 get_values 从 execute_kwargs 参数获取"""
         tracer, config, _ = tracer_and_config
 
         # 模拟 get_agent_config_info 返回值
@@ -227,21 +222,18 @@ class TestLiteEnhancedAgentExecutorWrapper:
         )
 
         # 创建包装器
-        wrapper = LiteEnhancedAgentExecutorWrapper(tracer, config)
+        wrapper = ChatCompletionAgentExecuteByAgentWrapper(tracer, config)
 
-        # 模拟 agent 对象
-        mock_agent = MagicMock()
-
-        # 准备输入 - 通过 input 参数传递 execute_kwargs
-        input_data = {"input": "测试问题2", "execute_kwargs": execute_kwargs}
+        # 准备输入
+        messages = [HumanMessage(content="测试问题2")]
 
         # 调用 get_values
-        result = wrapper.get_values(mock_agent, input=input_data)
+        result = wrapper.get_values(messages=messages, execute_kwargs=execute_kwargs)
 
         # 使用公共验证函数
         verify_get_values_result(result)
 
-        # 验证具体的值 - 应该使用 input 中的 execute_kwargs
+        # 验证具体的值 - 应该使用传入的 execute_kwargs
         assert result["inputs"] == "测试问题2"
         assert result["execute_kwargs"].session_code == "input-session-456"
         assert result["execute_kwargs"].caller_executor == "input-user"
@@ -250,64 +242,58 @@ class TestLiteEnhancedAgentExecutorWrapper:
         assert result["execute_kwargs"].caller_bk_biz_id == 200
         assert result["execute_kwargs"].caller_order_type == "ai_chat"
 
-        # 验证 execute_kwargs 已从 input 中移除（根据 pop 操作）
-        assert "execute_kwargs" not in input_data
-
-
-class TestLiteEnhancedAgentExecutorStreamEventsWrapper:
-    """测试 LiteEnhancedAgentExecutorStreamEventsWrapper 流式包装器"""
-
     @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.get_agent_config_info")
-    def test_stream_events_wrapper(self, mock_get_agent_config_info, tracer_and_config):
-        """测试流式包装器的使用 - 模拟 ChatCompletionViewSet.create 的用法"""
-        tracer, config, exporter = tracer_and_config
+    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.BkAidevAgentInjector")
+    def test_wrapper_call(self, mock_injector_class, mock_get_agent_config_info, tracer_and_config):
+        """测试包装器的完整调用流程"""
+        tracer, config, _ = tracer_and_config
 
         # 模拟 get_agent_config_info 返回值
         mock_agent_info = {
-            "agent_id": "test-agent-123",
-            "agent_code": "test_agent",
-            "agent_name": "测试智能体",
-            "agent_type": "qa",
-            "service_catalogue": "test_service",
+            "agent_id": "test-agent-789",
+            "agent_code": "test_agent_3",
+            "agent_name": "测试智能体3",
+            "agent_type": "ai_chat",
+            "service_catalogue": "test_service_3",
             "updated_by": "admin",
             "otel_info": {},
         }
         mock_get_agent_config_info.return_value = mock_agent_info
 
-        # 创建 ExecuteKwargs 对象 - 模拟 ChatCompletionViewSet 的实际用法
-        execute_kwargs = ExecuteKwargs(
-            session_code="stream-session-456",
-            caller_bk_app_code="stream-app",
-            caller_bk_biz_env="domestic_biz",
-            caller_bk_biz_id=200,
-            caller_executor="stream-user",
-            caller_order_type="ai_chat",
-        )
+        # 创建 mock injector 实例
+        mock_injector = MagicMock()
+        mock_injector_class.return_value = mock_injector
+
+        # 设置 request_local.otel_info
+        request_local.otel_info = {
+            "session_code": "session-789",
+            "executor": "test-user-3",
+            "caller_bk_app_code": "test-app-3",
+            "caller_bk_biz_env": "domestic_biz",
+            "caller_executor": "test-user-3",
+            "caller_bk_biz_id": 300,
+            "caller_order_type": "ai_chat",
+        }
 
         # 创建包装器
-        wrapper = LiteEnhancedAgentExecutorStreamEventsWrapper(tracer, config)
+        wrapper = ChatCompletionAgentExecuteByAgentWrapper(tracer, config)
 
-        # 模拟被包装的函数（生成器）
-        def mock_stream_events(*args, **kwargs):
+        # 模拟被包装的生成器函数
+        def mock_execute_by_agent(*args, **kwargs):
             yield {"event": "start"}
             yield {"event": "data", "content": "测试"}
             yield {"event": "end"}
 
-        # 模拟 agent 和 instance
-        mock_agent = MagicMock()
-        mock_instance = MagicMock()
-        mock_instance.agent = mock_agent
-
-        # 准备输入 - 通过 input 传递 execute_kwargs（而不是 request_local）
-        input_data = {"input": "流式测试", "execute_kwargs": execute_kwargs}
-        config_data = {"callbacks": []}
+        # 准备输入
+        messages = [HumanMessage(content="测试问题3")]
+        execute_kwargs = None
 
         # 调用包装器
         generator = wrapper(
-            wrapped=mock_stream_events,
-            instance=mock_instance,
-            args=(input_data,),
-            kwargs={"config": config_data},
+            wrapped=mock_execute_by_agent,
+            instance=None,
+            args=(messages, execute_kwargs),
+            kwargs={},
         )
 
         # 消费生成器
@@ -319,119 +305,77 @@ class TestLiteEnhancedAgentExecutorStreamEventsWrapper:
         assert events[1]["event"] == "data"
         assert events[2]["event"] == "end"
 
-        # 验证创建了 span
-        spans = exporter.get_finished_spans()
-        assert len(spans) > 0
-
-        # 找到 agent.execution span
-        agent_span = None
-        for span in spans:
-            if span.name == "agent.execution":
-                agent_span = span
-                break
-
-        assert agent_span is not None
-
-        # 验证 span 名称
-        assert agent_span.name == "agent.execution"
-
-        # 验证 agent.session.* 属性
-        assert agent_span.attributes["agent.session.session_code"] == "stream-session-456"
-        assert agent_span.attributes["agent.session.caller_executor"] == "stream-user"
-        assert agent_span.attributes["agent.session.caller_bk_app_code"] == "stream-app"
-        assert agent_span.attributes["agent.session.caller_bk_biz_env"] == "domestic_biz"
-        assert agent_span.attributes["agent.session.caller_bk_biz_id"] == 200
-        assert agent_span.attributes["agent.session.caller_order_type"] == "ai_chat"
-
-        # 验证 agent.info.* 属性
-        assert agent_span.attributes["agent.info.code"] == "test_agent"
-
-
-class TestLiteEnhancedAgentExecutorAInvokeWrapper:
-    """测试 LiteEnhancedAgentExecutorAInvokeWrapper 异步包装器"""
-
-    @pytest.mark.asyncio
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.get_agent_config_info")
-    async def test_ainvoke_wrapper(self, mock_get_agent_config_info, tracer_and_config):
-        """测试异步包装器的使用"""
-        tracer, config, exporter = tracer_and_config
-
-        # 模拟 get_agent_config_info 返回值
-        mock_agent_info = {
-            "agent_id": "test-agent-789",
-            "agent_code": "async_agent",
-            "agent_name": "异步智能体",
-            "agent_type": "qa",
-            "service_catalogue": "async_service",
-            "updated_by": "async_admin",
-            "otel_info": {},
-        }
-        mock_get_agent_config_info.return_value = mock_agent_info
-
-        # 设置 request_local.otel_info
-        request_local.otel_info = {
-            "session_code": "async-session-789",
-            "executor": "async-user",
-            "caller_bk_app_code": "async-app",
-            "caller_bk_biz_env": "domestic_biz",
-            "caller_executor": "async-user",
-            "caller_bk_biz_id": 300,
-            "caller_order_type": "ai_chat",
-        }
-
-        # 创建包装器
-        wrapper = LiteEnhancedAgentExecutorAInvokeWrapper(tracer, config)
-
-        # 模拟被包装的异步函数
-        async def mock_ainvoke(*args, **kwargs):
-            return {"output": "异步测试结果"}
-
-        # 模拟 agent 和 instance
-        mock_agent = MagicMock()
-        mock_instance = MagicMock()
-        mock_instance.agent = mock_agent
-
-        # 准备输入
-        input_data = {"input": "异步测试问题"}
-        config_data = {"callbacks": []}
-
-        # 调用包装器
-        result = await wrapper(
-            wrapped=mock_ainvoke,
-            instance=mock_instance,
-            args=(input_data,),
-            kwargs={"config": config_data},
-        )
-
-        # 验证结果
-        assert result == {"output": "异步测试结果"}
-
-        # 验证创建了 span
-        spans = exporter.get_finished_spans()
-        assert len(spans) > 0
-
-        # 找到 agent.execution span
-        agent_span = None
-        for span in spans:
-            if span.name == "agent.execution":
-                agent_span = span
-                break
-
-        assert agent_span is not None
-
-        # 验证 span 名称
-        assert agent_span.name == "agent.execution"
-
-        # 验证 agent.session.* 属性
-        assert agent_span.attributes["agent.session.session_code"] == "async-session-789"
-        assert agent_span.attributes["agent.session.caller_executor"] == "async-user"
-        assert agent_span.attributes["agent.session.caller_bk_app_code"] == "async-app"
-        assert agent_span.attributes["agent.session.caller_bk_biz_env"] == "domestic_biz"
-        assert agent_span.attributes["agent.session.caller_bk_biz_id"] == 300
-        assert agent_span.attributes["agent.session.caller_order_type"] == "ai_chat"
-
-        # 验证 agent.info.* 属性
-        assert agent_span.attributes["agent.info.code"] == "async_agent"
+        # 验证 BkAidevAgentInjector 被正确调用
+        mock_injector_class.assert_called_once()
+        mock_injector.on_bk_agent_start.assert_called_once()
+        mock_injector.on_bk_agent_end.assert_called_once()
 
         # 清理
         delattr(request_local, "otel_info")
+
+
+class TestChatCompletionAgentGetAgentWrapper:
+    """测试 ChatCompletionAgentGetAgentWrapper 包装器"""
+
+    def test_wrapper_adds_callback_handler(self, tracer_and_config):
+        """测试包装器添加 callback handler"""
+        tracer, config, _ = tracer_and_config
+
+        # 创建包装器
+        wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
+
+        # 模拟被包装的函数
+        def mock_get_agent(*args, **kwargs):
+            mock_agent = MagicMock()
+            cfg = {}
+            return mock_agent, cfg
+
+        # 调用包装器
+        agent, cfg = wrapper(
+            wrapped=mock_get_agent,
+            instance=None,
+            args=(),
+            kwargs={},
+        )
+
+        # 验证 callbacks 被添加
+        assert "callbacks" in cfg
+        assert isinstance(cfg["callbacks"], list)
+        assert len(cfg["callbacks"]) == 1
+
+        # 验证添加的是 BkAidevAgentCallbackHandler
+        from aidev_bkplugin.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
+        assert isinstance(cfg["callbacks"][0], BkAidevAgentCallbackHandler)
+
+    def test_wrapper_preserves_existing_callbacks(self, tracer_and_config):
+        """测试包装器保留已有的 callbacks"""
+        tracer, config, _ = tracer_and_config
+
+        # 创建包装器
+        wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
+
+        # 模拟被包装的函数，返回已有 callbacks
+        existing_callback = MagicMock()
+        def mock_get_agent(*args, **kwargs):
+            mock_agent = MagicMock()
+            cfg = {"callbacks": [existing_callback]}
+            return mock_agent, cfg
+
+        # 调用包装器
+        agent, cfg = wrapper(
+            wrapped=mock_get_agent,
+            instance=None,
+            args=(),
+            kwargs={},
+        )
+
+        # 验证 callbacks 包含已有的和新增的
+        assert "callbacks" in cfg
+        assert isinstance(cfg["callbacks"], list)
+        assert len(cfg["callbacks"]) == 2
+        assert existing_callback in cfg["callbacks"]
+
+        # 验证新增的是 BkAidevAgentCallbackHandler
+        from aidev_bkplugin.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
+        callback_handlers = [cb for cb in cfg["callbacks"] if isinstance(cb, BkAidevAgentCallbackHandler)]
+        assert len(callback_handlers) == 1

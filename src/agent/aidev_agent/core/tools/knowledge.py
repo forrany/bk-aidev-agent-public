@@ -15,18 +15,17 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
+
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Annotated, Optional
 
 from langchain_core.tools import StructuredTool
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
-from aidev_agent.enums import Decision
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
-from aidev_agent.packages.langchain_core.retrievers.utils import deduplicate_knowledge_file_paths
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -40,15 +39,6 @@ class KnowledgeRetrievalInput(TypedDict):
     """知识库检索工具的输入参数"""
 
     query: Annotated[str, "用于检索私域知识库的查询文本"]
-
-
-class KnowledgeRetrievalOutput(TypedDict):
-    """知识库检索工具的输出结果"""
-
-    decision: Decision
-    knowledge_content: list
-    knowledge_qa_content: NotRequired[list]
-    reference_doc: NotRequired[list]
 
 
 def make_knowledge_retrieval_tool(
@@ -79,7 +69,7 @@ def make_knowledge_retrieval_tool(
     ):
         return None
 
-    def knowledge_retrieval(query: str) -> KnowledgeRetrievalOutput:
+    def knowledge_retrieval(query: str) -> list:
         """执行知识库检索。
 
         Args:
@@ -94,42 +84,7 @@ def make_knowledge_retrieval_tool(
 
         # 执行知识库检索
         ret = retriever.retrieve(query, agent_options, input=query)
-
-        decision = ret["decision"]
-        output: KnowledgeRetrievalOutput = {
-            "decision": decision,
-            "knowledge_content": [],
-        }
-
-        # 根据决策类型处理知识资源
-        if decision == Decision.PRIVATE_QA:
-            # 私有知识问答：处理高相关性资源
-            processed = retriever.handle_knowledge_resources(
-                ret,
-                "knowledge_resources_highly_relevant",
-                agent_options=agent_options,
-            )
-            output["knowledge_content"] = processed.get("knowledge_content", [])
-            if processed.get("knowledge_qa_content"):
-                output["knowledge_qa_content"] = processed["knowledge_qa_content"]
-            output["reference_doc"] = deduplicate_knowledge_file_paths(
-                ret["knowledge_resources_highly_relevant"]
-            )
-        elif decision == Decision.QUERY_CLARIFICATION:
-            # 查询澄清：处理中等相关性资源
-            processed = retriever.handle_knowledge_resources(
-                ret,
-                "knowledge_resources_moderately_relevant",
-                agent_options=agent_options,
-            )
-            output["knowledge_content"] = processed.get("knowledge_content", [])
-            if processed.get("knowledge_qa_content"):
-                output["knowledge_qa_content"] = processed["knowledge_qa_content"]
-            output["reference_doc"] = deduplicate_knowledge_file_paths(
-                ret["knowledge_resources_moderately_relevant"]
-            )
-
-        return output
+        return ret.get("knowledge_content", [])
 
     return StructuredTool.from_function(
         func=knowledge_retrieval,

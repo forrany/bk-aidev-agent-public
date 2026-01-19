@@ -19,18 +19,9 @@ to the current version of the project delivered to anyone in the future.
 import logging
 import time
 import traceback
-from datetime import datetime
 from functools import wraps
 
-import pytz
-
 logger = logging.getLogger(__name__)
-
-
-def get_beijing_now():
-    utc_now = datetime.now(pytz.utc)
-    beijing_now = utc_now.astimezone(pytz.timezone("Asia/Shanghai")).strftime("%Y年%m月%d日 %H时%M分%S秒")
-    return beijing_now
 
 
 def timeit(message=""):

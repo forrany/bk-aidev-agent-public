@@ -7,7 +7,7 @@ from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.models.utils import is_deepseek_r1_series_models, remove_thinking_process
 from aidev_agent.packages.model_management.registry import RegistryPluginMixIn
 
-from aidev_agent.packages.utils.decorator import timeit
+from aidev_agent.utils.decorator import timeit
 
 
 HUNYUAN_SPECIFIC_RESPONSE = "很抱歉，我还未学习到如何回答这个问题的内容，暂时无法提供相关信息。"
