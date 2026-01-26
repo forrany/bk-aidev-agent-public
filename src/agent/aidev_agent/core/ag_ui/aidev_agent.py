@@ -1,0 +1,169 @@
+# -*- coding: utf-8 -*-
+import uuid
+from collections.abc import AsyncGenerator
+from logging import getLogger
+from typing import Any, Callable
+
+from ag_ui.core import (
+    BaseEvent,
+    CustomEvent,
+    EventType,
+    RawEvent,
+    RunAgentInput,
+    RunErrorEvent,
+    ToolCallStartEvent,
+)
+from ag_ui.encoder import EventEncoder
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import StructuredTool
+from langgraph.graph.state import CompiledStateGraph
+
+from aidev_agent.exceptions import extract_model_error_message
+
+from .agent import LangGraphAGUIAgent
+from .events import (
+    ExtendToolCallResultEvent,
+    ExtendToolCallStartEvent,
+)
+from .types import CustomMessageType, MessagesInProgressRecord
+
+logger = getLogger(__name__)
+
+
+class EventDispatcher:
+    """事件分发器，用于处理不同类型事件的分发逻辑"""
+
+    def __init__(self, agent: "AidevAGUIAgent"):
+        self.agent = agent
+        self._dispatch_handlers = {
+            EventType.RAW: self._handle_raw_event,
+            EventType.CUSTOM: self._handle_custom_event,
+            EventType.TOOL_CALL_START: self._handle_tool_call_start,
+        }
+
+    def dispatch(self, event: BaseEvent) -> str:
+        """根据事件类型调用对应的处理方法"""
+        handler = self._dispatch_handlers.get(event.type)
+        if handler:
+            return handler(event)
+        return self.agent._parent_dispatch(event)
+
+    def _handle_raw_event(self, event: RawEvent) -> str:
+        """处理 RAW 事件"""
+        event_name = event.event.get("name", "")
+
+        raw_event_handlers = {
+            "on_tool_node_finish": self._handle_tool_node_finish,
+            "on_tool_node_start": self._handle_tool_node_start,
+        }
+
+        handler = raw_event_handlers.get(event_name)
+        if handler:
+            return handler(event)
+        return self.agent._parent_dispatch(event)
+
+    def _handle_tool_node_finish(self, event: RawEvent) -> str:
+        """处理工具节点完成事件"""
+        tool_msg = event.event.get("data")
+        return self.agent._parent_dispatch(
+            ExtendToolCallResultEvent(
+                type=EventType.TOOL_CALL_RESULT,
+                tool_call_id=tool_msg.tool_call_id,
+                message_id=tool_msg.id or str(uuid.uuid4()),
+                content=tool_msg.content,
+                role="tool",
+                duration=tool_msg.additional_kwargs.get("duration", None),
+            )
+        )
+
+    def _handle_tool_node_start(self, event: RawEvent) -> str:
+        """处理工具节点开始事件"""
+        # 当前不处理，直接返回
+        return ""
+
+    def _handle_custom_event(self, event: CustomEvent) -> str:
+        """处理自定义事件"""
+        custom_event_handlers = {
+            CustomMessageType.REFERENCE_DOCUMENT.value: self._handle_reference_document,
+        }
+
+        handler = custom_event_handlers.get(event.name)
+        if handler:
+            return handler(event)
+        return self.agent._parent_dispatch(event)
+
+    def _handle_reference_document(self, event: CustomEvent) -> str:
+        """处理引用文档事件"""
+        value = event.raw_event.get("data", {}).get("data", [])
+        return self.agent._parent_dispatch(
+            CustomEvent(type=EventType.CUSTOM, name=event.raw_event.get("name"), value=value)
+        )
+
+    def _handle_tool_call_start(self, event: ToolCallStartEvent) -> str:
+        """处理工具调用开始事件，添加描述信息"""
+        _tool = self.agent._tool_mapping.get(event.tool_call_name, None)
+        _event = ExtendToolCallStartEvent(
+            **{
+                **event.model_dump(),
+                "description": _tool.description if _tool else "",
+                "mcp_name": _tool.metadata.get("mcp_name") if _tool and _tool.metadata else "",
+            }
+        )
+        return self.agent._parent_dispatch(_event)
+
+
+class AidevAGUIAgent(LangGraphAGUIAgent):
+    """实现了对自定义事件处理的 AI 辅助 Agent"""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        graph: CompiledStateGraph[Any, None, Any, Any],
+        description: str | None = None,
+        config: RunnableConfig | None | MessagesInProgressRecord = None,
+        tools: dict[str, StructuredTool] | None = None,
+        event_handler: Callable[[BaseEvent], None] | None = None,
+    ):
+        super().__init__(name=name, graph=graph, description=description, config=config)
+        self._tool_mapping = tools or {}
+        self._event_handler = event_handler
+        self._event_dispatcher = EventDispatcher(self)
+
+    async def run(self, input: RunAgentInput) -> AsyncGenerator[str, None]:
+        """运行 Agent 并生成编码后的事件流"""
+        event_encoder = EventEncoder()
+        async for event in super().run(input):
+            try:
+                # 特殊处理：不输出 message snapshot 事件
+                if getattr(event, "type", "") == EventType.MESSAGES_SNAPSHOT.value:
+                    logger.debug(f"message snapshot: {event}")
+                else:
+                    yield event_encoder.encode(event)
+            except Exception as e:
+                logger.exception(f"Failed to encode event: {e}")
+                raise e
+
+    def _dispatch_event(self, event: BaseEvent) -> str:
+        """分发事件，使用 EventDispatcher 处理不同类型的事件"""
+        self._custom_event_handling(event)
+        return self._event_dispatcher.dispatch(event)
+
+    def _parent_dispatch(self, event: BaseEvent) -> str:
+        """调用父类的事件分发方法"""
+        return super()._dispatch_event(event)
+
+    def _custom_event_handling(self, event: BaseEvent) -> None:
+        """处理自定义事件钩子"""
+        if self._event_handler:
+            self._event_handler(event)
+
+    async def _handle_stream_events(self, input: RunAgentInput) -> AsyncGenerator[str, None]:
+        """处理流事件，添加异常处理"""
+        try:
+            async for event in super()._handle_stream_events(input):
+                yield event
+        except Exception as e:
+            logger.exception(f"Failed to handle stream events: {e}")
+            error_chunk = extract_model_error_message(e)
+            yield self._dispatch_event(RunErrorEvent(message=error_chunk))

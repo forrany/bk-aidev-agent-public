@@ -48,15 +48,21 @@ def extract_error_message(error_string):
 
 
 def streaming_chunk_exception_handling(exception: Exception) -> str:
+    message = extract_model_error_message(exception)
+    ret = {
+        "event": StreamEventType.ERROR.value,
+        "code": exception.code if hasattr(exception, "code") else 400,
+        "message": message,
+    }
+    return f"data: {json.dumps(ret)}\n\n"
+
+
+def extract_model_error_message(exception: Exception) -> str:
     err_msg = exception.message if hasattr(exception, "message") else str(exception)
     mcp_errors = list(find_mcp_errors(exception))
     if mcp_errors:
         err_msg = "MCP调用工具异常"
     if json_msg := extract_error_message(err_msg):
         err_msg = json_msg
-    ret = {
-        "event": StreamEventType.ERROR.value,
-        "code": exception.code if hasattr(exception, "code") else 400,
-        "message": f"模型调用异常: {err_msg}",
-    }
-    return f"data: {json.dumps(ret)}\n\n"
+    message = f"模型调用异常: {err_msg}"
+    return message

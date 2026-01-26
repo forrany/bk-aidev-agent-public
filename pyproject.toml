@@ -35,14 +35,8 @@ line-length = 120
 indent-width = 4
 
 [tool.ruff.lint]
-select = [
-    "E",
-    "F",
-    "I",
-    "PIE",
-    "PERF"
-]
-ignore = ["PERF401", "E501", "E402"]
+select = ["E", "F", "I", "PIE", "PERF", "SIM"]
+ignore = ["PERF401", "E501"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -22,7 +22,7 @@ import logging
 from typing import TYPE_CHECKING, Annotated, Optional
 
 from langchain_core.tools import StructuredTool
-from typing_extensions import TypedDict
+from pydantic import BaseModel
 
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class KnowledgeRetrievalInput(TypedDict):
+class KnowledgeRetrievalInput(BaseModel):
     """知识库检索工具的输入参数"""
 
     query: Annotated[str, "用于检索私域知识库的查询文本"]

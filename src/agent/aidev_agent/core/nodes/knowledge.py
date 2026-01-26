@@ -15,19 +15,22 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, TypedDict, NotRequired, List
+import time
+import uuid
+from typing import TYPE_CHECKING, List, NotRequired, TypedDict
 
 from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 
+from aidev_agent.core.ag_ui.types import ActivityMessage, CustomMessageType
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
-from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag, \
-    KnowledgeRagRetrieveResult
+from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag, KnowledgeRagRetrieveResult
 from aidev_agent.services.pydantic_models import AgentOptions
 
 if TYPE_CHECKING:
@@ -40,6 +43,7 @@ class KnowledgeInputState(TypedDict):
     """
     知识库召回的 State 输入字段
     """
+
     query: NotRequired[str]
     input: NotRequired[str]
     messages: NotRequired[List[BaseMessage]]
@@ -52,7 +56,7 @@ class KnowledgeOutputState(KnowledgeRagRetrieveResult):
 def make_knowledge_node(
     llm: BaseChatModel,
     agent_options: AgentOptions,
-) -> Callable[[KnowledgeInputState, RunnableConfig, Any],KnowledgeOutputState]:
+) -> Callable[[KnowledgeInputState, RunnableConfig, Any], KnowledgeOutputState]:
     """构建知识库检索节点。
 
     该节点负责:
@@ -99,6 +103,13 @@ def make_knowledge_node(
         从 state 中获取用户查询,使用 KnowledgeRag 进行知识库检索,
         并返回包含决策类型、知识内容、引用文档等信息的状态字典。
         """
+        t1 = time.time()
+        dispatch_custom_event(
+            CustomMessageType.KNOWLEDGE_RAG_START.value,
+            data={},
+            config=config,
+        )
+
         # 获取查询文本,优先使用 query 字段,否则使用 input 字段
         query = state.get("query")
         if query is None:
@@ -115,11 +126,18 @@ def make_knowledge_node(
         reference_doc = ret.get("reference_doc")
 
         # 如果有引用文档,进行派发和存储
+        message_id = uuid.uuid4().hex
+        duration = round(time.time() - t1, 4) * 1000
         if reference_doc:
             # 1. 通过自定义事件向前端推送 reference_doc
+            reference_doc = [each["metadata"] for each in reference_doc]
+            reference_doc = [
+                {"origin_file": each["preview_path"], "url": each["path"], "name": each["display_name"]}
+                for each in reference_doc
+            ]
             dispatch_custom_event(
-                "custom_event",
-                {"reference_doc": reference_doc},
+                CustomMessageType.REFERENCE_DOCUMENT.value,
+                data={"message_id": message_id, "data": reference_doc, "duration": duration},
                 config=config,
             )
             # 2. 将 reference_doc 写入 LangGraph Store,模拟原来的 request_local.current_user_store 行为
@@ -129,6 +147,36 @@ def make_knowledge_node(
                 logger.warning("写入 reference_doc 到 LangGraph Store 失败", exc_info=True)
             # 3. 在本次节点返回中直接带上 reference_doc,便于非流式调用使用
             ret["reference_doc"] = reference_doc
+            # messages
+            ret["messages"] = [
+                ActivityMessage(
+                    activity_type="reference_document",
+                    content=reference_doc,
+                    id=message_id,
+                    additional_kwargs={"duration": duration},
+                )
+            ]
+        else:
+            # 如果没有引用文档,派发空消息
+            dispatch_custom_event(
+                CustomMessageType.REFERENCE_DOCUMENT.value,
+                data={"message_id": message_id, "data": [], "duration": duration},
+                config=config,
+            )
+            ret["messages"] = [
+                ActivityMessage(
+                    activity_type="reference_document",
+                    content=[],
+                    id=message_id,
+                    additional_kwargs={"duration": duration},
+                )
+            ]
+
+        dispatch_custom_event(
+            CustomMessageType.KNOWLEDGE_RAG_END.value,
+            data={},
+            config=config,
+        )
 
         return ret
 

@@ -1,6 +1,7 @@
-from typing import ClassVar, Dict, TypedDict
+from typing import ClassVar, Dict
 
 from aidev_agent.core.graphs.react.graph import ReActAgent
+
 
 class CommonQAAgent:
     """
@@ -10,7 +11,7 @@ class CommonQAAgent:
     中需要使用到 ensure_memory_window。待开发侧确认各类需要使用 CommonQAAgent 成员函数/属性的场景。
     """
 
-    agent_classes: ClassVar[Dict] = { }
+    agent_classes: ClassVar[Dict] = {}
 
     @classmethod
     def register_agent_class(cls, key, agent_class):

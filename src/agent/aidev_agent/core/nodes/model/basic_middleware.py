@@ -25,11 +25,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 import pytz
-from langchain_community.adapters.openai import convert_dict_to_message, convert_message_to_dict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import BaseTool
+from langchain_openai.chat_models.base import _convert_dict_to_message, _convert_message_to_dict
 
+from aidev_agent.core.ag_ui.types import ActivityMessage
 from aidev_agent.core.graphs.react.prompts import MULTI_MODAL_PREFIX, general_qa_prompt_structured_chat
 from aidev_agent.enums import ContextType, Decision
 from aidev_agent.packages.langchain_core.models.utils import is_deepseek_r1_series_models
@@ -273,6 +274,7 @@ class BaseVariablesMiddleware:
                 auto_vars[var] = ctx.state[var]
 
         messages: List[BaseMessage] = ctx.state.get("messages") or []
+        messages = [each for each in messages if not isinstance(each, ActivityMessage)]
         cache = ctx.metadata.get("_cache")
 
         # 尝试使用缓存的 last_human_idx
@@ -378,7 +380,7 @@ class DeepSeekR1VariablesMiddleware:
         if isinstance(chat_history, list):
             for i in range(len(chat_history)):
                 if isinstance(chat_history[i], SystemMessage):
-                    msg = convert_message_to_dict(chat_history[i])
+                    msg = _convert_message_to_dict(chat_history[i])
                     msg["role"] = "user"
-                    chat_history[i] = convert_dict_to_message(msg)
+                    chat_history[i] = _convert_dict_to_message(msg)
         next()

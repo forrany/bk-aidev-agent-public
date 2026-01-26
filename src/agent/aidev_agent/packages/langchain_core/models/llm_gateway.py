@@ -18,7 +18,7 @@ to the current version of the project delivered to anyone in the future.
 
 import json
 import os
-from typing import Optional, Type, Union
+from typing import AsyncIterator, Iterator, Optional, Type, Union
 
 import openai
 import requests
@@ -32,6 +32,7 @@ from pydantic import BaseModel, model_validator
 from aidev_agent.api.domains import BKAIDEV_URL
 from aidev_agent.config import settings
 from aidev_agent.exceptions import AIDevException
+from aidev_agent.utils.datetimes import get_current_timestamp_in_milliseconds
 
 
 class ApiGwMixin(BaseModel):
@@ -135,6 +136,55 @@ class ChatModel(RawChatOpenAI, ApiGwMixin):
             if reasoning_content and isinstance(generation_chunk.message, AIMessageChunk):
                 generation_chunk.message.additional_kwargs["reasoning_content"] = reasoning_content
         return generation_chunk
+
+    def _process_reasoning_chunk(
+        self,
+        chunk: ChatGenerationChunk,
+        reasoning_start_time: int = 0,
+        last_reasoning_content: str = "",
+    ) -> tuple[ChatGenerationChunk, int, str]:
+        """处理 reasoning_content 字段的时间统计逻辑
+
+        Args:
+            chunk: 当前的生成块
+            reasoning_start_time: reasoning 开始时间戳（0表示未开始）
+            last_reasoning_content: 上一个块的 reasoning_content
+
+        Returns:
+            处理后的 (chunk, 更新后的开始时间, 当前的reasoning_content)
+        """
+        current_reasoning_content = chunk.message.additional_kwargs.get("reasoning_content")
+
+        # 记录 reasoning 开始时间
+        if current_reasoning_content and reasoning_start_time == 0:
+            reasoning_start_time = get_current_timestamp_in_milliseconds()
+
+        # 计算 reasoning 结束时间
+        if last_reasoning_content and not current_reasoning_content:
+            reasoning_end_time = get_current_timestamp_in_milliseconds()
+            chunk.message.additional_kwargs["reasoning_time"] = reasoning_end_time - reasoning_start_time
+
+        return chunk, reasoning_start_time, current_reasoning_content or ""
+
+    def _stream(self, *args, **kwargs) -> Iterator[ChatGenerationChunk]:
+        """对reasoning_content字段进行时间统计"""
+        reasoning_start_time = 0
+        last_reasoning_content = ""
+        for chunk in super()._stream(*args, **kwargs):
+            chunk, reasoning_start_time, last_reasoning_content = self._process_reasoning_chunk(
+                chunk, reasoning_start_time, last_reasoning_content
+            )
+            yield chunk
+
+    async def _astream(self, *args, **kwargs) -> AsyncIterator[ChatGenerationChunk]:
+        """对reasoning_content字段进行时间统计"""
+        reasoning_start_time = 0
+        last_reasoning_content = ""
+        async for chunk in super()._astream(*args, **kwargs):
+            chunk, reasoning_start_time, last_reasoning_content = self._process_reasoning_chunk(
+                chunk, reasoning_start_time, last_reasoning_content
+            )
+            yield chunk
 
 
 class Embeddings(RawOpenAIEmbeddings, ApiGwMixin):

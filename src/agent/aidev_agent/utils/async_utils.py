@@ -12,8 +12,8 @@ specific language governing permissions and limitations under the License.
 import asyncio
 from typing import AsyncGenerator
 
-from aidev_agent.utils.loop import get_event_loop
 from aidev_agent.utils import Empty
+from aidev_agent.utils.loop import get_event_loop
 
 
 async def async_generator_with_timeout(

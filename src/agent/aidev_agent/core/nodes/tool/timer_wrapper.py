@@ -2,6 +2,7 @@
 """Tool call wrappers: timer."""
 
 import time
+import uuid
 from collections.abc import Awaitable
 from typing import Callable
 
@@ -19,6 +20,8 @@ def _add_metadata_to_tool_message(
     msg.additional_kwargs.setdefault("duration", duration)
     if description:
         msg.additional_kwargs.setdefault("description", description)
+    if not msg.id:
+        msg.id = uuid.uuid4().hex
 
 
 def timer_sync_wrapper(

@@ -1,14 +1,15 @@
-from langchain_core.documents import Document
 from typing import List, Tuple
 
+from langchain_core.callbacks import dispatch_custom_event
+from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from aidev_agent.core.ag_ui.types import CustomMessageType
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.models.utils import is_deepseek_r1_series_models, remove_thinking_process
 from aidev_agent.packages.model_management.registry import RegistryPluginMixIn
-
+from aidev_agent.services.pydantic_models import AgentOptions
 from aidev_agent.utils.decorator import timeit
-
 
 HUNYUAN_SPECIFIC_RESPONSE = "很抱歉，我还未学习到如何回答这个问题的内容，暂时无法提供相关信息。"
 reg = RegistryPluginMixIn()
@@ -51,7 +52,7 @@ def filter_and_select_topk(items, score_threshold, topk):
     return sorted_items[:topk]
 
 
-def invoke_decorator(agent_options, invoke_func, llm):
+def invoke_decorator(agent_options: AgentOptions, invoke_func, llm):
     def wrapper(*args, **kwargs):
         nonlocal llm
         # 根据 https://huggingface.co/deepseek-ai/DeepSeek-R1#usage-recommendations 的建议：
@@ -99,3 +100,18 @@ def calculate_similarity(
         return similarity_model_gpu.compute_similarity(text_pairs)
     else:
         return []
+
+
+def dispatch_rag_event_chunk(message: str):
+    """Dispatch rag event chunk
+
+    Args:
+        message (str): The message to dispatch
+        config (RunnableConfig): The runnable configuration
+    """
+    if not message.endswith("\n"):
+        message += "\n"
+    dispatch_custom_event(
+        CustomMessageType.KNOWLEDGE_RAG_TEXT_CONTENT.value,
+        data={"chunk": {"content": message}},
+    )

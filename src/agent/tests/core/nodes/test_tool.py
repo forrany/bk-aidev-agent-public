@@ -4,11 +4,12 @@
 """
 
 import time
-from typing import List
+from typing import AsyncGenerator, List
 
 import pytest
 from aidev_agent.core.nodes.tool import ToolNodeSettings, build_tool_node
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.runnables.schema import StreamEvent
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -90,6 +91,17 @@ async def arun_tool_node_in_graph(tool_node, state: dict) -> dict:
     compiled = graph.compile()
     result = await compiled.ainvoke(state)
     return result
+
+
+async def astream_event_in_graph(tool_node, state: dict) -> AsyncGenerator[StreamEvent, None]:
+    """在图中异步流式运行 tool_node 并返回结果"""
+    graph = StateGraph(AgentState)
+    graph.add_node("tools", tool_node)
+    graph.add_edge(START, "tools")
+    graph.add_edge("tools", END)
+    compiled = graph.compile()
+    async for event in compiled.astream_events(state):
+        yield event
 
 
 # ============================================================================
@@ -1150,3 +1162,30 @@ class TestBuildToolNodeAsync:
         tool_messages = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
         assert len(tool_messages) == 1
         assert tool_messages[0].content == "5"
+
+    async def test_stream_event_in_graph_async(self):
+        """测试10: 流式运行 tool_node 并返回结果"""
+        tool_node = build_tool_node(tools=[calculator])
+
+        # 构造状态
+        state = {
+            "messages": [
+                HumanMessage(content="Test stream event"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "calculator",
+                            "args": {"a": 2, "b": 3},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ]
+        }
+        async for event in astream_event_in_graph(tool_node, state):
+            if event["event"] == "on_tool_end":
+                output_message = event["data"]["output"]
+                assert isinstance(output_message, ToolMessage)
+                assert "description" in output_message.additional_kwargs
