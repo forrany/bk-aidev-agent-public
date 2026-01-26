@@ -484,34 +484,66 @@ def make_mcp_tools(server_config: dict) -> List[StructuredTool]:
             _server_config["headers"] = {"X-Bkapi-Authorization": json.dumps(auth_info)}
             _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
 
-    client = MultiServerMCPClient(server_config)
     _loop = get_event_loop()
+    tools = []
     try:
-        tools: List[StructuredTool] = _loop.run_until_complete(client.get_tools())
+        for server_name, _server_config in server_config.items():
+            client = MultiServerMCPClient({server_name: _server_config})
+            _tools: List[StructuredTool] = _loop.run_until_complete(client.get_tools())
+            for each in _tools:
+                each.coroutine = wrap_mcp_exception(each.coroutine)
+                if not each.metadata:
+                    each.metadata = {}
+                each.metadata["mcp_name"] = server_name
+            tools.extend(_tools)
     except Exception:
         raise ValueError("获取MCP工具列表失败")
-    for each in tools:
-        each.coroutine = MCPExceptionWrapper(each.coroutine)
     return tools
 
 
-class MCPExceptionWrapper:
-    """可序列化的MCP异常处理包装器"""
-
-    def __init__(self, coro):
-        self.coro = coro
-
-    async def __call__(self, *args, **kwargs):
+def _extract_error_message(error_str: str) -> str:
+    """从错误字符串中提取message"""
+    match = re.search(r"(\{.*\})", error_str)
+    if match:
         try:
-            return await self.coro(*args, **kwargs)
+            data = json.loads(match.group(1))
+            return data.get("response_body", {}).get("message")
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            # 如果JSON解析失败或预期的键不存在，则返回原始错误
+            return error_str
+    return error_str
+
+
+def _extract_all_non_group_exceptions(exc):
+    """递归提取 ExceptionGroup 中所有非-ExceptionGroup 的底层异常"""
+    if isinstance(exc, BaseExceptionGroup):
+        for e in exc.exceptions:
+            yield from _extract_all_non_group_exceptions(e)
+    else:
+        yield exc
+
+
+def wrap_mcp_exception(coro):
+    """MCP异常处理包装器工厂函数
+
+    Args:
+        coro: 原始协程函数
+
+    Returns:
+        包装后的协程函数
+    """
+
+    async def wrapped_coro(*args, **kwargs):
+        try:
+            return await coro(*args, **kwargs)
         except ToolException as err:
             _logger.exception(f"failed to run mcp: {err}")
             # 尝试解析错误消息中的详细信息
-            error_detail = self.extract_error_message(str(err))
+            error_detail = _extract_error_message(str(err))
             return (f"[ERROR] MCP工具调用失败: {error_detail}", None)
         except BaseExceptionGroup as err:
             # 提取所有非 ExceptionGroup 的底层异常
-            all_errors = list(self.extract_all_non_group_exceptions(err))
+            all_errors = list(_extract_all_non_group_exceptions(err))
             if all_errors:
                 if len(all_errors) > 1:
                     error_lines = []
@@ -532,30 +564,4 @@ class MCPExceptionWrapper:
             _logger.exception(f"failed to run mcp: {err}")
             return (f"[ERROR] MCP工具调用失败: {err}", None)
 
-    def extract_error_message(self, error_str):
-        """从错误字符串中提取message"""
-        match = re.search(r"(\{.*\})", error_str)
-        if match:
-            try:
-                data = json.loads(match.group(1))
-                return data.get("response_body", {}).get("message")
-            except (json.JSONDecodeError, KeyError, AttributeError):
-                # 如果JSON解析失败或预期的键不存在，则返回原始错误
-                return error_str
-        return error_str
-
-    def extract_all_non_group_exceptions(self, exc):
-        """递归提取 ExceptionGroup 中所有非-ExceptionGroup 的底层异常"""
-        if isinstance(exc, BaseExceptionGroup):
-            for e in exc.exceptions:
-                yield from self.extract_all_non_group_exceptions(e)
-        else:
-            yield exc
-
-    def __getstate__(self):
-        # 在序列化时保存协程对象
-        return {"coro": self.coro}
-
-    def __setstate__(self, state):
-        # 在反序列化时恢复协程对象
-        self.coro = state["coro"]
+    return wrapped_coro

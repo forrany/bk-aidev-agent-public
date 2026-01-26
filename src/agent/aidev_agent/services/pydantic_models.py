@@ -7,7 +7,7 @@ from aidev_agent.enums import FineGrainedScoreType, IndependentQueryMode, Knowle
 
 
 class ExecuteKwargs(BaseModel):
-    stream: bool = False
+    stream: bool = True
     stream_timeout: int = 30
     passthrough_input: bool = False
     run_agent: bool = False
@@ -59,9 +59,9 @@ class SessionContentProperty(BaseModel):
 
 
 class ChatPrompt(BaseModel):
-    id: int | None = None
+    id: str | None = None
     role: str
-    content: str
+    content: str | list[str] | dict | list[dict]
     extra: SessionContentExtra | None = None
 
     @model_validator(mode="before")
@@ -120,7 +120,7 @@ class IntentRecognition(BaseModel):
     )
     max_cache_length: int = Field(default=int(os.getenv("MAX_CACHE_LENGTH", "50")), description=("缓存的最大长度"))
     max_iterations: int = Field(default=int(os.getenv("MAX_ITERATIONS", "50")), description=("最大迭代次数"))
-    non_thinking_llm: str = Field(default=os.getenv("NON_THINKING_LLM", "hunyuan"), description=("非深度思考模型"))
+    non_thinking_llm: str | None = Field(default=None, description=("非深度思考模型"))
     heartbeats_interval: int = Field(
         default=int(os.getenv("HEARTBEATS_INTERVAL", "4")), description=("生成器轮询间隔(秒)")
     )

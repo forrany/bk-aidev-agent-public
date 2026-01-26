@@ -14,12 +14,16 @@ class PromptRole(enum.Enum):
     HIDDEN = "hidden"
     PAUSE = "pause"  # 暂停演绎,等待用户输入
     USER_IMAGE = "user-image"  # 用户带图片的输入
+    TOOL = "tool"  # 工具调用结果
+    REASONING = "reasoning"  # 演绎过程
+    ACTIVITY = "activity"  # 活动,用于指定自定义消息的类
 
 
 class ChatContentStatus(enum.Enum):
     LOADING = "loading"
     FAIL = "fail"
     SUCCESS = "success"
+    COMPLETE = "complete"
 
 
 class IntentStatus(enum.Enum):

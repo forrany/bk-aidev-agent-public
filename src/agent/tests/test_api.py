@@ -1,20 +1,32 @@
 import pytest
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.config import settings
-from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel, Embeddings
+from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
-    not all([settings.LLM_GW_ENDPOINT, settings.APP_CODE, settings.SECRET_KEY]),
+    not all([settings.APP_CODE, settings.SECRET_KEY]),
     reason="没有配置足够的环境变量,跳过该测试",
 )
-@pytest.mark.stag_gw
-def test_live_test():
-    llm = ChatModel.get_setup_instance(model="hunyuan")
-    assert llm.invoke("test")
+async def test_live_test():
+    llm = ChatModel.get_setup_instance(model="deepseek-reasoner")
+    for chunk in llm.stream(
+        [
+            {"role": "user", "content": "请你介绍一下自己。"},
+        ],
+        stream=True,
+    ):
+        print(chunk)
 
-    emb = Embeddings.get_setup_instance(model="bge-m3-embedding")
-    assert emb.embed_query("test")
+    print("****** async for ******")
+    async for chunk in llm.astream(
+        [
+            {"role": "user", "content": "你能帮我做什么?"},
+        ],
+        stream=True,
+    ):
+        print(chunk)
 
 
 @pytest.mark.skipif(

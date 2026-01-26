@@ -15,9 +15,13 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
+
 from .llm_gateway import ChatModel, Embeddings
+from .mock import MockChatModel, MockEmbeddings
 
 __all__ = [
     "ChatModel",
-    "Embeddings"
+    "Embeddings",
+    "MockChatModel",
+    "MockEmbeddings",
 ]

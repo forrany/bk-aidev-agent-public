@@ -1,14 +1,13 @@
-from langchain_core.documents import Document
 from typing import List, Tuple
 
+from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.models.utils import is_deepseek_r1_series_models, remove_thinking_process
 from aidev_agent.packages.model_management.registry import RegistryPluginMixIn
-
+from aidev_agent.services.pydantic_models import AgentOptions
 from aidev_agent.utils.decorator import timeit
-
 
 HUNYUAN_SPECIFIC_RESPONSE = "很抱歉，我还未学习到如何回答这个问题的内容，暂时无法提供相关信息。"
 reg = RegistryPluginMixIn()
@@ -51,7 +50,7 @@ def filter_and_select_topk(items, score_threshold, topk):
     return sorted_items[:topk]
 
 
-def invoke_decorator(agent_options, invoke_func, llm):
+def invoke_decorator(agent_options: AgentOptions, invoke_func, llm):
     def wrapper(*args, **kwargs):
         nonlocal llm
         # 根据 https://huggingface.co/deepseek-ai/DeepSeek-R1#usage-recommendations 的建议：

@@ -447,7 +447,7 @@ def test_make_structured_tool_real_execution():
 @pytest.fixture
 def sample_mcp_config():
     """MCP 配置示例"""
-    return {"tencentcloud-doc-mcp": {"url": "http://portal-mcp-server.woa.com/mcp", "transport": "streamable_http"}}
+    return {"tencentcloud-doc-mcp": {"url": "http://portal-mcp-server.example.com/mcp", "transport": "streamable_http"}}
 
 
 @pytest.fixture
@@ -455,7 +455,7 @@ def sample_mcp_config_with_auth():
     """带认证的 MCP 配置示例"""
     return {
         "authenticated-mcp": {
-            "url": "http://secure-mcp-server.woa.com/mcp",
+            "url": "http://secure-mcp-server.example.com/mcp",
             "transport": "streamable_http",
             "credential_type": "blueapps",
         }
@@ -471,6 +471,7 @@ def test_make_mcp_tools_basic(mock_get_loop, mock_mcp_client_class, sample_mcp_c
     mock_tool.name = "test-mcp-tool"
     mock_tool.description = "Test MCP tool"
     mock_tool.coroutine = AsyncMock()
+    mock_tool.metadata = {}  # 添加 metadata 属性
 
     # Mock MCP 客户端
     mock_client = MagicMock()
@@ -488,6 +489,7 @@ def test_make_mcp_tools_basic(mock_get_loop, mock_mcp_client_class, sample_mcp_c
     # 验证
     assert len(tools) == 1
     assert tools[0].name == "test-mcp-tool"
+    assert tools[0].metadata["mcp_name"] == "tencentcloud-doc-mcp"
     mock_mcp_client_class.assert_called_once()
     mock_loop.run_until_complete.assert_called_once()
 
@@ -499,6 +501,7 @@ def test_make_mcp_tools_with_blueapps_auth(mock_get_loop, mock_mcp_client_class,
     # Mock 工具
     mock_tool = MagicMock(spec=StructuredTool)
     mock_tool.coroutine = AsyncMock()
+    mock_tool.metadata = {}  # 添加 metadata 属性
 
     # Mock 客户端
     mock_client = MagicMock()
@@ -555,42 +558,41 @@ def test_make_mcp_tools_multiple_servers(mock_get_loop, mock_mcp_client_class):
     mock_tool1 = MagicMock(spec=StructuredTool)
     mock_tool1.name = "tool1"
     mock_tool1.coroutine = AsyncMock()
+    mock_tool1.metadata = {}  # 添加 metadata 属性
 
     mock_tool2 = MagicMock(spec=StructuredTool)
     mock_tool2.name = "tool2"
     mock_tool2.coroutine = AsyncMock()
+    mock_tool2.metadata = {}  # 添加 metadata 属性
 
-    # Mock 客户端
+    # Mock 客户端 - 为每个服务器返回一个工具
     mock_client = MagicMock()
-    mock_client.get_tools = AsyncMock(return_value=[mock_tool1, mock_tool2])
+    mock_client.get_tools = AsyncMock(return_value=[mock_tool1])
     mock_mcp_client_class.return_value = mock_client
 
-    # Mock 事件循环
+    # Mock 事件循环 - 每次调用返回一个工具
     mock_loop = MagicMock()
-    mock_loop.run_until_complete.return_value = [mock_tool1, mock_tool2]
+    mock_loop.run_until_complete.side_effect = [[mock_tool1], [mock_tool2]]
     mock_get_loop.return_value = mock_loop
 
     # 调用
     tools = make_mcp_tools(multi_server_config)
 
-    # 验证
+    # 验证 - 应该有2个工具（每个服务器一个）
     assert len(tools) == 2
-    assert tools[0].name == "tool1"
-    assert tools[1].name == "tool2"
+    assert mock_mcp_client_class.call_count == 2  # 为两个服务器各创建一个客户端
 
 
-# ================== MCPExceptionWrapper 测试 ==================
-
-
+# ================== wrap_mcp_exception 测试 ==================
 @pytest.mark.asyncio
 async def test_mcp_exception_wrapper_success():
-    """测试 MCPExceptionWrapper 正常执行"""
-    from aidev_agent.packages.langchain_core.tools.base import MCPExceptionWrapper
+    """测试 wrap_mcp_exception 正常执行"""
+    from aidev_agent.packages.langchain_core.tools.base import wrap_mcp_exception
 
     async def mock_coro(*args, **kwargs):
         return "success result"
 
-    wrapper = MCPExceptionWrapper(mock_coro)
+    wrapper = wrap_mcp_exception(mock_coro)
     result = await wrapper()
 
     assert result == "success result"
@@ -598,14 +600,14 @@ async def test_mcp_exception_wrapper_success():
 
 @pytest.mark.asyncio
 async def test_mcp_exception_wrapper_tool_exception():
-    """测试 MCPExceptionWrapper 处理 ToolException"""
-    from aidev_agent.packages.langchain_core.tools.base import MCPExceptionWrapper
+    """测试 wrap_mcp_exception 处理 ToolException"""
+    from aidev_agent.packages.langchain_core.tools.base import wrap_mcp_exception
     from langchain_core.tools.base import ToolException
 
     async def mock_coro(*args, **kwargs):
         raise ToolException("Tool error occurred")
 
-    wrapper = MCPExceptionWrapper(mock_coro)
+    wrapper = wrap_mcp_exception(mock_coro)
     result = await wrapper()
 
     assert isinstance(result, tuple)
@@ -615,13 +617,13 @@ async def test_mcp_exception_wrapper_tool_exception():
 
 @pytest.mark.asyncio
 async def test_mcp_exception_wrapper_connection_error():
-    """测试 MCPExceptionWrapper 处理连接错误"""
-    from aidev_agent.packages.langchain_core.tools.base import MCPExceptionWrapper
+    """测试 wrap_mcp_exception 处理连接错误"""
+    from aidev_agent.packages.langchain_core.tools.base import wrap_mcp_exception
 
     async def mock_coro(*args, **kwargs):
         raise ConnectionError("Connection refused")
 
-    wrapper = MCPExceptionWrapper(mock_coro)
+    wrapper = wrap_mcp_exception(mock_coro)
     result = await wrapper()
 
     assert isinstance(result, tuple)
@@ -631,13 +633,13 @@ async def test_mcp_exception_wrapper_connection_error():
 
 @pytest.mark.asyncio
 async def test_mcp_exception_wrapper_timeout_error():
-    """测试 MCPExceptionWrapper 处理超时错误"""
-    from aidev_agent.packages.langchain_core.tools.base import MCPExceptionWrapper
+    """测试 wrap_mcp_exception 处理超时错误"""
+    from aidev_agent.packages.langchain_core.tools.base import wrap_mcp_exception
 
     async def mock_coro(*args, **kwargs):
         raise TimeoutError("Request timeout")
 
-    wrapper = MCPExceptionWrapper(mock_coro)
+    wrapper = wrap_mcp_exception(mock_coro)
     result = await wrapper()
 
     assert isinstance(result, tuple)

@@ -1,25 +1,29 @@
-import json
 import re
 import uuid
-from collections import deque
 from logging import getLogger
-from time import time
-from typing import Any, ClassVar, Generator, Optional
-from uuid import uuid4
+from typing import Any, Callable, ClassVar, Generator, Optional
 
+from ag_ui.core import BaseEvent
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool
-from langchain_openai.chat_models.base import _convert_message_to_dict
+from langgraph.checkpoint.memory import (
+    InMemorySaver,  # TODO: 需要可配置checkpoint,默认使用InMemorySaver,真实需要使用可持久化的存储
+)
 from pydantic import BaseModel, Field
 
-from aidev_agent.enums import PromptRole, StreamEventType
-from aidev_agent.exceptions import AgentException, streaming_chunk_exception_handling
+from aidev_agent.core.ag_ui.aidev_agent import AidevAGUIAgent
+from aidev_agent.core.ag_ui.types import AgentInput
+from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
+from aidev_agent.enums import PromptRole
+from aidev_agent.exceptions import AgentException
 from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
+from aidev_agent.utils.async_utils import async_to_sync_generator
 from aidev_agent.utils.loop import get_event_loop
 
 logger = getLogger(__name__)
@@ -28,9 +32,10 @@ logger = getLogger(__name__)
 class ChatCompletionAgent(BaseModel):
     """聊天Agent"""
 
+    thread_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     chat_model: BaseChatModel
     non_thinking_llm: str | None = None
-    chat_history: list[ChatPrompt]
+    chat_history: list[ChatPrompt] | None = None
     files: list[dict] = Field(default_factory=list)
     tools: Optional[list[StructuredTool]] = None
     knowledge_bases: Optional[list[dict]] = None
@@ -43,24 +48,22 @@ class ChatCompletionAgent(BaseModel):
     callbacks: list[BaseCallbackHandler] | None = None
     agent_cls: type[CommonQAAgent] = CommonQAAgent
     agent_options: AgentOptions = Field(default_factory=AgentOptions)
-    run_by_agent: bool = False
+    messages: list[BaseMessage] = Field(default_factory=list)
 
     # using in streaming
-    first_chunk: bool = True
-    has_think: bool = False
-    last_event_type: StreamEventType = StreamEventType.NO
-    elapsed: list = [0.0, 0.0]
+    event_handler: Callable[[BaseEvent], None] | None = None
 
     IMAGE_FILE_PATTERN: ClassVar[re.Pattern] = re.compile(r"^\!\[.*\]\((http[^)]+/([^/]+?)\))")
     TOOL_EXECUTION_INTERVAL: ClassVar[int] = 10
     UPLOAD_IMAGE_PROMPT_PREFIX: ClassVar[Any] = "我上传了个图片文件,文件名为{file_name}。"
     SKIP_PROMPT_ROLE: ClassVar[list[str]] = ["guide"]
-    MAX_Q_LENGTH: ClassVar[int] = 5  # streaming Q lenghth
 
     class Config:
         arbitrary_types_allowed = True
 
     def convert_history_to_messages(self) -> list[BaseMessage]:
+        if not self.chat_history:
+            raise ValueError("The chat history cannot be empty.")
         return self._chat_history_to_langchain_messages(self._convert_contents(self.chat_history))
 
     def _chat_history_to_langchain_messages(self, chat_history: list[ChatPrompt]) -> list[BaseMessage]:
@@ -68,13 +71,13 @@ class ChatCompletionAgent(BaseModel):
         for each in chat_history:
             match each.role:
                 case PromptRole.USER.value:
-                    messages.append(HumanMessage(content=each.content))
+                    messages.append(HumanMessage(id=each.id, content=each.content))
                 case PromptRole.ASSISTANT.value:
-                    messages.append(AIMessage(content=each.content))
+                    messages.append(AIMessage(id=each.id, content=each.content))
                 case PromptRole.AI.value:
-                    messages.append(AIMessage(content=each.content))
+                    messages.append(AIMessage(id=each.id, content=each.content))
                 case PromptRole.SYSTEM.value:
-                    messages.append(SystemMessage(content=each.content))
+                    messages.append(SystemMessage(id=each.id, content=each.content))
         return messages
 
     def _convert_contents(self, contents: list[ChatPrompt]) -> list[ChatPrompt]:
@@ -112,7 +115,7 @@ class ChatCompletionAgent(BaseModel):
                 each.role = PromptRole.USER.value
 
             # 对于hunyuan需要兼容多`system`的case
-            if each.role == PromptRole.SYSTEM.value and "hunyuan" in self.model_name and self.is_run_by_agent():
+            if each.role == PromptRole.SYSTEM.value and "hunyuan" in self.model_name:
                 hunyuan_system_content.append(each.content)
             else:
                 new_contents.append(each)
@@ -123,119 +126,73 @@ class ChatCompletionAgent(BaseModel):
     def model_name(self) -> str:
         return getattr(self.chat_model, "model_name", "")
 
-    def is_run_by_agent(self) -> bool:
-        return any(
-            [
-                self.run_by_agent,
-                self.tools,
-                self.files,
-                self.knowledge_bases,
-                self.knowledges,
-                self.agent_options.knowledge_query_options.qa_response_knowledge_bases,
-                self.agent_options.intent_recognition_options.intent_recognition_knowledge,
-            ]
-        )
-
-    def execute(self, execute_kwargs: ExecuteKwargs) -> dict | Generator[str, None, None] | str:
+    def execute(self, execute_kwargs: ExecuteKwargs) -> Generator[str, None, None] | str:
         # 执行agent操作
-        messages = self.convert_history_to_messages()
+        if not self.messages:
+            self.messages = self.convert_history_to_messages()
+        messages = self.messages
         self.chat_model.callbacks = self.callbacks
         return self._execute(messages, execute_kwargs)
 
-    def _execute(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs = None):
+    def _execute(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs):
         if not messages:
             raise ValueError("The messages list cannot be empty.")
         agent_e, cfg = self._get_agent(messages, execute_kwargs=execute_kwargs)
         cfg.setdefault("configurable", {})
         cfg["configurable"]["thread_id"] = execute_kwargs.session_code or uuid.uuid4().hex
         cfg["configurable"]["execute_kwargs"] = execute_kwargs
+        messages = [msg for msg in messages]
         if execute_kwargs.stream:
-            return agent_e.agent.stream_standard_event(
-                agent_e,
-                cfg,
-                {"messages": messages},
-                timeout=self.agent_options.intent_recognition_options.heartbeats_interval,
+            body = {
+                "thread_id": self.thread_id,
+                "run_id": messages[-1].id or uuid.uuid4().hex,
+                "state": {},
+                "messages": langchain_messages_to_agui(messages),
+            }
+            agent_input = AgentInput(**body)
+            agui_entry = AidevAGUIAgent(
+                name="test_agui_agent",
+                graph=agent_e,
+                event_handler=self.event_handler,
+                tools={each.name: each for each in self.tools} if self.tools else {},
             )
+            return self._stream_with_queue(agui_entry, agent_input)
         else:
             loop = get_event_loop()
             result = loop.run_until_complete(
-                agent_e.ainvoke(
-                    {
-                        "messages": messages,
-                    },
-                    cfg,
-                )
+                agent_e.ainvoke({"messages": messages, "execute_kwargs": execute_kwargs}, cfg)
             )
-            if len(result["messages"]) >= 1:
-                last_message = result["messages"][-1].content
-            else:
-                raise ValueError(" messages 对象没有任何输出")
+            result_output = result.get("messages")[-1]
             return_data = {
-                "choices": [{"delta": {"role": "assistant", "content": last_message}}],
+                "choices": [{"delta": {"role": "assistant", "content": result_output.content}}],
                 "model": self.model_name,
-                "id": str(uuid4()),
+                "id": result_output.id,
                 "reference_doc": result.get("reference_doc", []),
             }
             return return_data
 
-    def _stream(self, messages: list[BaseMessage]) -> Generator[str, None, None]:
-        # 流式处理
-        q = deque(maxlen=self.MAX_Q_LENGTH)
-        try:
-            for each in self.chat_model.stream(input=messages):
-                if self.first_chunk and not each.content and not each.additional_kwargs.get("reasoning_content"):
-                    continue
-                event_type = (
-                    StreamEventType.THINK if each.additional_kwargs.get("reasoning_content") else StreamEventType.TEXT
-                )
-                if self.last_event_type == StreamEventType.NO and event_type == StreamEventType.THINK:
-                    self.elapsed[0] = time()
-                if self.last_event_type == StreamEventType.THINK and event_type == StreamEventType.TEXT:
-                    self.elapsed[1] = time()
-                    each.content = "\n\n" + str(each.content)
-                self.last_event_type = event_type
-                self.first_chunk = False
-                ret = {
-                    "event": event_type.value,
-                    "content": each.content
-                    if event_type == StreamEventType.TEXT
-                    else each.additional_kwargs.get("reasoning_content", ""),
-                }
-                if not self.has_think and ret["event"] == StreamEventType.THINK.value and ret["content"].strip():
-                    self.has_think = True
-                q.append(ret)
-                if len(q) == self.MAX_Q_LENGTH:
-                    # 如果没有think内容则不输出think
-                    ret = self._pop_q_get_ret(q)
-                    if ret:
-                        yield f"data: {json.dumps(ret)}\n\n"
-            while q:
-                ret = self._pop_q_get_ret(q)
-                if ret:
-                    yield f"data: {json.dumps(ret)}\n\n"
-        except Exception as exception:
-            logger.exception(exception)
-            yield streaming_chunk_exception_handling(exception)
-        yield "data: [DONE]\n\n"
+    def _stream_with_queue(self, agui_entry: AidevAGUIAgent, agent_input: AgentInput) -> Generator[Any, None, None]:
+        """使用队列处理器缓存流式请求，支持断点续传
 
-    def _pop_q_get_ret(self, q):
-        ret = q.popleft()
-        if not self.has_think and ret["event"] == StreamEventType.THINK.value:
-            return None
-        if self.has_think and self.elapsed[1] != 0 and q[0]["event"] == StreamEventType.TEXT.value:
-            ret["elapsed_time"] = (self.elapsed[1] - self.elapsed[0]) * 1000
-            self.elapsed = [0.0, 0.0]
-        return ret
+        断点续传逻辑：
+        1. 如果流正在运行或已完成，且有未消费的缓存消息，则从 client_index 位置续传
+        2. 否则开始新的流式请求
 
-    def _invoke(self, messages: list[BaseMessage]) -> dict:
-        # 非流式
-        result = self.chat_model.invoke(input=messages)
-        message_dict = _convert_message_to_dict(result)
-        return {
-            "choices": [{"delta": message_dict}],
-            "model": self.model_name,
-            "id": result.id,
-        }
+        客户端在消费时应该在每次成功接收后更新 client_index，
+        以便在连接中断后能够从正确的位置继续。
+
+        Args:
+            thread_id: 线程ID，用于标识队列
+            agui_entry: AGUI Agent 入口
+            agent_input: Agent 输入参数
+
+        Yields:
+            流式响应数据
+        """
+        helper = GeneratorStreamingHelper(
+            thread_id=agent_input.thread_id,
+        )
+        return helper.stream(async_to_sync_generator(agui_entry.run(agent_input)))
 
     def _get_agent(
         self, messages: list[BaseMessage], *, execute_kwargs: ExecuteKwargs
@@ -262,4 +219,5 @@ class ChatCompletionAgent(BaseModel):
             callbacks=self.callbacks,
             agent_options=self.agent_options,
             execute_kwargs=execute_kwargs,
+            checkpointer=InMemorySaver(),  # TODO: 需要可配置checkpoint
         )
