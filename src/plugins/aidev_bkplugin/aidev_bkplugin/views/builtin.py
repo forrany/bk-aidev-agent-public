@@ -7,6 +7,7 @@ from logging import getLogger
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.enums import PromptRole
 from aidev_agent.services.chat import ChatPrompt
+from aidev_agent.services.pydantic_models import ExecuteKwargs
 from bk_plugin_framework.kit.api import custom_authentication_classes
 from bk_plugin_framework.kit.decorators import inject_user_token, login_exempt
 from blueapps.core.exceptions import ClientBlueException
@@ -24,7 +25,9 @@ from aidev_bkplugin.permissions import AgentPluginPermission
 from aidev_bkplugin.services.agent import (
     build_chat_completion_agent_by_chat_history,
     build_chat_completion_agent_by_session_code,
+    build_chat_completion_agent_by_thread_id,
     build_execute_kwargs,
+    execute_agent_with_save,
     get_agent_config_info,
     get_agent_version,
 )
@@ -161,12 +164,23 @@ class ChatCompletionViewSet(PluginViewSet):
         execute_kwargs = build_execute_kwargs(request.data.get("execute_kwargs", {}), request.user.username)
         session_code = request.data.get("session_code", "")
         execute_kwargs.session_code = request.data.get("session_code", "")
+
+        _input = request.data.get("input", "")
+
+        thread_id = execute_kwargs.thread_id
+        if thread_id:
+            return self._handle_thread_id_mode(
+                thread_id=thread_id,
+                input_text=_input,
+                username=request.user.username,
+                execute_kwargs=execute_kwargs,
+            )
+
         # 构造 agent_instance，在 ChatCompletion 中，获取到的是 ChatCompletionAgent
         if session_code:
             agent_instance = build_chat_completion_agent_by_session_code(session_code)
         else:
             chat_history = request.data.get("chat_prompts", []) or request.data.get("chat_history", [])
-            _input = request.data.get("input", "")
             if not chat_history and not _input:
                 raise ClientBlueException(message="chat_history or input is required")
             chat_history = [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history]
@@ -180,6 +194,28 @@ class ChatCompletionViewSet(PluginViewSet):
         else:
             result = agent_instance.execute(execute_kwargs)
             return Response(result)
+
+    def _handle_thread_id_mode(self, thread_id: str, input_text: str, username: str, execute_kwargs: ExecuteKwargs):
+        """
+        通过 thread_id 自动管理会话，自动保存用户消息和 AI 回复
+        """
+        if not input_text:
+            raise ClientBlueException(message="input is required when using thread_id")
+
+        agent_instance, session_code = build_chat_completion_agent_by_thread_id(
+            thread_id=thread_id,
+            input_text=input_text,
+            username=username,
+            save_content=True,
+        )
+        execute_kwargs.session_code = session_code
+
+        # 执行 Agent 并保存 AI 回复
+        result = execute_agent_with_save(agent_instance, execute_kwargs, session_code, username)
+
+        if execute_kwargs.stream:
+            return self.streaming_response(result)
+        return Response(result)
 
     def streaming_response(self, generator):
         sr = StreamingHttpResponse(generator)
