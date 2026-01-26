@@ -10,6 +10,7 @@ from aidev_agent.enums import AgentBuildType, ChatContentStatus, PromptRole, Str
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.chat import ChatCompletionAgent
 from aidev_agent.services.pydantic_models import ChatPrompt, ExecuteKwargs
+from bkapi_client_core.exceptions import HTTPResponseError
 from django.conf import settings
 from django.core.cache import cache
 from opentelemetry import trace
@@ -134,37 +135,38 @@ def generate_session_code(username: str, agent_code: str, thread_id: str) -> str
     return hashlib.md5(raw_string.encode()).hexdigest()
 
 
-def get_or_create_session_by_thread_id(
-    username: str, thread_id: str, agent_code: str | None = None
-) -> tuple[str, bool]:
+def get_or_create_session_by_thread_id(username: str, thread_id: str, agent_code: str | None = None) -> str:
     """
     根据 thread_id 获取或创建会话
 
     Returns:
-        Tuple[session_code, is_new_session]
+        session_code
     """
     agent_code = agent_code or settings.APP_CODE
     session_code = generate_session_code(username, agent_code, thread_id)
 
     client = BKAidevApi.get_client()
 
-    # 尝试获取已存在的会话
-    result = client.api.retrieve_chat_session(
-        path_params={"session_code": session_code}, headers={"X-BKAIDEV-USER": username}
-    )
-    if result.get("result"):
-        # 会话已存在
-        return session_code, False
-
-    # 会话不存在，创建新会话
-    client.api.create_chat_session(
-        json={
-            "session_code": session_code,
-            "session_name": f"Thread-{thread_id[:8]}",  # 使用 thread_id 前8位作为名称
-        },
-        headers={"X-BKAIDEV-USER": username},
-    )
-    return session_code, True
+    try:
+        result = client.api.retrieve_chat_session(
+            path_params={"session_code": session_code}, headers={"X-BKAIDEV-USER": username}
+        )
+        if result.get("data"):
+            return session_code
+    except HTTPResponseError as e:
+        logger.warning("Error retrieving chat session: {e}")
+        if e.response_status_code == 404:
+            # 会话不存在，创建新会话
+            client.api.create_chat_session(
+                json={
+                    "session_code": session_code,
+                    "session_name": f"Thread-{thread_id[:8]}",  # 使用 thread_id 前8位作为名称
+                },
+                headers={"X-BKAIDEV-USER": username},
+            )
+            return session_code
+        else:
+            raise e
 
 
 def save_session_content(
@@ -214,7 +216,7 @@ def build_chat_completion_agent_by_thread_id(
     agent_code = agent_code or settings.APP_CODE
 
     # 1. 获取或创建会话
-    session_code, is_new = get_or_create_session_by_thread_id(username, thread_id, agent_code)
+    session_code = get_or_create_session_by_thread_id(username, thread_id, agent_code)
 
     # 2. 保存用户输入到会话
     if save_content and input_text:
