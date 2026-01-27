@@ -113,7 +113,14 @@ class EventDispatcher:
 
 
 class AidevAGUIAgent(LangGraphAGUIAgent):
-    """实现了对自定义事件处理的 AI 辅助 Agent"""
+    """实现了对自定义事件处理的 AI 辅助 Agent
+
+    事件处理机制：
+    1. event_handler: 通用事件钩子，接收所有 BaseEvent，用于 BaseSessionWriter 等外部处理器
+    2. EventDispatcher: 内部事件分发器，处理特定事件类型的转换（如工具事件）
+
+    注意：BaseSessionWriter 已实现完整的事件分发逻辑，会自行处理 RAW/RUN_ERROR 等事件类型
+    """
 
     def __init__(
         self,
@@ -146,17 +153,18 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
 
     def _dispatch_event(self, event: BaseEvent) -> str:
         """分发事件，使用 EventDispatcher 处理不同类型的事件"""
-        self._custom_event_handling(event)
+        # 触发外部事件处理器（如 BaseSessionWriter）
+        if self._event_handler:
+            try:
+                self._event_handler(event)
+            except Exception as e:
+                logger.exception(f"Event handler failed: {e}")
+
         return self._event_dispatcher.dispatch(event)
 
     def _parent_dispatch(self, event: BaseEvent) -> str:
         """调用父类的事件分发方法"""
         return super()._dispatch_event(event)
-
-    def _custom_event_handling(self, event: BaseEvent) -> None:
-        """处理自定义事件钩子"""
-        if self._event_handler:
-            self._event_handler(event)
 
     async def _handle_stream_events(self, input: RunAgentInput) -> AsyncGenerator[str, None]:
         """处理流事件，添加异常处理"""

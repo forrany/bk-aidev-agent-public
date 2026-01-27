@@ -33,6 +33,7 @@ class LangGraphEventTypes(str, Enum):
     OnToolEnd = "on_tool_end"
     OnCustomEvent = "on_custom_event"
     OnInterrupt = "on_interrupt"
+    Error = "error"
 
 
 class CustomEventNames(str, Enum):
@@ -40,6 +41,7 @@ class CustomEventNames(str, Enum):
     ManuallyEmitToolCall = "manually_emit_tool_call"
     ManuallyEmitState = "manually_emit_state"
     Exit = "exit"
+    OnToolNodeFinish = "on_tool_node_finish"
 
 
 State = dict[str, Any]

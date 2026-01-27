@@ -1,14 +1,16 @@
 import logging
 from typing import Any, Callable, Dict, List, Optional, Type, cast
 
+from ag_ui.core import BaseEvent
+
 from aidev_agent.api import BKAidevApi
 from aidev_agent.api.abstract_client import AbstractBKAidevResourceManager
 from aidev_agent.config import settings
-from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.tools import make_mcp_tools
-from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.services.chat import ChatCompletionAgent
+from aidev_agent.services.common_agent import CommonQAAgent
 from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt
 
@@ -81,6 +83,7 @@ class AgentInstanceFactory:
         switch_agent_by_scene: bool = False,
         config_manager_class: Type[AgentConfigManager] | None = AgentConfigManager,
         is_temporary: bool = False,
+        event_handler: Callable[[BaseEvent], None] | None = None,
     ):
         """
         构建Agent实例
@@ -96,6 +99,7 @@ class AgentInstanceFactory:
         :param switch_agent_by_scene: 是否根据场景切换智能体
         :param config_manager_class: 配置管理类
         :param is_temporary: 是否为临时Agent
+        :param event_handler: 事件处理器，接收所有 AG-UI 事件（Callable[[BaseEvent], None]）
         :return: 构建好的Agent实例
         """
         # 创建工厂实例
@@ -126,6 +130,10 @@ class AgentInstanceFactory:
 
         # 根据agent_type构建特定参数
         agent_args = factory._build_agent_args(base_args)
+
+        # 设置事件处理器
+        if event_handler is not None:
+            agent_args["event_handler"] = event_handler
 
         # 创建Agent实例
         return factory._create_agent_instance(agent_args)

@@ -2,9 +2,11 @@ import base64
 import json
 
 from aidev_agent.api.bk_aidev import BKAidevApi
+from aidev_agent.api.bkaidev_client.client import Client
 from aidev_agent.enums import AgentBuildType
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.chat import ChatCompletionAgent
+from aidev_agent.services.event_handlers import AGUISessionWriter
 from aidev_agent.services.pydantic_models import ChatPrompt, ExecuteKwargs
 from django.conf import settings
 from django.core.cache import cache
@@ -14,15 +16,36 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from .factory import agent_config_factory, agent_factory
 
 
-def build_chat_completion_agent_by_session_code(session_code: str) -> ChatCompletionAgent:
+def build_chat_completion_agent_by_session_code(
+    session_code: str,
+    client: Client | None = None,
+    username: str = "",
+) -> ChatCompletionAgent:
+    """构建 ChatCompletionAgent
+
+    Args:
+        session_code: 会话标识
+        client: BKAidev API 客户端（提供时启用回写）
+        username: 用户名
+
+    Returns:
+        ChatCompletionAgent 实例，如果提供了 client 则配置回写回调
+    """
     agent_cls = agent_factory.get(settings.DEFAULT_NAME)
     config_manager = agent_config_factory.get(settings.DEFAULT_NAME)
-    return AgentInstanceFactory.build_agent(
+
+    # 构建 event_handler（如果提供了 client）
+    event_handler = AGUISessionWriter(session_code=session_code, client=client, username=username) if client else None
+
+    agent_instance = AgentInstanceFactory.build_agent(
         build_type=AgentBuildType.SESSION,
         session_code=session_code,
         agent_cls=agent_cls,
         config_manager_class=config_manager,
+        event_handler=event_handler,
     )
+
+    return agent_instance
 
 
 def build_chat_completion_agent_by_chat_history(chat_history: list[ChatPrompt]) -> ChatCompletionAgent:

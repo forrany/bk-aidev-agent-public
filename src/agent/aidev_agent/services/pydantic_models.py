@@ -66,6 +66,9 @@ class ChatPrompt(BaseModel):
 
     @model_validator(mode="before")
     def validate_content_with_rendered(cls, values: Any) -> Any:
+        # 将 id 转换为字符串（平台返回的可能是 int）
+        if "id" in values and values["id"] is not None:
+            values["id"] = str(values["id"])
         extra = values.get("extra")
         if extra:
             if isinstance(extra, dict):

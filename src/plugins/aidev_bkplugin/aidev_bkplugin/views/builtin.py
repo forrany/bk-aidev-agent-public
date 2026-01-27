@@ -20,6 +20,7 @@ from rest_framework.status import is_success
 from rest_framework.views import APIView, Response
 from rest_framework.viewsets import ViewSetMixin
 
+from aidev_bkplugin.constants import AGUI_PROTOCOL_VERSION
 from aidev_bkplugin.permissions import AgentPluginPermission
 from aidev_bkplugin.services.agent import (
     build_chat_completion_agent_by_chat_history,
@@ -87,7 +88,8 @@ class ChatSessionViewSet(PluginViewSet):
         return Response(data=result["data"])
 
     def create(self, request):
-        result = client.api.create_chat_session(json=request.data, headers={"X-BKAIDEV-USER": request.user.username})
+        data = {**request.data, "protocol_version": AGUI_PROTOCOL_VERSION}
+        result = client.api.create_chat_session(json=data, headers={"X-BKAIDEV-USER": request.user.username})
         return Response(data=result["data"])
 
     def update(self, request, pk, **kwargs):
@@ -156,19 +158,31 @@ class ChatCompletionViewSet(PluginViewSet):
         # 调用Agent 的时候需要传入的相关参数
         execute_kwargs = build_execute_kwargs(request.data.get("execute_kwargs", {}), request.user.username)
         session_code = request.data.get("session_code", "")
-        execute_kwargs.session_code = request.data.get("session_code", "")
-        # 构造 agent_instance，在 ChatCompletion 中，获取到的是 ChatCompletionAgent
+        execute_kwargs.session_code = session_code
+        # 构造 agent_instance
+        # 有 session_code 时走 build_chat_completion_agent_by_session_code（传入 client 启用回写）
+        # 否则用 chat_history/input 走 build_chat_completion_agent_by_chat_history
+        _input = request.data.get("input", "")
         if session_code:
-            agent_instance = build_chat_completion_agent_by_session_code(session_code)
+            agent_instance = build_chat_completion_agent_by_session_code(
+                session_code=session_code,
+                client=client,
+                username=request.user.username,
+            )
+            # 如果有 input 参数，追加到会话历史（支持新会话或追加消息）
+            if _input:
+                if agent_instance.chat_history is None:
+                    agent_instance.chat_history = []
+                agent_instance.chat_history.append(ChatPrompt(role="user", content=_input))
         else:
             chat_history = request.data.get("chat_prompts", []) or request.data.get("chat_history", [])
-            _input = request.data.get("input", "")
             if not chat_history and not _input:
-                raise ClientBlueException(message="chat_history or input is required")
+                raise ClientBlueException(message="chat_history, input or session_code is required")
             chat_history = [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history]
             if _input:
                 chat_history.append(ChatPrompt(role="user", content=_input))
-            agent_instance = build_chat_completion_agent_by_chat_history(chat_history)
+            agent_instance = build_chat_completion_agent_by_chat_history(chat_history=chat_history)
+
         # 执行 agent
         if execute_kwargs.stream:
             generator = agent_instance.execute(execute_kwargs)
