@@ -182,7 +182,7 @@ class AgentInstanceFactory:
 
         # 获取会话上下文数据
         session_code = cast(str, self.session_code)
-        session_context_data = self.resource_manager.get_chat_session_context(session_code)
+        session_context_data = self.resource_manager.get_chat_session_context(session_code) or []
 
         session_context_data = [each for each in session_context_data if each.get("role", "") != "system"]
 
@@ -239,12 +239,14 @@ class AgentInstanceFactory:
             "base_url": settings.LLM_GW_ENDPOINT,
         }
 
-        if self.temperature is not None:
-            kwargs["temperature"] = self.temperature
+        # 优先使用工厂传入的参数，否则使用配置中的参数
+        temperature = self.temperature if self.temperature is not None else config.temperature
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
-        # 添加max_tokens参数支持
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens if self.max_tokens is not None else config.max_tokens
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
 
         # Only add auth_headers if it has a value
         if self.auth_headers:
@@ -273,7 +275,7 @@ class AgentInstanceFactory:
 
         chat_history = [
             ChatPrompt.model_validate(each)
-            for each in session_context_data
+            for each in (session_context_data or [])
             if each.get("content") and each["role"] != "system"
         ]
         for each in chat_history:

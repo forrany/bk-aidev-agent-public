@@ -126,7 +126,6 @@ class ApiWrapper:
 
     # 如果同个请求调用过多,则返回此prompt
     CALL_TOO_MUCH_PROMPT: str = """Same request call too much , please return FinalAnswer directly."""
-    TIMEOUT: int = 60
 
     def __init__(
         self,
@@ -140,6 +139,7 @@ class ApiWrapper:
         complex_fields: list | None = None,
         builtin_fields: dict | None = None,
         extra: dict | None = None,
+        timeout: int | None = None,
     ):
         self.session = requests.Session()
         self._method = http_method
@@ -153,6 +153,7 @@ class ApiWrapper:
         self._complex_fields = complex_fields
         self._builtin_fields = builtin_fields or {}
         self._extra = ToolExtra.model_validate(extra or {})
+        self._timeout = timeout if timeout is not None else settings.get("TOOL_CALL_TIMEOUT", 60)
 
     def __call__(self, **kwargs):
         if self._check_max_call(kwargs):
@@ -195,7 +196,7 @@ class ApiWrapper:
                 headers=self._header if self._header else None,
                 params=self._query if self._query else None,
                 json=self._body if self._body else None,
-                timeout=self.TIMEOUT,
+                timeout=self._timeout,
             )
             resp.raise_for_status()
             try:
