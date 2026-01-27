@@ -3,12 +3,15 @@ import hashlib
 import json
 import logging
 import os
+from functools import lru_cache
 
 import pkg_resources
 from aidev_agent.api.bk_aidev import BKAidevApi
+from aidev_agent.api.bkaidev_client.client import Client
 from aidev_agent.enums import AgentBuildType, ChatContentStatus, PromptRole, StreamEventType
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.chat import ChatCompletionAgent
+from aidev_agent.services.event_handlers import AGUISessionWriter
 from aidev_agent.services.pydantic_models import ChatPrompt, ExecuteKwargs
 from bkapi_client_core.exceptions import HTTPResponseError
 from django.conf import settings
@@ -21,20 +24,51 @@ from .factory import agent_config_factory, agent_factory
 logger = logging.getLogger(__name__)
 
 
-def build_chat_completion_agent_by_session_code(session_code: str, username: str | None = None) -> ChatCompletionAgent:
+@lru_cache(maxsize=1)
+def _get_checkpointer():
+    """获取 Checkpointer 单例实例（延迟导入避免循环依赖）"""
+    from aidev_bkplugin.models import Checkpoint, Write
+    from aidev_bkplugin.packages.checkpoint import BKDjangoSaver
+
+    return BKDjangoSaver(checkpoint_model=Checkpoint, writes_model=Write)
+
+
+def build_chat_completion_agent_by_session_code(
+    session_code: str,
+    client: Client | None = None,
+    username: str = "",
+) -> ChatCompletionAgent:
+    """构建 ChatCompletionAgent
+
+    Args:
+        session_code: 会话标识
+        client: BKAidev API 客户端（提供时启用回写）
+        username: 用户名
+
+    Returns:
+        ChatCompletionAgent 实例，如果提供了 client 则配置回写回调
+    """
     agent_cls = agent_factory.get(settings.DEFAULT_NAME)
     config_manager = agent_config_factory.get(settings.DEFAULT_NAME)
-    return AgentInstanceFactory.build_agent(
+
+    # 构建 event_handler（如果提供了 client）
+    event_handler = AGUISessionWriter(session_code=session_code, client=client, username=username) if client else None
+
+    agent_instance = AgentInstanceFactory.build_agent(
         build_type=AgentBuildType.SESSION,
         session_code=session_code,
         agent_cls=agent_cls,
         config_manager_class=config_manager,
+        checkpointer=_get_checkpointer(),
+        event_handler=event_handler,
         username=username,
     )
 
+    return agent_instance
+
 
 def build_chat_completion_agent_by_chat_history(
-    chat_history: list[ChatPrompt], username: str | None = None
+    chat_history: list[ChatPrompt], username: str = ""
 ) -> ChatCompletionAgent:
     role_contents = get_agent_role_info()
     if role_contents:
@@ -46,6 +80,7 @@ def build_chat_completion_agent_by_chat_history(
         session_context_data=[each.model_dump() for each in chat_history],
         agent_cls=agent_cls,
         config_manager_class=config_manager,
+        checkpointer=_get_checkpointer(),
         username=username,
     )
     return agent_instance
@@ -119,6 +154,31 @@ def build_execute_kwargs(_execute_kwargs: dict, username: str | None = None) -> 
     return execute_kwargs
 
 
+def run_chat_completion_with_thread_id(
+    thread_id: str,
+    input_text: str,
+    username: str,
+    execute_kwargs: ExecuteKwargs,
+    save_content: bool = True,
+):
+    """
+    通过 thread_id 统一执行 ChatCompletion 并自动处理会话保存。
+    供 builtin view 与 wxbot 共用，避免 HTTP 自调用。
+    """
+    if not input_text:
+        raise ValueError("input_text is required when using thread_id")
+
+    agent_instance, session_code = build_chat_completion_agent_by_thread_id(
+        thread_id=thread_id,
+        input_text=input_text,
+        username=username,
+        save_content=save_content,
+    )
+    execute_kwargs.session_code = session_code
+    result = execute_agent_with_save(agent_instance, execute_kwargs, session_code, username)
+    return result, session_code
+
+
 def get_agent_version():
     """获取所有以 aidev 开头的已安装包及其版本"""
     installed_packages = pkg_resources.working_set
@@ -158,7 +218,7 @@ def get_or_create_session_by_thread_id(username: str, thread_id: str, agent_code
         if result.get("data"):
             return session_code
     except HTTPResponseError as e:
-        logger.warning("Error retrieving chat session: {e}")
+        logger.warning("Error retrieving chat session: %s", e)
         if e.response_status_code == 404:
             # 会话不存在，创建新会话
             client.api.create_chat_session(
@@ -235,7 +295,6 @@ def build_chat_completion_agent_by_thread_id(
         session_code=session_code,
         agent_cls=agent_cls,
         config_manager_class=config_manager,
-        username=username,
     )
 
     return agent_instance, session_code
@@ -311,9 +370,12 @@ def wrap_generator_with_save(generator, session_code: str, username: str):
                         _flush_current_content()
                         current_event_type = event_type
 
-                    if event_type == StreamEventType.THINK.value and content:
-                        current_content.append(content)
-                    elif event_type == StreamEventType.TEXT.value and content:
+                    if (
+                        event_type == StreamEventType.THINK.value
+                        and content
+                        or event_type == StreamEventType.TEXT.value
+                        and content
+                    ):
                         current_content.append(content)
                     elif event_type == StreamEventType.ERROR.value:
                         content = data.get("message")
@@ -351,7 +413,7 @@ def wrap_generator_with_save(generator, session_code: str, username: str):
                 role=PromptRole.AI.value,
                 content="".join(final_content_parts),
                 username=username,
-                status=ChatContentStatus.FAIL.value if has_error else ChatContentStatus.SUCCESS.value,
+                status=ChatContentStatus.ERROR.value if has_error else ChatContentStatus.SUCCESS.value,
             )
 
 

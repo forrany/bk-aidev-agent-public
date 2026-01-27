@@ -6,13 +6,11 @@ from typing import Any, Callable, ClassVar, Generator, Optional
 from ag_ui.core import BaseEvent
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool
-from langgraph.checkpoint.memory import (
-    InMemorySaver,  # TODO: 需要可配置checkpoint,默认使用InMemorySaver,真实需要使用可持久化的存储
-)
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import BaseModel, Field
 
 from aidev_agent.core.ag_ui.aidev_agent import AidevAGUIAgent
@@ -49,6 +47,7 @@ class ChatCompletionAgent(BaseModel):
     agent_cls: type[CommonQAAgent] = CommonQAAgent
     agent_options: AgentOptions = Field(default_factory=AgentOptions)
     messages: list[BaseMessage] = Field(default_factory=list)
+    checkpointer: BaseCheckpointSaver | None = None
 
     # using in streaming
     event_handler: Callable[[BaseEvent], None] | None = None
@@ -67,18 +66,38 @@ class ChatCompletionAgent(BaseModel):
         return self._chat_history_to_langchain_messages(self._convert_contents(self.chat_history))
 
     def _chat_history_to_langchain_messages(self, chat_history: list[ChatPrompt]) -> list[BaseMessage]:
+        """
+        将 ChatPrompt 列表转换为 LangChain 消息列表
+        支持从 builtin_property 中提取 tool_calls 和 tool_call_id 等协议字段，
+        以支持多轮工具调用场景的历史消息透传。
+        """
         messages: list[BaseMessage] = []
         for each in chat_history:
+            bp = each.builtin_property or {}
             match each.role:
                 case PromptRole.USER.value:
                     messages.append(HumanMessage(id=each.id, content=each.content))
-                case PromptRole.ASSISTANT.value:
-                    messages.append(AIMessage(id=each.id, content=each.content))
-                case PromptRole.AI.value:
-                    messages.append(AIMessage(id=each.id, content=each.content))
+                case PromptRole.ASSISTANT.value | PromptRole.AI.value:
+                    tool_calls = self._extract_tool_calls(bp) or None
+                    messages.append(AIMessage(id=each.id, content=each.content, tool_calls=tool_calls))
                 case PromptRole.SYSTEM.value:
                     messages.append(SystemMessage(id=each.id, content=each.content))
+                case PromptRole.TOOL.value:
+                    content = each.content if isinstance(each.content, str) else str(each.content)
+                    messages.append(ToolMessage(id=each.id, content=content, tool_call_id=bp.get("tool_call_id", "")))
         return messages
+
+    def _extract_tool_calls(self, builtin_property: dict) -> list[dict]:
+        """从 builtin_property 中提取 tool_calls 列表"""
+        return [
+            {
+                "id": tc.get("id", ""),
+                "name": tc.get("function", {}).get("name", ""),
+                "args": tc.get("function", {}).get("arguments", "{}"),
+                "type": "tool_call",
+            }
+            for tc in builtin_property.get("tool_calls", [])
+        ]
 
     def _convert_contents(self, contents: list[ChatPrompt]) -> list[ChatPrompt]:
         """将无需送到大模型处理的content去掉"""
@@ -139,7 +158,7 @@ class ChatCompletionAgent(BaseModel):
             raise ValueError("The messages list cannot be empty.")
         agent_e, cfg = self._get_agent(messages, execute_kwargs=execute_kwargs)
         cfg.setdefault("configurable", {})
-        cfg["configurable"]["thread_id"] = execute_kwargs.session_code or uuid.uuid4().hex
+        cfg["configurable"]["thread_id"] = execute_kwargs.session_code or self.thread_id
         cfg["configurable"]["execute_kwargs"] = execute_kwargs
         messages = [msg for msg in messages]
         if execute_kwargs.stream:
@@ -219,5 +238,5 @@ class ChatCompletionAgent(BaseModel):
             callbacks=self.callbacks,
             agent_options=self.agent_options,
             execute_kwargs=execute_kwargs,
-            checkpointer=InMemorySaver(),  # TODO: 需要可配置checkpoint
+            checkpointer=self.checkpointer,
         )

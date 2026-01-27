@@ -1,5 +1,6 @@
 import json
 import re
+import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from enum import Enum
@@ -229,6 +230,8 @@ def agui_messages_to_langchain(messages: list[AGUIMessage]) -> list[BaseMessage]
     langchain_messages = []
     for message in messages:
         role = message.role
+        # 确保每条消息都有唯一的 id，避免 LangGraph add_messages reducer 错误地替换消息
+        message.id = message.id if (message.id and message.id != "None") else str(uuid.uuid4())
         if role == "user":
             # Handle multimodal content
             if isinstance(message.content, str):

@@ -2,14 +2,17 @@ import logging
 import re
 from typing import Any, Callable, Dict, List, Optional, Type, cast
 
+from ag_ui.core import BaseEvent
+from langgraph.checkpoint.base import BaseCheckpointSaver
+
 from aidev_agent.api import BKAidevApi
 from aidev_agent.api.abstract_client import AbstractBKAidevResourceManager
 from aidev_agent.config import settings
-from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.tools import make_mcp_tools
-from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.services.chat import ChatCompletionAgent
+from aidev_agent.services.common_agent import CommonQAAgent
 from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt
 
@@ -41,6 +44,7 @@ class AgentInstanceFactory:
         switch_agent_by_scene: bool = False,
         config_manager_class: type[AgentConfigManager] | None = None,
         is_temporary: bool = False,
+        checkpointer: BaseCheckpointSaver | None = None,
         username: str | None = None,
     ):
         """
@@ -54,8 +58,10 @@ class AgentInstanceFactory:
         :param resource_manager:  bkaidev 资源管理
         :param temperature: 模型温度
         :param max_tokens: 模型最大回复长度
+        :param max_tokens: 模型最大回复长度
         :param switch_agent_by_scene: 是否根据场景切换智能体
         :param is_temporary: 是否为临时Agent
+        :param checkpointer: Checkpoint 存储后端，用于会话状态持久化
         :param username: 用户名
         """
         self.resource_manager = resource_manager or BKAidevApi.get_client()
@@ -68,9 +74,11 @@ class AgentInstanceFactory:
         self.auth_headers = auth_headers or None
         self.temperature = temperature or None
         self.max_tokens = max_tokens or None
+        self.max_tokens = max_tokens or None
         self.switch_agent_by_scene = switch_agent_by_scene
         self.config_manager_class = config_manager_class or AgentConfigManager
         self.is_temporary = is_temporary
+        self.checkpointer = checkpointer
         self.username = username
 
     @classmethod
@@ -89,6 +97,8 @@ class AgentInstanceFactory:
         switch_agent_by_scene: bool = False,
         config_manager_class: Type[AgentConfigManager] | None = AgentConfigManager,
         is_temporary: bool = False,
+        event_handler: Callable[[BaseEvent], None] | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
         username: str | None = None,
     ):
         """
@@ -103,9 +113,12 @@ class AgentInstanceFactory:
         :param resource_manager: 资源管理类
         :param temperature: 模型温度
         :param max_tokens: 模型最大回复长度
+        :param max_tokens: 模型最大回复长度
         :param switch_agent_by_scene: 是否根据场景切换智能体
         :param config_manager_class: 配置管理类
         :param is_temporary: 是否为临时Agent
+        :param event_handler: 事件处理器，接收所有 AG-UI 事件（Callable[[BaseEvent], None]）
+        :param checkpointer: Checkpoint 存储后端，用于会话状态持久化
         :param username: 用户名
         :return: 构建好的Agent实例
         """
@@ -123,6 +136,7 @@ class AgentInstanceFactory:
             switch_agent_by_scene=switch_agent_by_scene,
             config_manager_class=config_manager_class,
             is_temporary=is_temporary,
+            checkpointer=checkpointer,
             username=username,
         )
 
@@ -139,6 +153,10 @@ class AgentInstanceFactory:
 
         # 根据agent_type构建特定参数
         agent_args = factory._build_agent_args(base_args)
+
+        # 设置事件处理器
+        if event_handler is not None:
+            agent_args["event_handler"] = event_handler
 
         # 创建Agent实例
         return factory._create_agent_instance(agent_args)
@@ -332,6 +350,12 @@ class AgentInstanceFactory:
         config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
         return config.agent_prompt
 
+    def build_checkpointer(self) -> BaseCheckpointSaver:
+        """获取 Checkpointer，必须注入，否则抛出异常"""
+        if self.checkpointer is not None:
+            return self.checkpointer
+        raise ValueError("Checkpointer is required but not provided. Please inject a valid checkpointer.")
+
     def handle_agent_switch(self, session_context_data: List[dict], agent_code: str, switch_agent: bool):
         """处理智能体切换"""
         if not switch_agent:
@@ -460,6 +484,7 @@ class AgentInstanceFactory:
         factory.handle_agent_switch(session_context_data, agent_code, switch_agent)
 
         return {
+            "thread_id": factory.session_code,  # 使用 session_code 作为 thread_id，支持断点续传
             "chat_model": factory.build_chat_model(agent_code),
             "non_thinking_llm": factory.build_non_thinking_llm(agent_code),
             "tools": factory.build_tools(agent_code),
@@ -468,6 +493,7 @@ class AgentInstanceFactory:
             "chat_history": factory.build_chat_history(session_context_data, agent_code),
             "agent_options": factory.build_agent_options(agent_code),
             "agent_prompt": factory.build_agent_prompt(agent_code),
+            "checkpointer": factory.build_checkpointer(),
             "role_prompt": factory.get_role_prompt(agent_code),
         }
 

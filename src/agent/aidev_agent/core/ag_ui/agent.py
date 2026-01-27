@@ -46,7 +46,6 @@ from .events import (
 from .types import (
     CustomEventNames,
     LangGraphEventTypes,
-    LangGraphPlatformMessage,
     LangGraphReasoning,
     MessageInProgress,
     MessagesInProgressRecord,
@@ -293,7 +292,8 @@ class LangGraphAgent:
         forwarded_props = input.forwarded_props or {}
         thread_id = input.thread_id
 
-        state_input["messages"] = agent_state.values.get("messages", [])
+        # 不再依赖 checkpoint 中的 messages，直接使用后端数据库传来的完整历史
+        state_input["messages"] = []
         self.active_run["current_graph_state"] = agent_state.values.copy()
         langchain_messages = agui_messages_to_langchain(messages)
         state = self.langgraph_default_merge_state(state_input, langchain_messages, input)
@@ -368,15 +368,17 @@ class LangGraphAgent:
 
         subgraphs_stream_enabled = input.forwarded_props.get("stream_subgraphs") if input.forwarded_props else False
 
+        # 传完整的消息历史给 LangGraph
+        stream_messages = stream_input["messages"] if stream_input else []
         kwargs = self.get_stream_kwargs(
-            input={"messages": stream_input["messages"]},
+            input={"messages": stream_messages},
             config=config,
             subgraphs=bool(subgraphs_stream_enabled),
             version="v2",
         )
 
-        input = kwargs.pop("input")
-        stream = self.graph.astream_events(input, **kwargs)
+        stream_input_final = kwargs.pop("input")
+        stream = self.graph.astream_events(stream_input_final, **kwargs)
 
         return {"stream": stream, "state": state, "config": config}
 
@@ -462,16 +464,8 @@ class LangGraphAgent:
             }
 
     def langgraph_default_merge_state(self, state: State, messages: list[BaseMessage], input: RunAgentInput) -> State:
-        # Question: 原生的ag_ui代码中不知道为什么要去掉system message
-        # 当前场景还是需要的
-        # if messages and isinstance(messages[0], SystemMessage):
-        #     messages = messages[1:]
-
-        existing_messages: list[LangGraphPlatformMessage] = state.get("messages", [])
-        existing_message_ids = {msg.id for msg in existing_messages}
-
-        new_messages = [msg for msg in messages if msg.id not in existing_message_ids]
-
+        # 直接使用传入的 messages（后端数据库的完整历史）
+        merged_messages = messages
         tools = input.tools or []
         tools_as_dicts = []
         if tools:
@@ -499,7 +493,7 @@ class LangGraphAgent:
 
         return {
             **state,
-            "messages": new_messages,
+            "messages": merged_messages,
             "tools": unique_tools,
             "ag-ui": {"tools": unique_tools, "context": input.context or []},
         }

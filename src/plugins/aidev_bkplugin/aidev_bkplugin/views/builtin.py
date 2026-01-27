@@ -7,6 +7,7 @@ from logging import getLogger
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.enums import PromptRole
 from aidev_agent.services.chat import ChatPrompt
+from aidev_agent.services.messages_handler import ConsumerPreemptedError, GeneratorStreamingHelper, StreamCancelledError
 from aidev_agent.services.pydantic_models import ExecuteKwargs
 from bk_plugin_framework.kit.api import custom_authentication_classes
 from bk_plugin_framework.kit.decorators import inject_user_token, login_exempt
@@ -16,11 +17,14 @@ from django.http.response import StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.negotiation import DefaultContentNegotiation
+from rest_framework.parsers import FileUploadParser
 from rest_framework.request import Request
 from rest_framework.status import is_success
 from rest_framework.views import APIView, Response
 from rest_framework.viewsets import ViewSetMixin
 
+from aidev_bkplugin.constants import AGUI_PROTOCOL_VERSION
 from aidev_bkplugin.permissions import AgentPluginPermission
 from aidev_bkplugin.services.agent import (
     build_chat_completion_agent_by_chat_history,
@@ -30,8 +34,21 @@ from aidev_bkplugin.services.agent import (
     execute_agent_with_save,
     get_agent_config_info,
     get_agent_version,
+    run_chat_completion_with_thread_id,
 )
 from aidev_bkplugin.utils import set_user_access_token
+
+
+class IgnoreClientContentNegotiation(DefaultContentNegotiation):
+    """
+    自定义内容协商类，忽略客户端 Accept 头的限制。
+    用于支持流式响应（text/event-stream），避免 406 Not Acceptable 错误。
+    """
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        # 直接返回第一个渲染器，忽略客户端 Accept 头
+        return (renderers[0], renderers[0].media_type)
+
 
 logger = getLogger(__name__)
 
@@ -57,6 +74,8 @@ class PluginViewSet(ViewSetMixin, APIView):
         return json.dumps(auth_info)
 
     def finalize_response(self, request, response, *args, **kwargs):
+        if isinstance(response, StreamingHttpResponse):
+            return response
         # 目前仅对 Restful Response 进行处理
         if isinstance(response, Response):
             trace_id = getattr(request, "otel_trace_id", None)
@@ -94,7 +113,8 @@ class ChatSessionViewSet(PluginViewSet):
         return Response(data=result["data"])
 
     def create(self, request):
-        result = client.api.create_chat_session(json=request.data, headers={"X-BKAIDEV-USER": request.user.username})
+        data = {**request.data, "protocol_version": AGUI_PROTOCOL_VERSION}
+        result = client.api.create_chat_session(json=data, headers={"X-BKAIDEV-USER": request.user.username})
         return Response(data=result["data"])
 
     def update(self, request, pk, **kwargs):
@@ -108,6 +128,30 @@ class ChatSessionViewSet(PluginViewSet):
     @action(["POST"], url_path="ai_rename", detail=True)
     def ai_rename(self, request, pk, **kwargs):
         result = client.api.rename_chat_session(path_params={"session_code": pk})
+        return Response(data=result["data"])
+
+    @action(
+        ["POST"],
+        url_path="upload/(?P<file_name>.+)",
+        detail=True,
+        parser_classes=[FileUploadParser],
+    )
+    def upload(self, request, pk, file_name, **kwargs):
+        if not request.data.get("file", None):
+            raise ClientBlueException(message="file is required")
+        _data = dict(
+            path_params={"session_code": pk, "file_name": file_name},
+            data=request.data.get("file", None).read(),
+            keep_data=True,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Disposition": f'attachment; filename="{file_name}"',
+            },
+        )
+        logger.info(f"upload_chat_session_file data: {_data}")
+        result = client.api.upload_chat_session_file(
+            **_data,
+        )
         return Response(data=result["data"])
 
     def destroy(self, request, pk, **kwargs):
@@ -141,8 +185,24 @@ class ChatSessionContentViewSet(PluginViewSet):
 
     @action(["POST"], url_path="stop", detail=False)
     def stop(self, request):
+        from aidev_agent.services.messages_handler.factory import message_handler_factory
+
         username = request.user.username
-        result = client.api.stop_chat_session_content(headers={"X-BKAIDEV-USER": username})
+        session_code = request.data.get("session_code", "")
+
+        # 获取 message_handler 用于清理
+        message_handler = message_handler_factory.get()
+
+        # 停止 agent 侧的流式生产者
+        if session_code:
+            GeneratorStreamingHelper.cancel(session_code)
+
+            # 标记 session 已停止，下次进入时只展示已有内容，不启动新生产者
+            if hasattr(message_handler, "mark_stopped"):
+                message_handler.mark_stopped(session_code)
+
+        result = client.api.stop_chat_session_content(json=request.data, headers={"X-BKAIDEV-USER": username})
+
         return Response(data=result["data"])
 
 
@@ -159,6 +219,9 @@ class ChatSessionContentFeedbackViewSet(PluginViewSet):
 
 
 class ChatCompletionViewSet(PluginViewSet):
+    # 使用自定义内容协商，忽略 Accept 头限制，支持流式响应
+    content_negotiation_class = IgnoreClientContentNegotiation
+
     def create(self, request):
         # 调用Agent 的时候需要传入的相关参数
         username = request.user.username
@@ -167,6 +230,7 @@ class ChatCompletionViewSet(PluginViewSet):
         execute_kwargs.session_code = request.data.get("session_code", "")
 
         _input = request.data.get("input", "")
+        event_handler = None  # 用于断点续传
 
         thread_id = execute_kwargs.thread_id
         if thread_id:
@@ -179,11 +243,26 @@ class ChatCompletionViewSet(PluginViewSet):
 
         # 构造 agent_instance，在 ChatCompletion 中，获取到的是 ChatCompletionAgent
         if session_code:
-            agent_instance = build_chat_completion_agent_by_session_code(session_code, username)
+            agent_instance = build_chat_completion_agent_by_session_code(
+                session_code=session_code,
+                client=client,
+                username=request.user.username,
+            )
+            # 获取 event_handler 用于后续更新会话状态
+            event_handler = agent_instance.event_handler
+            # 如果有 input 参数，追加到会话历史（支持新会话或追加消息）
+            if _input:
+                # 处理 chat_history 为 None 或空列表的情况（如编辑第一条消息时）
+                if not agent_instance.chat_history:
+                    agent_instance.chat_history = []
+                agent_instance.chat_history.append(ChatPrompt(role="user", content=_input))
+            # 校验：如果没有 input 且 chat_history 为空，抛出明确的错误
+            elif not agent_instance.chat_history:
+                raise ClientBlueException(message="The chat history cannot be empty. Please provide 'input' parameter.")
         else:
             chat_history = request.data.get("chat_prompts", []) or request.data.get("chat_history", [])
             if not chat_history and not _input:
-                raise ClientBlueException(message="chat_history or input is required")
+                raise ClientBlueException(message="chat_history, input or session_code is required")
             chat_history = [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history]
             if _input:
                 chat_history.append(ChatPrompt(role="user", content=_input))
@@ -191,6 +270,12 @@ class ChatCompletionViewSet(PluginViewSet):
         # 执行 agent
         if execute_kwargs.stream:
             generator = agent_instance.execute(execute_kwargs)
+            # 断点续传：在流式开始/结束时更新会话状态
+            if event_handler and all(
+                hasattr(event_handler, m) for m in ["set_streaming_started", "set_streaming_finished"]
+            ):
+                event_handler.set_streaming_started()
+                generator = self._wrap_streaming_with_status(generator, event_handler)
             return self.streaming_response(generator)
         else:
             result = agent_instance.execute(execute_kwargs)
@@ -217,6 +302,51 @@ class ChatCompletionViewSet(PluginViewSet):
         if execute_kwargs.stream:
             return self.streaming_response(result)
         return Response(result)
+
+    def _handle_thread_id_mode(self, thread_id: str, input_text: str, username: str, execute_kwargs: ExecuteKwargs):
+        """
+        通过 thread_id 自动管理会话，自动保存用户消息和 AI 回复
+        """
+        if not input_text:
+            raise ClientBlueException(message="input is required when using thread_id")
+
+        result, _ = run_chat_completion_with_thread_id(
+            thread_id=thread_id,
+            input_text=input_text,
+            username=username,
+            execute_kwargs=execute_kwargs,
+            save_content=True,
+        )
+        if execute_kwargs.stream:
+            return self.streaming_response(result)
+        return Response(result)
+
+    def _wrap_streaming_with_status(self, generator, event_handler):
+        """包装流式生成器，在结束时更新会话状态为 finished
+
+        如果消费者被新消费者抢占（断点续传场景），不更新 status，
+        让新消费者负责管理会话状态。
+        如果客户端断开连接（GeneratorExit），也不更新 status，
+        因为 agent 可能仍在运行，用户刷新后需要续传。
+        """
+        _preempted = False
+        _client_disconnected = False
+        _cancelled = False
+        try:
+            for chunk in generator:
+                yield chunk
+        except GeneratorExit:
+            _client_disconnected = True
+            return
+        except ConsumerPreemptedError:
+            _preempted = True
+        except StreamCancelledError:
+            _cancelled = True
+        except Exception:
+            raise
+        finally:
+            if not _preempted and not _client_disconnected and not _cancelled:
+                event_handler.set_streaming_finished()
 
     def streaming_response(self, generator):
         sr = StreamingHttpResponse(generator)

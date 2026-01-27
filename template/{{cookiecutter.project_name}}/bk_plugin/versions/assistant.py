@@ -4,7 +4,7 @@
 
 from logging import getLogger
 
-from aidev_agent.core.utils.local import request_local
+from aidev_agent.utils.local import request_local
 from aidev_bkplugin.services.agent import run_bkplugin_invoke
 from bk_plugin_framework.kit import (
     Context,
