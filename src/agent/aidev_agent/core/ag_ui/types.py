@@ -132,7 +132,7 @@ class CustomMessageType(Enum):
     KNOWLEDGE_RAG_START = "knowledge_rag_start"
     KNOWLEDGE_RAG_END = "knowledge_rag_end"
     KNOWLEDGE_RAG_TEXT_CONTENT = "knowledge_rag_text_content"
-    REFERENCE_DOCUMENT = "reference_document"
+    KNOWLEDGE_RAG_RESULT = "knowledge_rag_result"
     INTERRUPT = "interrupt"
     CUSTOM = "custom"
 

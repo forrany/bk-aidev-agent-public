@@ -136,7 +136,7 @@ def make_knowledge_node(
                 for each in reference_doc
             ]
             dispatch_custom_event(
-                CustomMessageType.REFERENCE_DOCUMENT.value,
+                CustomMessageType.KNOWLEDGE_RAG_RESULT.value,
                 data={"message_id": message_id, "data": reference_doc, "duration": duration},
                 config=config,
             )
@@ -159,7 +159,7 @@ def make_knowledge_node(
         else:
             # 如果没有引用文档,派发空消息
             dispatch_custom_event(
-                CustomMessageType.REFERENCE_DOCUMENT.value,
+                CustomMessageType.KNOWLEDGE_RAG_RESULT.value,
                 data={"message_id": message_id, "data": [], "duration": duration},
                 config=config,
             )

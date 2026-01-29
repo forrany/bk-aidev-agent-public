@@ -84,7 +84,7 @@ class EventDispatcher:
     def _handle_custom_event(self, event: CustomEvent) -> str:
         """处理自定义事件"""
         custom_event_handlers = {
-            CustomMessageType.REFERENCE_DOCUMENT.value: self._handle_reference_document,
+            CustomMessageType.KNOWLEDGE_RAG_RESULT.value: self._handle_reference_document,
         }
 
         handler = custom_event_handlers.get(event.name)

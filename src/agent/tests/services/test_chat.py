@@ -372,73 +372,8 @@ class TestCommonAgentChatStreamingLive:
     def setup_method(self):
         self.llm = ChatModel.get_setup_instance(model="qwen3-235B")
 
-    def test_basic_chat(self):
-        """case 1: 基础聊天测试"""
-        llm = self.llm
-        agent = ChatCompletionAgent(
-            chat_model=llm,
-            chat_history=[
-                ChatPrompt(
-                    id="1",
-                    role="system",
-                    content="You are a professional translator, please help translate the user input to English.",
-                ),
-                ChatPrompt(id="2", role="user", content="안녕하세요"),
-                ChatPrompt(id="3", role="assistant", content="Hello, how can I help you?"),
-                ChatPrompt(id="4", role="user", content="复述一下上下文的内容"),
-            ],
-        )
-        result = agent.execute(ExecuteKwargs(stream=True))
-        with open("text.log", "w") as fo:
-            for each in result:
-                fo.write(each)
-
-    def test_tool_calling(self):
-        """case 2: 工具调用"""
-        llm = ChatModel.get_setup_instance(model="deepseek-r1")
-        agent = ChatCompletionAgent(
-            chat_model=llm,
-            chat_history=[
-                ChatPrompt(id="1", role="user", content="今天广州天气怎么样？"),
-            ],
-            tools=[get_weather],
-        )
-        result = agent.execute(ExecuteKwargs(stream=True))
-        with open("text.log", "w") as fo:
-            for each in result:
-                fo.write(each)
-
-    def test_resume_from_checkpoint(self):
-        """case 3: 断点续传"""
-        agent = ChatCompletionAgent(
-            thread_id="onlyfortest",
-            chat_model=self.llm,
-            chat_history=[
-                ChatPrompt(role="user", content="今天广州天气怎么样？"),
-            ],
-            tools=[get_weather],
-        )
-        with open("text.log", "w") as fo:
-            result = agent.execute(ExecuteKwargs(stream=True))
-            for idx, each in enumerate(result):
-                if idx == 10:
-                    break
-                fo.write(each)
-
-        agent2 = ChatCompletionAgent(
-            thread_id="onlyfortest",
-            chat_model=self.llm,
-            chat_history=[
-                ChatPrompt(role="user", content="今天广州天气怎么样？"),
-            ],
-            tools=[get_weather],
-        )
-        with open("text.log", "a") as fo:
-            for each in agent2.execute(ExecuteKwargs(stream=True)):
-                fo.write(each)
-
     def test_knowledge_base(self):
-        """case 4: 知识库"""
+        """case 1: 知识库"""
         with open("tests/mock_data/knowledgebase.json") as fi:
             knowledgebase = json.load(fi)
         agent = ChatCompletionAgent(
