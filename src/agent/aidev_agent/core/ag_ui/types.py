@@ -131,6 +131,7 @@ class LangGraphReasoning(TypedDict):
 class CustomMessageType(Enum):
     KNOWLEDGE_RAG_START = "knowledge_rag_start"
     KNOWLEDGE_RAG_END = "knowledge_rag_end"
+    KNOWLEDGE_RAG_TEXT_CONTENT = "knowledge_rag_text_content"
     REFERENCE_DOCUMENT = "reference_document"
     INTERRUPT = "interrupt"
     CUSTOM = "custom"

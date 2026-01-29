@@ -36,7 +36,13 @@ from aidev_agent.services.pydantic_models import AgentOptions
 from aidev_agent.utils.decorator import retry, timeit
 
 from .prompts import DEFAULT_INTENT_RECOGNITION_PROMPT_TEMPLATES
-from .utils import HUNYUAN_SPECIFIC_RESPONSE, calculate_similarity, deduplicate_knowledge_file_paths, invoke_decorator
+from .utils import (
+    HUNYUAN_SPECIFIC_RESPONSE,
+    calculate_similarity,
+    deduplicate_knowledge_file_paths,
+    dispatch_rag_event_chunk,
+    invoke_decorator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -605,6 +611,7 @@ class KnowledgeRag:
 
     def retrieve(self, query: str, agent_options: AgentOptions, **kwargs) -> KnowledgeRagRetrieveResult:
         # 基本校验
+        dispatch_rag_event_chunk("开始召回知识")
         if not any(
             [
                 agent_options.knowledge_query_options.with_index_specific_search,
@@ -736,6 +743,7 @@ class KnowledgeRag:
 
         # 收集所有召回结果
         retrieved_results = {key: future.result() for key, future in futures.items()}
+        dispatch_rag_event_chunk("重排召回结果中")
 
         # 获取各种召回结果
         retrieved_results_index_specific = retrieved_results.get("index_specific", [])
@@ -844,6 +852,7 @@ class KnowledgeRag:
             )
             output_state["reference_doc"] = deduplicate_knowledge_file_paths(knowledge_resources_moderately_relevant)
 
+        dispatch_rag_event_chunk("完成召回并分类")
         return KnowledgeRagRetrieveResult(
             decision=decision,
             knowledge_resources_highly_relevant=knowledge_resources_highly_relevant,

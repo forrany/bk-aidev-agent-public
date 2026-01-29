@@ -17,7 +17,7 @@ to the current version of the project delivered to anyone in the future.
 """
 
 import pytest
-from aidev_agent.packages.langchain_core.models.mock import MockChatModel, MockEmbeddings
+from aidev_agent.packages.langchain_core.models.mock import MockChatModel, MockEmbeddings, MockResponse
 from langchain_core.messages import HumanMessage
 
 
@@ -165,6 +165,115 @@ class TestMockChatModel:
         """测试LLM类型"""
         model = MockChatModel()
         assert model._llm_type == "mock-chat-model"
+
+    def test_mock_responses_with_different_types(self):
+        """测试使用MockResponse按顺序返回不同类型的响应"""
+        model = MockChatModel(
+            mock_responses=[
+                # 第一个响应：工具调用
+                MockResponse(
+                    content="",
+                    tool_calls=[{"name": "get_weather", "args": {"city": "Beijing"}, "id": "call_1"}],
+                ),
+                # 第二个响应：普通文本（模拟工具结果的总结）
+                MockResponse(content="The weather in Beijing is sunny, 25°C."),
+                # 第三个响应：带推理内容
+                MockResponse(
+                    content="Based on the analysis, I recommend...",
+                    reasoning_content="Let me think about this carefully...",
+                ),
+            ]
+        )
+        messages = [HumanMessage(content="What's the weather?")]
+
+        # 第一次调用：应该返回工具调用
+        response1 = model.invoke(messages)
+        assert response1.content == ""
+        assert response1.tool_calls is not None
+        assert len(response1.tool_calls) == 1
+        assert response1.tool_calls[0]["name"] == "get_weather"
+
+        # 第二次调用：应该返回普通文本
+        response2 = model.invoke(messages)
+        assert response2.content == "The weather in Beijing is sunny, 25°C."
+        assert response2.tool_calls is None or len(response2.tool_calls) == 0
+
+        # 第三次调用：应该返回带推理内容的响应
+        response3 = model.invoke(messages)
+        assert response3.content == "Based on the analysis, I recommend..."
+        assert "reasoning_content" in response3.additional_kwargs
+        assert response3.additional_kwargs["reasoning_content"] == "Let me think about this carefully..."
+
+        # 第四次调用：应该循环回到第一个
+        response4 = model.invoke(messages)
+        assert response4.tool_calls is not None
+        assert response4.tool_calls[0]["name"] == "get_weather"
+
+    def test_mock_responses_streaming(self):
+        """测试MockResponse在流式输出中的表现"""
+        model = MockChatModel(
+            mock_responses=[
+                MockResponse(
+                    content="",
+                    tool_calls=[{"name": "calculator", "args": {"expr": "2+2"}, "id": "call_1"}],
+                ),
+                MockResponse(content="The result is 4"),
+            ],
+            stream_chunk_size=5,
+        )
+        messages = [HumanMessage(content="Calculate 2+2")]
+
+        # 第一次流式调用：应该返回工具调用
+        chunks1 = list(model.stream(messages))
+
+        # stream()返回的是AIMessageChunk对象，直接检查tool_call_chunks属性
+        has_tool_call = any(hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks for chunk in chunks1)
+        assert has_tool_call
+
+        # 第二次流式调用：应该返回文本
+        chunks2 = list(model.stream(messages))
+        full_content = "".join([chunk.content for chunk in chunks2 if chunk.content])
+        assert full_content == "The result is 4"
+
+    @pytest.mark.asyncio
+    async def test_mock_responses_async(self):
+        """测试MockResponse的异步调用"""
+        model = MockChatModel(
+            mock_responses=[
+                MockResponse(content="First response"),
+                MockResponse(
+                    content="",
+                    tool_calls=[{"name": "search", "args": {"query": "test"}, "id": "call_1"}],
+                ),
+            ]
+        )
+        messages = [HumanMessage(content="Test")]
+
+        # 第一次异步调用
+        response1 = await model.ainvoke(messages)
+        assert response1.content == "First response"
+
+        # 第二次异步调用
+        response2 = await model.ainvoke(messages)
+        assert response2.tool_calls is not None
+        assert response2.tool_calls[0]["name"] == "search"
+
+    def test_backward_compatibility(self):
+        """测试向后兼容性：旧的responses参数仍然可用"""
+        model = MockChatModel(
+            responses=["Response 1", "Response 2"],
+            tool_calls=[[{"name": "tool1", "args": {}, "id": "call_1"}]],
+        )
+        messages = [HumanMessage(content="Test")]
+
+        # 第一次调用
+        response1 = model.invoke(messages)
+        assert response1.content == "Response 1"
+        assert response1.tool_calls is not None
+
+        # 第二次调用（没有tool_calls，因为只配置了一个）
+        response2 = model.invoke(messages)
+        assert response2.content == "Response 2"
 
 
 class TestMockEmbeddings:
