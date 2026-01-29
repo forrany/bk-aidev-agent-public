@@ -11,6 +11,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
 from aidev_agent.core.ag_ui.aidev_agent import AidevAGUIAgent
@@ -238,5 +239,5 @@ class ChatCompletionAgent(BaseModel):
             callbacks=self.callbacks,
             agent_options=self.agent_options,
             execute_kwargs=execute_kwargs,
-            checkpointer=self.checkpointer,
+            checkpointer=self.checkpointer if self.checkpointer else MemorySaver(),
         )
