@@ -15,14 +15,16 @@ specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
+
 from __future__ import annotations
 
 import json
 import random
 import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any, Optional, cast, Tuple
+from typing import Any, Optional, Tuple, cast
 
+from django.db import connections, router, transaction
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
@@ -37,8 +39,6 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.serde.types import ChannelProtocol
-
-from django.db import connections, router, transaction
 
 
 def bulk_upsert(model, objs, update_fields, unique_fields):
@@ -65,9 +65,7 @@ def bulk_upsert(model, objs, update_fields, unique_fields):
         placeholders = ", ".join(["%s"] * len(insert_fields))
         columns = ", ".join(f"`{f}`" for f in insert_fields)
         # ON DUPLICATE KEY UPDATE 子句
-        update_clause = ", ".join(
-            f"`{f}` = VALUES(`{f}`)" for f in update_fields
-        )
+        update_clause = ", ".join(f"`{f}` = VALUES(`{f}`)" for f in update_fields)
         sql = f"""
         INSERT INTO `{table}` ({columns})
         VALUES ({placeholders})
@@ -359,30 +357,37 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
         # 验证checkpoint模型字段
         checkpoint_fields = [field.name for field in self.checkpoint_model._meta.get_fields()]
         required_checkpoint_fields = [
-            'thread_id', 'checkpoint_ns', 'checkpoint_id',
-            'parent_checkpoint_id', 'type', 'checkpoint', 'metadata'
+            "thread_id",
+            "checkpoint_ns",
+            "checkpoint_id",
+            "parent_checkpoint_id",
+            "type",
+            "checkpoint",
+            "metadata",
         ]
 
         for field in required_checkpoint_fields:
             if field not in checkpoint_fields:
                 raise ValueError(
-                    f"Checkpoint model {self.checkpoint_model.__name__} "
-                    f"is missing required field: {field}"
+                    f"Checkpoint model {self.checkpoint_model.__name__} is missing required field: {field}"
                 )
 
         # 验证writes模型字段
         writes_fields = [field.name for field in self.writes_model._meta.get_fields()]
         required_writes_fields = [
-            'thread_id', 'checkpoint_ns', 'checkpoint_id',
-            'task_id', 'idx', 'channel', 'type', 'value'
+            "thread_id",
+            "checkpoint_ns",
+            "checkpoint_id",
+            "task_id",
+            "idx",
+            "channel",
+            "type",
+            "value",
         ]
 
         for field in required_writes_fields:
             if field not in writes_fields:
-                raise ValueError(
-                    f"Writes model {self.writes_model.__name__} "
-                    f"is missing required field: {field}"
-                )
+                raise ValueError(f"Writes model {self.writes_model.__name__} is missing required field: {field}")
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """从数据库获取检查点元组
@@ -406,9 +411,11 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
                 thread_id=thread_id, checkpoint_ns=checkpoint_ns, checkpoint_id=checkpoint_id
             ).first()
         else:
-            checkpoint_obj = self.checkpoint_model.objects.filter(
-                thread_id=thread_id, checkpoint_ns=checkpoint_ns
-            ).order_by('-checkpoint_id').first()
+            checkpoint_obj = (
+                self.checkpoint_model.objects.filter(thread_id=thread_id, checkpoint_ns=checkpoint_ns)
+                .order_by("-checkpoint_id")
+                .first()
+            )
 
         if not checkpoint_obj:
             return None
@@ -424,11 +431,10 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
             }
         # 反序列化检查点
         checkpoint = self.serde.loads_typed((checkpoint_obj.type, checkpoint_obj.checkpoint))
-        # 元数据, metadata是Django JsonField，使用 dumps 转换为 str 形式，然后使用 loads 确保拿到正确的类型，否则实例的类型会丢失
+        # 元数据, metadata是Django JsonField，直接使用即可
         metadata = cast(
             CheckpointMetadata,
-            self.jsonplus_serde.loads_typed(("json", self.jsonplus_serde.dumps(checkpoint_obj.metadata)))
-            if checkpoint_obj.metadata else {},
+            checkpoint_obj.metadata if checkpoint_obj.metadata else {},
         )
         # 构建父配置
         parent_config = None
@@ -442,11 +448,15 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
             }
 
         # 查询相关的写入操作
-        writes_queryset = self.writes_model.objects.filter(
-            thread_id=checkpoint_obj.thread_id,
-            checkpoint_ns=checkpoint_obj.checkpoint_ns,
-            checkpoint_id=checkpoint_obj.checkpoint_id
-        ).order_by('task_id', 'idx').values_list('task_id', 'channel', 'type', 'value')
+        writes_queryset = (
+            self.writes_model.objects.filter(
+                thread_id=checkpoint_obj.thread_id,
+                checkpoint_ns=checkpoint_obj.checkpoint_ns,
+                checkpoint_id=checkpoint_obj.checkpoint_id,
+            )
+            .order_by("task_id", "idx")
+            .values_list("task_id", "channel", "type", "value")
+        )
         writes = [
             (task_id, channel, self.serde.loads_typed((type_, value)))
             for task_id, channel, type_, value in writes_queryset
@@ -516,14 +526,13 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
         checkpoint_ids = {str(cp.checkpoint_id) for cp in checkpoint_list}
 
         writes_qs = (
-            self.writes_model.objects
-            .filter(
+            self.writes_model.objects.filter(
                 thread_id__in=thread_ids,
                 checkpoint_ns__in=checkpoint_ns_set,
                 checkpoint_id__in=checkpoint_ids,
             )
-            .order_by('thread_id', 'checkpoint_ns', 'checkpoint_id', 'task_id', 'idx')
-            .values_list('thread_id', 'checkpoint_ns', 'checkpoint_id', 'task_id', 'channel', 'type', 'value')
+            .order_by("thread_id", "checkpoint_ns", "checkpoint_id", "task_id", "idx")
+            .values_list("thread_id", "checkpoint_ns", "checkpoint_id", "task_id", "channel", "type", "value")
         )
 
         writes_map: dict[tuple[str, str, str], list[tuple[str, str, str, bytes]]] = {}
@@ -546,7 +555,7 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
                 self.serde.loads_typed((checkpoint_obj.type, checkpoint_obj.checkpoint)),
                 cast(
                     CheckpointMetadata,
-                    self.jsonplus_serde.loads(self.jsonplus_serde.dumps(checkpoint_obj.metadata)) if checkpoint_obj.metadata else {},
+                    checkpoint_obj.metadata if checkpoint_obj.metadata else {},
                 ),
                 (
                     {
@@ -590,10 +599,10 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
         # 序列化检查点和元数据
         type_, serialized_checkpoint = self.serde.dumps_typed(checkpoint)
         # 将内存中的 metadata 转为标准 json 格式，用于存到 model 的 JsonField 中
-        # 注意：self.jsonplus_serde.dumps 返回是 bytes, 需要过滤u0000防止序列化时出错
-        serialized_metadata = json.loads(
-            self.jsonplus_serde.dumps(get_checkpoint_metadata(config, metadata)).decode().replace("\\u0000", "")
-        )
+        # 直接获取 metadata dict，Django JsonField 会自动处理序列化
+        raw_metadata = get_checkpoint_metadata(config, metadata)
+        # 通过 json 序列化再反序列化来确保所有值都是 JSON 兼容类型
+        serialized_metadata = json.loads(json.dumps(raw_metadata, default=str).replace("\\u0000", ""))
         # 使用Django的update_or_create方法
         with self.lock:
             self.checkpoint_model.objects.update_or_create(
@@ -601,11 +610,11 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
                 checkpoint_ns=checkpoint_ns,
                 checkpoint_id=checkpoint["id"],
                 defaults={
-                    'parent_checkpoint_id': config["configurable"].get("checkpoint_id"),
-                    'type': type_,
-                    'checkpoint': serialized_checkpoint,
-                    'metadata': serialized_metadata,
-                }
+                    "parent_checkpoint_id": config["configurable"].get("checkpoint_id"),
+                    "type": type_,
+                    "checkpoint": serialized_checkpoint,
+                    "metadata": serialized_metadata,
+                },
             )
 
         return {
@@ -659,8 +668,8 @@ class BKDjangoSaver(BaseCheckpointSaver[str]):
                 bulk_upsert(
                     self.writes_model,
                     writes_objects,
-                    update_fields=['channel', 'type', 'value'],
-                    unique_fields=['thread_id', 'checkpoint_ns', 'checkpoint_id', 'task_id', 'idx']
+                    update_fields=["channel", "type", "value"],
+                    unique_fields=["thread_id", "checkpoint_ns", "checkpoint_id", "task_id", "idx"],
                 )
             else:
                 self.writes_model.objects.bulk_create(

@@ -1,5 +1,6 @@
 import base64
 import json
+from functools import lru_cache
 
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.api.bkaidev_client.client import Client
@@ -14,6 +15,15 @@ from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from .factory import agent_config_factory, agent_factory
+
+
+@lru_cache(maxsize=1)
+def _get_checkpointer():
+    """获取 Checkpointer 单例实例（延迟导入避免循环依赖）"""
+    from aidev_bkplugin.models import Checkpoint, Write
+    from aidev_bkplugin.packages.checkpoint import BKDjangoSaver
+
+    return BKDjangoSaver(checkpoint_model=Checkpoint, writes_model=Write)
 
 
 def build_chat_completion_agent_by_session_code(
@@ -42,6 +52,7 @@ def build_chat_completion_agent_by_session_code(
         session_code=session_code,
         agent_cls=agent_cls,
         config_manager_class=config_manager,
+        checkpointer=_get_checkpointer(),
         event_handler=event_handler,
     )
 
@@ -59,6 +70,7 @@ def build_chat_completion_agent_by_chat_history(chat_history: list[ChatPrompt]) 
         session_context_data=[each.model_dump() for each in chat_history],
         agent_cls=agent_cls,
         config_manager_class=config_manager,
+        checkpointer=_get_checkpointer(),
     )
     return agent_instance
 

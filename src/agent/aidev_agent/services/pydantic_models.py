@@ -63,12 +63,14 @@ class ChatPrompt(BaseModel):
     role: str
     content: str | list[str] | dict | list[dict]
     extra: SessionContentExtra | None = None
+    # 开放字典，透传任意协议字段
+    builtin_property: Dict = Field(default_factory=dict, description="协议扩展属性，透传任意字段")
 
     @model_validator(mode="before")
     def validate_content_with_rendered(cls, values: Any) -> Any:
         # 将 id 转换为字符串（平台返回的可能是 int）
-        if "id" in values and values["id"] is not None:
-            values["id"] = str(values["id"])
+        if (id_val := values.get("id")) is not None:
+            values["id"] = str(id_val)
         extra = values.get("extra")
         if extra:
             if isinstance(extra, dict):
