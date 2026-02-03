@@ -132,7 +132,7 @@ def make_knowledge_node(
             # 1. 通过自定义事件向前端推送 reference_doc
             reference_doc = [each["metadata"] for each in reference_doc]
             reference_doc = [
-                {"origin_file": each["preview_path"], "url": each["path"], "name": each["display_name"]}
+                {"originFile": each["preview_path"], "url": each["path"], "name": each["display_name"]}
                 for each in reference_doc
             ]
             dispatch_custom_event(

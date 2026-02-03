@@ -1,9 +1,9 @@
 {
-    "id": 138,
-    "name": "wxtestonly2",
+    "id": 4,
+    "name": "test_private3",
     "scene_type": "default",
     "total_file_size": 58263,
-    "collection_name": "wxtestonly2",
+    "collection_name": "test_private3",
     "updated_by": "wenxingtang",
     "index_config": {
         "full_text_indexes": [
@@ -20,6 +20,6 @@
         "vector_indexes": [],
         "scalar_indexes": []
     },
-    "anchor_paths": "/138",
+    "anchor_paths": "/4",
     "knowledge_counts": 152
 }
