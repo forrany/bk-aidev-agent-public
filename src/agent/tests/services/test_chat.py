@@ -379,8 +379,7 @@ class TestCommonAgentChatStreamingLive:
         agent = ChatCompletionAgent(
             chat_model=self.llm,
             chat_history=[
-                ChatPrompt(role="user", content="如何私有化部署deepseek"),
-                # ChatPrompt(role="user", content="云桌面黑屏如何处理?"),
+                ChatPrompt(role="user", content="云桌面黑屏怎么处理?"),
             ],
             knowledge_bases=[knowledgebase],
         )

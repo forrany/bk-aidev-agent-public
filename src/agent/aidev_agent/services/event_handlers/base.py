@@ -23,6 +23,7 @@ from aidev_agent.core.ag_ui.types import (
     ExtendToolCall,
     LangGraphEventTypes,
 )
+from aidev_agent.core.ag_ui.utils import camel_to_snake
 from aidev_agent.enums import PromptRole
 
 logger = getLogger(__name__)
@@ -99,7 +100,7 @@ class BaseSessionWriter(ABC):
 
         if event_name == CustomEventNames.OnToolNodeFinish.value:
             self.handle_tool_finish(event)
-        elif event_name == CustomMessageType.REFERENCE_DOCUMENT.value:
+        elif event_name == CustomMessageType.KNOWLEDGE_RAG_RESULT.value:
             self.handle_reference_document(event)
 
     def handle_model_end(self, event: RawEvent) -> None:
@@ -220,7 +221,7 @@ class BaseSessionWriter(ABC):
         """
         event_data = event.event.get("data", {})
         message_id = event_data.get("message_id")
-        reference_documents = event_data.get("data", [])
+        reference_documents = [camel_to_snake(each) for each in event_data.get("data", [])]
 
         if not message_id:
             message_id = f"ref_{uuid.uuid4().hex[:12]}"
