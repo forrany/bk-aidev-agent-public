@@ -54,12 +54,15 @@ def build_chat_completion_agent_by_session_code(
         config_manager_class=config_manager,
         checkpointer=_get_checkpointer(),
         event_handler=event_handler,
+        username=username,
     )
 
     return agent_instance
 
 
-def build_chat_completion_agent_by_chat_history(chat_history: list[ChatPrompt]) -> ChatCompletionAgent:
+def build_chat_completion_agent_by_chat_history(
+    chat_history: list[ChatPrompt], username: str = ""
+) -> ChatCompletionAgent:
     role_contents = get_agent_role_info()
     if role_contents:
         chat_history = role_contents + chat_history
@@ -71,6 +74,7 @@ def build_chat_completion_agent_by_chat_history(chat_history: list[ChatPrompt]) 
         agent_cls=agent_cls,
         config_manager_class=config_manager,
         checkpointer=_get_checkpointer(),
+        username=username,
     )
     return agent_instance
 

@@ -35,11 +35,16 @@ from typing_extensions import Annotated
 
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
-from aidev_agent.utils.local import request_local
 from aidev_agent.utils.loop import get_event_loop
 
 from .enums import FieldType, FuncType
 from .exceptions import ToolValidationError
+
+try:
+    from bkoauth import get_access_token_by_user
+except ImportError:
+    get_access_token_by_user = None
+
 
 COMPLEXED_FIELD_TYPE = ["object", "array"]
 
@@ -463,24 +468,15 @@ def make_structured_tool(
     return _tool
 
 
-def make_mcp_tools(server_config: dict) -> List[StructuredTool]:
-    try:
-        from bkoauth import get_access_token_by_user
-    except ImportError:
-        get_access_token_by_user = None
-
+def make_mcp_tools(server_config: dict, username: str | None = None) -> List[StructuredTool]:
     for _server_config in server_config.values():
         if _server_config.pop("credential_type", "") == CredentialType.BLUEAPPS.value:
             auth_info = {
                 "bk_app_code": settings.APP_CODE,
                 "bk_app_secret": settings.SECRET_KEY,
             }
-            request = getattr(request_local, "request", None)
-            if request and request.user.username:
-                if get_access_token_by_user:
-                    auth_info = {"access_token": get_access_token_by_user(request.user.username).access_token}
-                else:
-                    auth_info["bk_username"] = request.user.username
+            if username:
+                auth_info = {"access_token": get_access_token_by_user(username).access_token}
             _server_config["headers"] = {"X-Bkapi-Authorization": json.dumps(auth_info)}
             _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
 

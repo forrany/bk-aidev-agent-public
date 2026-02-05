@@ -181,7 +181,9 @@ class ChatCompletionViewSet(PluginViewSet):
             chat_history = [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history]
             if _input:
                 chat_history.append(ChatPrompt(role="user", content=_input))
-            agent_instance = build_chat_completion_agent_by_chat_history(chat_history=chat_history)
+            agent_instance = build_chat_completion_agent_by_chat_history(
+                chat_history=chat_history, username=request.user.username
+            )
 
         # 执行 agent
         if execute_kwargs.stream:
