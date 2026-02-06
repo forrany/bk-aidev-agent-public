@@ -167,7 +167,7 @@ class TestHandleModelEnd:
         # 第一次是 reasoning
         reasoning_payload = calls[0].kwargs["json"]
         assert reasoning_payload["role"] == PromptRole.REASONING.value
-        assert reasoning_payload["content"] == "让我思考一下..."
+        assert reasoning_payload["content"] == '["让我思考一下..."]'
 
         # 第二次是 assistant
         assistant_payload = calls[1].kwargs["json"]

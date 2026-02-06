@@ -122,10 +122,13 @@ class BaseSessionWriter(ABC):
         if reasoning_content:
             reasoning_message_id = f"rsn_{message_id}"
             if reasoning_message_id not in self._written_message_ids:
+                reasoning_content_list = (
+                    [reasoning_content] if isinstance(reasoning_content, str) else reasoning_content
+                )
                 self._create_session_content(
                     message_id=reasoning_message_id,
                     role=PromptRole.REASONING.value,
-                    content=reasoning_content,
+                    content=json.dumps(reasoning_content_list, ensure_ascii=False),
                     status="success",
                     builtin_property={
                         "message_id": reasoning_message_id,
@@ -149,8 +152,20 @@ class BaseSessionWriter(ABC):
                     ),
                 ).model_dump()
             )
-
-        # 回写 assistant 消息（后端 API 不接受空字符串或纯空白字符）
+        # 回写 assistant 消息
+        # 对于 DeepSeek reasoning 模型，最终回复可能在 reasoning_content 而不是 content
+        # 当有 tool_calls 时，content 为空是正常的（AI 只是调用工具）
+        # 当没有 tool_calls 且 content 为空时，尝试使用 reasoning_content 作为回复内容
+        content = output_message.content
+        content_stripped = content.strip() if content else ""
+        if not content_stripped and not tool_calls and reasoning_content:
+            content = reasoning_content
+        elif not content_stripped and tool_calls:
+            # 有 tool_calls 但 content 为空/只有空白字符，使用一个有意义的占位符
+            content = "正在调用工具..."
+        elif not content_stripped:
+            # 没有 tool_calls 也没有内容，使用空字符串（可能会失败）
+            content = ""
         content = output_message.content or "..."
         self._create_session_content(
             message_id=message_id,

@@ -8,7 +8,7 @@ INSTALLED_APPS = ("aidev_bkplugin",)
 
 # 智能体
 DEFAULT_NAME = "default"
-DEFAULT_AGENT = os.environ.get("DEFAULT_AGENT", "aidev_agent.core.extend.agent.qa.CommonQAAgent")
+DEFAULT_AGENT = os.environ.get("DEFAULT_AGENT", "aidev_agent.services.common_agent.CommonQAAgent")
 DEFAULT_CONFIG_MANAGER = os.environ.get("DEFAULT_CONFIG_MANAGER", "aidev_agent.services.config_manager.AgentConfigManager")
 
 # 客服渠道

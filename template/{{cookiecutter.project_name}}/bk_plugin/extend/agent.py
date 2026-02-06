@@ -1,4 +1,4 @@
-from aidev_agent.core.extend.agent.qa import CommonQAAgent
+from aidev_agent.services.common_agent import CommonQAAgent
 
 
 class CommonQAAgentExtend(CommonQAAgent):
