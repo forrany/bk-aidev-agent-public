@@ -15,6 +15,7 @@ from django.http.response import StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.request import Request
 from rest_framework.status import is_success
 from rest_framework.views import APIView, Response
@@ -29,6 +30,18 @@ from aidev_bkplugin.services.agent import (
     get_agent_config_info,
 )
 from aidev_bkplugin.utils import set_user_access_token
+
+
+class IgnoreClientContentNegotiation(DefaultContentNegotiation):
+    """
+    自定义内容协商类，忽略客户端 Accept 头的限制。
+    用于支持流式响应（text/event-stream），避免 406 Not Acceptable 错误。
+    """
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        # 直接返回第一个渲染器，忽略客户端 Accept 头
+        return (renderers[0], renderers[0].media_type)
+
 
 logger = getLogger(__name__)
 
@@ -54,6 +67,8 @@ class PluginViewSet(ViewSetMixin, APIView):
         return json.dumps(auth_info)
 
     def finalize_response(self, request, response, *args, **kwargs):
+        if isinstance(response, StreamingHttpResponse):
+            return response
         # 目前仅对 Restful Response 进行处理
         if isinstance(response, Response):
             if is_success(response.status_code):
@@ -154,6 +169,9 @@ class ChatSessionContentFeedbackViewSet(PluginViewSet):
 
 
 class ChatCompletionViewSet(PluginViewSet):
+    # 使用自定义内容协商，忽略 Accept 头限制，支持流式响应
+    content_negotiation_class = IgnoreClientContentNegotiation
+
     def create(self, request):
         # 调用Agent 的时候需要传入的相关参数
         execute_kwargs = build_execute_kwargs(request.data.get("execute_kwargs", {}), request.user.username)

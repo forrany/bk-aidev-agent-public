@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from logging import getLogger
@@ -79,7 +80,7 @@ class ChatCompletionAgent(BaseModel):
                 case PromptRole.USER.value:
                     messages.append(HumanMessage(id=each.id, content=each.content))
                 case PromptRole.ASSISTANT.value | PromptRole.AI.value:
-                    tool_calls = self._extract_tool_calls(bp) or None
+                    tool_calls = self._extract_tool_calls(bp)
                     messages.append(AIMessage(id=each.id, content=each.content, tool_calls=tool_calls))
                 case PromptRole.SYSTEM.value:
                     messages.append(SystemMessage(id=each.id, content=each.content))
@@ -89,16 +90,27 @@ class ChatCompletionAgent(BaseModel):
         return messages
 
     def _extract_tool_calls(self, builtin_property: dict) -> list[dict]:
-        """从 builtin_property 中提取 tool_calls 列表"""
-        return [
-            {
-                "id": tc.get("id", ""),
-                "name": tc.get("function", {}).get("name", ""),
-                "args": tc.get("function", {}).get("arguments", "{}"),
-                "type": "tool_call",
-            }
-            for tc in builtin_property.get("tool_calls", [])
-        ]
+        """从 builtin_property 中提取 tool_calls 列表
+        注意：arguments 在数据库中存储为 JSON 字符串，需要解析为字典
+        """
+        tool_calls = []
+        for tc in builtin_property.get("tool_calls", []):
+            # arguments 是 JSON 字符串，需要解析为字典
+            args_str = tc.get("function", {}).get("arguments", "{}")
+            try:
+                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+            except json.JSONDecodeError:
+                args = {}
+
+            tool_calls.append(
+                {
+                    "id": tc.get("id", ""),
+                    "name": tc.get("function", {}).get("name", ""),
+                    "args": args,
+                    "type": "tool_call",
+                }
+            )
+        return tool_calls
 
     def _convert_contents(self, contents: list[ChatPrompt]) -> list[ChatPrompt]:
         """将无需送到大模型处理的content去掉"""
