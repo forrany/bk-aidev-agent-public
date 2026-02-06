@@ -129,7 +129,6 @@
   // SDK 错误处理
   const handleSdkError = (error: any) => {
     console.error("SDK错误:", error)
-    router.push("/403")
   }
 
   // 格式化会话日期
@@ -228,7 +227,7 @@
         }
       }
     },
-    { deep: true }
+    { deep: true },
   )
 
   // ==================== 生命周期 ====================
