@@ -42,6 +42,9 @@ lint:
 
 .PHONY: build-aidev-ai-blueking
 build-aidev-ai-blueking:
+	rm -rf ${ROOT_DIR}/src/plugins/aidev_ai_blueking/aidev_ai_blueking/templates
+	rm -rf ${ROOT_DIR}/src/plugins/aidev_ai_blueking/aidev_ai_blueking/static
+	cd ./src/frontend/publish-template/ && rm -rf node_modules/.cache && pnpm install --no-frozen-lockfile && pnpm run build && cd -
 	cd ${ROOT_DIR}/src/frontend/ai-blueking && pnpm install --no-frozen-lockfile && pnpm run build
 	cd ${ROOT_DIR}/src/frontend/publish-template/ && pnpm install --no-frozen-lockfile && pnpm run build
 	mv ${ROOT_DIR}/src/frontend/publish-template/dist/static ${ROOT_DIR}/src/plugins/aidev_ai_blueking/aidev_ai_blueking

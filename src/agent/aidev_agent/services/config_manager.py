@@ -76,25 +76,28 @@ class AgentConfigManager:
 
         # 处理特殊字段,兼容特殊role
         role_prompts = res["prompt_setting"].get("content", None)
+        role_prompts = res["prompt_setting"].get("content", None)
 
         # 创建配置实例
         prompt_setting = res.get("prompt_setting", {})
         knowledgebase_settings_data = res.get("knowledgebase_settings") or {}
         intent_recognition_data = res.get("intent_recognition") or {}
-        
+
         # 用户设置未命中智能体绑定资源时拒答且未填写拒答文案时，设置为默认拒答文案
-        if (not knowledgebase_settings_data.get("is_response_when_no_knowledgebase_match") 
-            and not knowledgebase_settings_data.get("rejection_message")):
+        if not knowledgebase_settings_data.get(
+            "is_response_when_no_knowledgebase_match"
+        ) and not knowledgebase_settings_data.get("rejection_message"):
             knowledgebase_settings_data["rejection_message"] = (
                 KnowledgebaseSettings().model_validate({}).rejection_message
             )
 
         # 将 prompt_setting 中的超参数合并到对应的配置中（SDK 期望从这些位置读取）
-        # llm_token_limit 在 KnowledgebaseSettings 中使用
-        knowledgebase_settings_data["llm_token_limit"] = prompt_setting.get("llm_token_limit")
-        # tool_output_compress_thrd 在 IntentRecognition 中使用
-        intent_recognition_data["tool_output_compress_thrd"] = prompt_setting.get("tool_output_compress_thrd")
-
+        # llm_token_limit 在 KnowledgebaseSettings 中使用，只在值不为 None 时设置
+        if prompt_setting.get("llm_token_limit") is not None:
+            knowledgebase_settings_data["llm_token_limit"] = prompt_setting.get("llm_token_limit")
+        # tool_output_compress_thrd 在 IntentRecognition 中使用，只在值不为 None 时设置
+        if prompt_setting.get("tool_output_compress_thrd") is not None:
+            intent_recognition_data["tool_output_compress_thrd"] = prompt_setting.get("tool_output_compress_thrd")
         config = AgentConfig(
             agent_code=agent_code,
             agent_name=res["agent_name"],

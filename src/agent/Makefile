@@ -38,10 +38,12 @@ ci-test:
 	$(eval path ?= ${ROOT_DIR}/tests)
 	$(eval maxfail ?= --maxfail=2)
 	$(eval warnings ?= --disable-pytest-warnings)
+	$(eval markers ?= not slow)
 	${pytest} ${path} \
+		-m "${markers}" \
 		--durations=30 \
 		--cov-config ${ROOT_DIR}/pyproject.toml \
-		--cov ${ROOT_DIR}
+		--cov ${ROOT_DIR}/aidev_agent
 
 .PHONY: build
 build:

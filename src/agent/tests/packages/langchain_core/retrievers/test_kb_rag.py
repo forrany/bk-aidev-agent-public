@@ -19,15 +19,14 @@ to the current version of the project delivered to anyone in the future.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain_core.documents import Document
-
 from aidev_agent.enums import FineGrainedScoreType
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
 from aidev_agent.services.pydantic_models import (
     AgentOptions,
-    KnowledgebaseSettings,
     IntentRecognition,
+    KnowledgebaseSettings,
 )
+from langchain_core.documents import Document
 
 
 def create_mock_llm_response(content: str):
@@ -90,9 +89,7 @@ class TestKnowledgeRag:
         rag = KnowledgeRag(llm=mock_llm)
         agent_options = create_agent_options()
 
-        result = rag.extract_query_keywords(
-            agent_options=agent_options, query="什么是蓝鲸智云平台", llm=mock_llm
-        )
+        result = rag.extract_query_keywords(agent_options=agent_options, query="什么是蓝鲸智云平台", llm=mock_llm)
 
         assert isinstance(result, list)
         assert len(result) == 3
@@ -443,7 +440,8 @@ class TestKnowledgeRag:
         with pytest.raises(NotImplementedError):
             rag.search_knowledge_self_query("test query", mock_llm)
 
-    def test_retrieve_no_recall_method_selected(self):
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.dispatch_rag_event_chunk")
+    def test_retrieve_no_recall_method_selected(self, mock_dispatch_rag_event):
         """测试 retrieve 方法 - 未选择任何召回方式"""
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
