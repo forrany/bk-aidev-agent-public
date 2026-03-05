@@ -632,9 +632,10 @@ class TestCommonQAStreamingMixIn:
         # 验证自定义事件的文本内容被保留，或至少有 DONE 事件
         assert len(text_events) > 0 or len(done_events) > 0
 
-    @pytest.mark.skipif(True, reason="迁移后BkAiStreamingProtocol以后测试失败，等待处理")
     def test_elapsed_time_in_think_event(self, mock_tool_calling_agent):
         """测试 THINK 事件中的 elapsed_time"""
+        from time import sleep
+
         mock_agent_e = MockAgent()
 
         def mock_stream_events(*args, **kwargs):
@@ -646,6 +647,7 @@ class TestCommonQAStreamingMixIn:
                 "run_id": "test_run_1",
             }
             # 模拟切换到文本内容
+            sleep(0.1)
             chunk2 = AIMessageChunk(content="答案")
             yield {
                 "event": "on_chat_model_stream",

@@ -630,7 +630,7 @@ class BkAiStreamingProtocol:
                         elapsed_time=(time.time() - self.agent_think_start_time) * 1000,
                     )
                     if not self.tool_calling:
-                        self.check_and_append(self.cache, ret)
+                        yield from self.handle_ret(ret)
                     self.final_result += ret["content"]
                 ret = BkAiStreamEvent(
                     event=StreamEventType.TEXT,

@@ -533,5 +533,5 @@ class TestCommonAgentChatStreamingWithAgent:
         # Legacy stream uses "event": "think" / "text" and "content"
         think_contents = [e.get("content", "") for e in results if e.get("event") == "think"]
         text_contents = [e.get("content", "") for e in results if e.get("event") == "text"]
-        assert "".join(think_contents) == "用户希望我帮他复述一下上下文"
+        assert "".join(think_contents) == "用户希望我帮他复述一下上下文\n"
         assert "".join(text_contents) == "你好\n我可以帮你什么?"
