@@ -79,8 +79,6 @@ class InMemoryQueueMessageHandler(SingleProcessMixin, BaseMessageQueueHandler):
             self._queue_locks[thread_id],
         )
 
-    # ================== BaseMessageQueueHandler 接口实现 ==================
-
     def put(self, thread_id: str, message: Any) -> None:
         """向指定 thread_id 的队列中添加消息
 
@@ -246,6 +244,32 @@ class InMemoryQueueMessageHandler(SingleProcessMixin, BaseMessageQueueHandler):
             logger.info(f"Restored {restored_count} messages from DLQ for thread_id={thread_id}")
             return restored_count
 
+    def _clear_all_queues(self, thread_id: str) -> None:
+        """清空指定 thread_id 的所有队列（内部方法）
+
+        Args:
+            thread_id: 线程ID
+        """
+        if thread_id not in self._main_queues:
+            return
+
+        main_queue, dlq, queue_lock = self._get_or_create_queues(thread_id)
+
+        # 清空主队列
+        while not main_queue.empty():
+            try:
+                main_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # 清空死信队列
+        with queue_lock:
+            dlq.clear()
+
+        # 清除取消请求状态
+        with self._cancel_lock:
+            self._cancel_requested.pop(thread_id, None)
+
     def mark_completed(self, thread_id: str) -> None:
         """标记流已完成并清理队列
 
@@ -254,24 +278,7 @@ class InMemoryQueueMessageHandler(SingleProcessMixin, BaseMessageQueueHandler):
         Args:
             thread_id: 线程ID
         """
-        if thread_id not in self._main_queues:
-            return
-
-        main_queue, dlq, queue_lock = self._get_or_create_queues(thread_id)
-
-        # 清空主队列
-        while not main_queue.empty():
-            try:
-                main_queue.get_nowait()
-            except queue.Empty:
-                break
-
-        # 清空死信队列
-        with queue_lock:
-            dlq.clear()
-
-        with self._cancel_lock:
-            self._cancel_requested.pop(thread_id, None)
+        self._clear_all_queues(thread_id)
         logger.debug(f"Marked completed and cleared queues for thread_id={thread_id}")
 
     def clear(self, thread_id: str) -> None:
@@ -280,24 +287,7 @@ class InMemoryQueueMessageHandler(SingleProcessMixin, BaseMessageQueueHandler):
         Args:
             thread_id: 线程ID
         """
-        if thread_id not in self._main_queues:
-            return
-
-        main_queue, dlq, queue_lock = self._get_or_create_queues(thread_id)
-
-        # 清空主队列
-        while not main_queue.empty():
-            try:
-                main_queue.get_nowait()
-            except queue.Empty:
-                break
-
-        # 清空死信队列
-        with queue_lock:
-            dlq.clear()
-
-        with self._cancel_lock:
-            self._cancel_requested.pop(thread_id, None)
+        self._clear_all_queues(thread_id)
         logger.debug(f"Cleared all queues for thread_id={thread_id}")
 
     def request_cancel(self, thread_id: str) -> None:
@@ -345,27 +335,7 @@ class InMemoryQueueMessageHandler(SingleProcessMixin, BaseMessageQueueHandler):
 
         return main_count + dlq_count
 
-    def is_empty(self, thread_id: str) -> bool:
-        """检查指定 thread_id 的队列是否为空（包括主队列和死信队列）
-
-        Args:
-            thread_id: 线程ID
-
-        Returns:
-            True 表示队列为空，False 表示队列不为空
-        """
-        return self.get_total_count(thread_id) == 0
-
-    def size(self, thread_id: str) -> int:
-        """获取主队列中的消息数量
-
-        Args:
-            thread_id: 线程ID
-
-        Returns:
-            主队列中的消息数量
-        """
-        return self.get_cached_count(thread_id)
+    # is_empty() 和 size() 使用基类的通用实现
 
     def list_thread_ids(self) -> list[str]:
         """列出所有 thread_id

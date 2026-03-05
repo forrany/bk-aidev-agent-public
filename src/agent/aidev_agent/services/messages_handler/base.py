@@ -1,16 +1,31 @@
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, runtime_checkable
 
-# 流结束标记
-EOD_CHUNK = "<END_OF_STREAM>"
-# 主动取消标记（生产者被 request_cancel 停止时发送，消费者与 EOD 同样清理队列）
-CANCELLED_CHUNK = "<CANCELLED>"
-# 心跳标记
-HEARTBEAT_CHUNK = "<HEARTBEAT>"
-# 心跳发送间隔（秒）
-HEARTBEAT_INTERVAL = 5.0
-# 心跳超时时间（秒），允许 3 个心跳周期
-HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 3
+# 从 constants 模块导入所有常量（统一管理）
+from .constants import (
+    CANCELLED_CHUNK,
+    EOD_CHUNK,
+    HEARTBEAT_CHUNK,
+    HEARTBEAT_INTERVAL,
+    HEARTBEAT_TIMEOUT,
+    STOPPED_CHUNK,
+    QueueTTLConfig,
+)
+
+# 重新导出常量，保持向后兼容
+__all__ = [
+    "EOD_CHUNK",
+    "CANCELLED_CHUNK",
+    "STOPPED_CHUNK",
+    "HEARTBEAT_CHUNK",
+    "HEARTBEAT_INTERVAL",
+    "HEARTBEAT_TIMEOUT",
+    "QueueTTLConfig",
+    "ConsumerPreemptedError",
+    "StreamCancelledError",
+    "ConsumerManagementProtocol",
+    "BaseMessageQueueHandler",
+]
 
 
 class ConsumerPreemptedError(Exception):
@@ -19,6 +34,31 @@ class ConsumerPreemptedError(Exception):
 
 class StreamCancelledError(Exception):
     """流被用户主动取消（停止会话）"""
+
+
+@runtime_checkable
+class ConsumerManagementProtocol(Protocol):
+    """消费者管理协议
+
+    定义消费者抢占管理的统一接口，SingleProcessMixin 和 MultiProcessMixin 都实现此协议。
+    使用 Protocol 而非 ABC 是因为 Mixin 类不应强制继承关系。
+    """
+
+    def acquire_consumer(self, thread_id: str) -> str:
+        """注册新消费者，返回消费者 ID"""
+        ...
+
+    def wait_for_previous_consumer(self, thread_id: str, timeout: float = 3.0) -> bool:
+        """等待旧消费者完全退出"""
+        ...
+
+    def check_consumer(self, thread_id: str, consumer_id: str) -> None:
+        """检查当前消费者是否仍是活跃消费者"""
+        ...
+
+    def release_consumer(self, thread_id: str, consumer_id: str) -> None:
+        """释放消费者"""
+        ...
 
 
 class BaseMessageQueueHandler(ABC):
@@ -198,4 +238,84 @@ class BaseMessageQueueHandler(ABC):
 
         Returns:
             死信队列中的消息列表（已发送给前端的消息）
+        """
+
+    # ================== 可选功能接口 ==================
+    # 以下方法提供默认实现，子类可以选择性地覆盖以支持额外功能
+
+    def get_total_count(self, thread_id: str) -> int:
+        """获取主队列和死信队列的总消息数量
+
+        默认实现：子类应覆盖此方法。
+
+        Args:
+            thread_id: 线程ID
+
+        Returns:
+            总消息数量
+        """
+        return 0
+
+    def is_empty(self, thread_id: str) -> bool:
+        """检查指定 thread_id 的队列是否为空（包括主队列和死信队列）
+
+        Args:
+            thread_id: 线程ID
+
+        Returns:
+            True 表示队列为空，False 表示队列不为空
+        """
+        return self.get_total_count(thread_id) == 0
+
+    def size(self, thread_id: str) -> int:
+        """获取主队列中的消息数量（get_cached_count 的别名）
+
+        Args:
+            thread_id: 线程ID
+
+        Returns:
+            主队列中的消息数量
+        """
+        if hasattr(self, "get_cached_count"):
+            return self.get_cached_count(thread_id)
+        return 0
+
+    # ================== 停止状态管理接口 ==================
+    # 以下方法用于支持 "用户点击 Stop 后保留已输出内容" 的功能
+    # 子类可以选择性地覆盖以支持此功能
+
+    def mark_stopped(self, thread_id: str) -> None:
+        """标记 session 已被用户主动停止
+
+        用户点击 Stop 时调用。标记后，下次进入该 session 时：
+        - 只展示 DLQ 中已有的内容
+        - 不启动新的生产者
+
+        默认实现为空，子类可覆盖。
+
+        Args:
+            thread_id: 线程ID
+        """
+
+    def is_stopped(self, thread_id: str) -> bool:
+        """检查 session 是否已被用户主动停止
+
+        默认实现返回 False，子类可覆盖。
+
+        Args:
+            thread_id: 线程ID
+
+        Returns:
+            True 表示已停止，只应展示已有内容，不应启动新生产者
+        """
+        return False
+
+    def clear_stopped(self, thread_id: str) -> None:
+        """清除停止标记
+
+        当用户发起新的输入（重新生成）时调用，清除停止状态。
+        默认实现为空，子类可覆盖。
+
+        Args:
+            thread_id: 线程ID
         """

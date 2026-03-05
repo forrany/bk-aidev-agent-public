@@ -4,23 +4,18 @@ from environs import Env
 
 from aidev_agent.enums import MessageHandlerType
 
+from .constants import EnvVarNames
+
 env = Env()
 
 
 class MessageHandlerConfig:
     """消息处理器配置"""
 
-    # 环境变量名称
-    ENV_HANDLER_TYPE = "MESSAGE_HANDLER_TYPE"
-    ENV_GUNICORN_WORKERS = "GUNICORN_WORKERS"
-    ENV_WEB_CONCURRENCY = "WEB_CONCURRENCY"
-    ENV_MULTI_PROCESS_MODE = "MULTI_PROCESS_MODE"
-    ENV_RABBITMQ_HOST = "RABBITMQ_HOST"
-
     @classmethod
     def get_explicit_type(cls) -> Optional[MessageHandlerType]:
         """获取显式指定的处理器类型"""
-        type_str = env.str(cls.ENV_HANDLER_TYPE, "").lower()
+        type_str = env.str(EnvVarNames.HANDLER_TYPE, "").lower()
         if type_str == MessageHandlerType.RABBITMQ.value:
             return MessageHandlerType.RABBITMQ
         if type_str == MessageHandlerType.INMEMORY.value:
@@ -30,7 +25,7 @@ class MessageHandlerConfig:
     @classmethod
     def has_rabbitmq_config(cls) -> bool:
         """检查是否配置了 RabbitMQ"""
-        return bool(env.str(cls.ENV_RABBITMQ_HOST, ""))
+        return bool(env.str(EnvVarNames.RABBITMQ_HOST, ""))
 
     @classmethod
     def is_multiprocess_mode(cls) -> bool:
@@ -43,18 +38,18 @@ class MessageHandlerConfig:
         4. uWSGI numproc > 1
         """
         # Gunicorn workers
-        gunicorn_workers = env.int(cls.ENV_GUNICORN_WORKERS, 1)
+        gunicorn_workers = env.int(EnvVarNames.GUNICORN_WORKERS, 1)
         if gunicorn_workers > 1:
             return True
 
         # WEB_CONCURRENCY（通用 worker 数量配置）
-        web_concurrency = env.int(cls.ENV_WEB_CONCURRENCY, 1)
+        web_concurrency = env.int(EnvVarNames.WEB_CONCURRENCY, 1)
         if web_concurrency > 1:
             return True
 
         # 显式多进程标志
         try:
-            if env.bool(cls.ENV_MULTI_PROCESS_MODE, False):
+            if env.bool(EnvVarNames.MULTI_PROCESS_MODE, False):
                 return True
         except (ValueError, TypeError):
             return False

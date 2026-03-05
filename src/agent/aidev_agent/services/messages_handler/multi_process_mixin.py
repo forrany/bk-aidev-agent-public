@@ -6,6 +6,7 @@ from logging import getLogger
 from typing import Any
 
 from .base import ConsumerPreemptedError
+from .constants import QueueNamePrefixes, QueueTTLConfig
 
 logger = getLogger(__name__)
 
@@ -37,17 +38,14 @@ class MultiProcessMixin:
     - 取消信号队列：aidev_agent.cancel.{thread_id}
     """
 
-    CONSUMER_QUEUE_PREFIX = "aidev_agent.consumer."
-    CONSUMER_EXIT_QUEUE_PREFIX = "aidev_agent.consumer_exit."
-    CANCEL_QUEUE_PREFIX = "aidev_agent.cancel."
-    # 控制队列和退出通知队列的 TTL（毫秒），1小时后自动删除
-    CONSUMER_QUEUE_TTL_MS = 3600 * 1000
-    # 退出通知消息的 TTL（毫秒），5秒后自动过期
-    CONSUMER_EXIT_MSG_TTL_MS = 5000
-    # 取消信号的 TTL（毫秒），30秒后自动过期（防止残留）
-    CANCEL_SIGNAL_TTL_MS = 30000
-    # wait_for_previous_consumer 的轮询间隔（秒）
-    WAIT_POLL_INTERVAL = 0.2
+    # 使用统一的队列前缀和 TTL 配置
+    CONSUMER_QUEUE_PREFIX = QueueNamePrefixes.CONSUMER_CONTROL
+    CONSUMER_EXIT_QUEUE_PREFIX = QueueNamePrefixes.CONSUMER_EXIT
+    CANCEL_QUEUE_PREFIX = QueueNamePrefixes.CANCEL_SIGNAL
+    CONSUMER_QUEUE_TTL_MS = QueueTTLConfig.QUEUE_EXPIRE_MS
+    CONSUMER_EXIT_MSG_TTL_MS = QueueTTLConfig.CONSUMER_EXIT_MSG_TTL_MS
+    CANCEL_SIGNAL_TTL_MS = QueueTTLConfig.CANCEL_SIGNAL_TTL_MS
+    WAIT_POLL_INTERVAL = QueueTTLConfig.WAIT_POLL_INTERVAL
 
     def _get_consumer_queue_name(self, thread_id: str) -> str:
         """获取控制队列名"""
@@ -317,6 +315,54 @@ class MultiProcessMixin:
 
     # ==================== 跨进程取消信号管理 ====================
 
+    def _declare_signal_queue(
+        self,
+        channel: Any,
+        queue_name: str,
+        message_ttl_ms: int,
+    ) -> None:
+        """声明信号队列（内部方法）
+
+        用于取消信号、消费者退出通知等场景，统一队列声明逻辑。
+
+        Args:
+            channel: RabbitMQ channel
+            queue_name: 队列名
+            message_ttl_ms: 消息 TTL（毫秒）
+        """
+        channel.queue_declare(
+            queue=queue_name,
+            durable=True,
+            arguments={
+                "x-max-length": 1,
+                "x-overflow": "drop-head",
+                "x-message-ttl": message_ttl_ms,
+                "x-expires": self.CONSUMER_QUEUE_TTL_MS,
+            },
+        )
+
+    def _publish_signal(
+        self,
+        channel: Any,
+        queue_name: str,
+        payload: dict,
+    ) -> None:
+        """发布信号消息（内部方法）
+
+        Args:
+            channel: RabbitMQ channel
+            queue_name: 队列名
+            payload: 消息内容（会被 JSON 序列化）
+        """
+        import pika
+
+        channel.basic_publish(
+            exchange="",
+            routing_key=queue_name,
+            body=json.dumps(payload).encode(),
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+
     def set_cancel_signal(self, thread_id: str) -> bool:
         """设置跨进程取消信号（通过 RabbitMQ 队列）
 
@@ -328,38 +374,16 @@ class MultiProcessMixin:
         Returns:
             True 表示成功设置取消信号
         """
-        import pika
-
         try:
             with self._with_connection() as connection:
                 channel = connection.channel()
                 cancel_queue = self._get_cancel_queue_name(thread_id)
 
-                # 声明取消信号队列（x-max-length=1 只保留最新信号）
-                channel.queue_declare(
-                    queue=cancel_queue,
-                    durable=True,
-                    arguments={
-                        "x-max-length": 1,
-                        "x-overflow": "drop-head",
-                        "x-message-ttl": self.CANCEL_SIGNAL_TTL_MS,
-                        "x-expires": self.CONSUMER_QUEUE_TTL_MS,
-                    },
-                )
+                # 声明取消信号队列
+                self._declare_signal_queue(channel, cancel_queue, self.CANCEL_SIGNAL_TTL_MS)
 
                 # 发送取消信号
-                payload = json.dumps(
-                    {
-                        "cancelled": True,
-                        "ts": time.time(),
-                    }
-                )
-                channel.basic_publish(
-                    exchange="",
-                    routing_key=cancel_queue,
-                    body=payload.encode(),
-                    properties=pika.BasicProperties(delivery_mode=2),
-                )
+                self._publish_signal(channel, cancel_queue, {"cancelled": True, "ts": time.time()})
                 logger.info(f"Cancel signal set for thread_id={thread_id}")
                 return True
         except Exception as e:
@@ -428,9 +452,9 @@ class MultiProcessMixin:
         except Exception as e:
             logger.warning(f"Error clearing cancel signal for thread_id={thread_id}: {e}")
 
+    # 消费者取消完成通知队列前缀（与上面的类常量保持一致的风格）
     CANCELLED_QUEUE_PREFIX = "aidev_agent.cancelled."
-    # 取消完成信号的 TTL（毫秒），30秒后自动过期
-    CANCELLED_SIGNAL_TTL_MS = 30000
+    CANCELLED_SIGNAL_TTL_MS = QueueTTLConfig.CANCELLED_SIGNAL_TTL_MS
 
     def _get_cancelled_queue_name(self, thread_id: str) -> str:
         """获取"消费者已因取消退出"通知队列名"""
@@ -448,38 +472,19 @@ class MultiProcessMixin:
         Returns:
             True 表示成功发送通知
         """
-        import pika
-
         try:
             with self._with_connection() as connection:
                 channel = connection.channel()
                 cancelled_queue = self._get_cancelled_queue_name(thread_id)
 
                 # 声明通知队列
-                channel.queue_declare(
-                    queue=cancelled_queue,
-                    durable=True,
-                    arguments={
-                        "x-max-length": 1,
-                        "x-overflow": "drop-head",
-                        "x-message-ttl": self.CANCELLED_SIGNAL_TTL_MS,
-                        "x-expires": self.CONSUMER_QUEUE_TTL_MS,
-                    },
-                )
+                self._declare_signal_queue(channel, cancelled_queue, self.CANCELLED_SIGNAL_TTL_MS)
 
                 # 发送通知
-                payload = json.dumps(
-                    {
-                        "cancelled": True,
-                        "ts": time.time(),
-                        "pid": os.getpid(),
-                    }
-                )
-                channel.basic_publish(
-                    exchange="",
-                    routing_key=cancelled_queue,
-                    body=payload.encode(),
-                    properties=pika.BasicProperties(delivery_mode=2),
+                self._publish_signal(
+                    channel,
+                    cancelled_queue,
+                    {"cancelled": True, "ts": time.time(), "pid": os.getpid()},
                 )
                 logger.info(f"Consumer cancelled notification sent for thread_id={thread_id}")
                 return True

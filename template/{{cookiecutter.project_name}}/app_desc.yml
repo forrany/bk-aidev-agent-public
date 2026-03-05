@@ -82,6 +82,9 @@ modules:
             value: "{{ cookiecutter.bkpaas_grant_apps }}"
             description: bkpaas grant apps
           {% endif %}
+          - name: MESSAGE_HANDLER_TYPE
+            value: "rabbitmq"
+            description: message handler type for multi-process mode
       processes:
         - name: web
           procCommand: gunicorn bk_plugin_runtime.wsgi --timeout 120 -k gthread -w 2 --max-requests=1000 --threads 64

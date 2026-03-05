@@ -127,6 +127,7 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
     事件处理机制：
     1. event_handler: 通用事件钩子，接收所有 BaseEvent，用于 BaseSessionWriter 等外部处理器
     2. EventDispatcher: 内部事件分发器，处理特定事件类型的转换（如工具事件）
+    3. cancel_checker: 取消检测回调，返回 True 表示应该取消，Agent 会优雅地发送 RunFinishedEvent
 
     注意：BaseSessionWriter 已实现完整的事件分发逻辑，会自行处理 RAW/RUN_ERROR 等事件类型
     """
@@ -140,8 +141,9 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
         config: RunnableConfig | None | MessagesInProgressRecord = None,
         tools: dict[str, StructuredTool] | None = None,
         event_handler: Callable[[BaseEvent], None] | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ):
-        super().__init__(name=name, graph=graph, description=description, config=config)
+        super().__init__(name=name, graph=graph, description=description, config=config, cancel_checker=cancel_checker)
         self._tool_mapping = tools or {}
         self._event_handler = event_handler
         self._event_dispatcher = EventDispatcher(self)

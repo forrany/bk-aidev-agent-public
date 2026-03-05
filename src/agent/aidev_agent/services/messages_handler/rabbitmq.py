@@ -14,7 +14,8 @@ from urllib.parse import quote
 import pika
 from environs import Env
 
-from .base import BaseMessageQueueHandler
+from .base import BaseMessageQueueHandler, QueueTTLConfig
+from .constants import QueueNamePrefixes
 from .multi_process_mixin import MultiProcessMixin
 
 logger = getLogger(__name__)
@@ -289,11 +290,12 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     - 后台守护线程每隔 0.5 秒批量推送消息，减少连接开销
     """
 
-    QUEUE_PREFIX: ClassVar[str] = "aidev_agent.thread."
-    DLX_EXCHANGE_PREFIX: ClassVar[str] = "aidev_agent.dlx."  # 死信交换机前缀
-    DLQ_PREFIX: ClassVar[str] = "aidev_agent.dlq."  # 死信队列前缀
-    CANCEL_QUEUE_PREFIX: ClassVar[str] = "aidev_agent.cancel."  # 取消请求队列前缀
-    QUEUE_TTL_MS: ClassVar[int] = 3600 * 1000  # 队列生命周期：3600秒（单位：毫秒）
+    # 使用统一的队列名称前缀和 TTL 配置
+    QUEUE_PREFIX: ClassVar[str] = QueueNamePrefixes.MESSAGE_QUEUE
+    DLX_EXCHANGE_PREFIX: ClassVar[str] = "aidev_agent.dlx."  # 死信交换机前缀（无需抽取）
+    DLQ_PREFIX: ClassVar[str] = QueueNamePrefixes.DEAD_LETTER_QUEUE
+    CANCEL_QUEUE_PREFIX: ClassVar[str] = QueueNamePrefixes.CANCEL_REQUEST
+    QUEUE_TTL_MS: ClassVar[int] = QueueTTLConfig.QUEUE_EXPIRE_MS
 
     _instance: Optional["RabbitMQMessageHandler"] = None
     _lock: ClassVar[threading.Lock] = threading.Lock()
@@ -692,6 +694,9 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
 
         消息会先添加到本地缓冲区，由后台守护线程每隔 0.5 秒批量推送到 RabbitMQ。
         """
+        # 确保守护线程存活（处理 Gunicorn fork 场景）
+        self._ensure_daemon_alive()
+
         # 添加到缓冲区
         with self._buffer_lock:
             if thread_id not in self._message_buffer:
@@ -863,17 +868,21 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                 dlq_name = self._get_dlq_name(thread_id)
 
                 # 检查主队列
+                main_count = 0
                 try:
                     queue_info = channel.queue_declare(queue=main_queue_name, durable=True, passive=True)
-                    if queue_info.method.message_count > 0:
+                    main_count = queue_info.method.message_count
+                    if main_count > 0:
                         return True
                 except Exception:
                     pass
 
                 # 检查死信队列
+                dlq_count = 0
                 try:
                     dlq_info = channel.queue_declare(queue=dlq_name, durable=True, passive=True)
-                    if dlq_info.method.message_count > 0:
+                    dlq_count = dlq_info.method.message_count
+                    if dlq_count > 0:
                         return True
                 except Exception:
                     pass
@@ -896,6 +905,51 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         """
         return self._restore_from_dlq(thread_id)
 
+    def _safe_purge_queue(self, channel: Any, queue_name: str, passive_check: bool = False) -> bool:
+        """安全清空队列（内部方法）
+
+        Args:
+            channel: RabbitMQ channel
+            queue_name: 队列名
+            passive_check: 是否先进行被动声明检查队列是否存在
+
+        Returns:
+            True 表示成功清空，False 表示失败或队列不存在
+        """
+        try:
+            if passive_check:
+                channel.queue_declare(queue=queue_name, durable=True, passive=True)
+            channel.queue_purge(queue=queue_name)
+            logger.debug(f"Purged queue {queue_name}")
+            return True
+        except Exception as e:
+            if not passive_check:  # 非被动检查模式下才记录警告
+                logger.warning(f"Failed to purge queue {queue_name}: {e}")
+            return False
+
+    def _purge_all_queues(self, thread_id: str, include_cancel_queue: bool = True) -> None:
+        """清空指定 thread_id 的所有队列（内部方法）
+
+        Args:
+            thread_id: 线程ID
+            include_cancel_queue: 是否同时清空取消请求队列
+        """
+        try:
+            with self._with_connection() as connection:
+                channel = connection.channel()
+
+                # 清空主队列和死信队列
+                self._safe_purge_queue(channel, self._get_queue_name(thread_id))
+                self._safe_purge_queue(channel, self._get_dlq_name(thread_id))
+
+                # 清空取消请求队列（如果需要，先检查是否存在）
+                if include_cancel_queue:
+                    self._safe_purge_queue(
+                        channel, self._get_cancel_queue_name(thread_id), passive_check=True
+                    )
+        except Exception as e:
+            logger.error(f"Error purging queues for thread_id={thread_id}: {e}")
+
     def mark_completed(self, thread_id: str) -> None:
         """标记流已完成并清理队列
 
@@ -904,36 +958,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         Args:
             thread_id: 线程ID
         """
-        try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
-                main_queue_name = self._get_queue_name(thread_id)
-                dlq_name = self._get_dlq_name(thread_id)
-
-                # 清空主队列
-                try:
-                    channel.queue_purge(queue=main_queue_name)
-                    logger.debug(f"Purged main queue {main_queue_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to purge main queue {main_queue_name}: {e}")
-
-                # 清空死信队列
-                try:
-                    channel.queue_purge(queue=dlq_name)
-                    logger.debug(f"Purged DLQ {dlq_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to purge DLQ {dlq_name}: {e}")
-
-                # 清空取消请求队列
-                cancel_queue_name = self._get_cancel_queue_name(thread_id)
-                try:
-                    channel.queue_declare(queue=cancel_queue_name, durable=True, passive=True)
-                    channel.queue_purge(queue=cancel_queue_name)
-                except Exception:
-                    pass
-
-        except Exception as e:
-            logger.error(f"Error purging queues after completion for thread_id={thread_id}: {e}")
+        self._purge_all_queues(thread_id, include_cancel_queue=True)
 
     def request_cancel(self, thread_id: str) -> None:
         """请求取消该 thread_id 的流。幂等：向取消队列投递一条消息，生产者轮询时消费到即退出。"""
@@ -985,31 +1010,8 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         # 检查并迁移不兼容的旧队列
         self._migrate_queue_if_needed(thread_id)
 
-        # 清空主队列和死信队列
-        try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
-                main_queue_name = self._get_queue_name(thread_id)
-                dlq_name = self._get_dlq_name(thread_id)
-
-                try:
-                    channel.queue_purge(queue=main_queue_name)
-                except Exception as e:
-                    logger.warning(f"Failed to purge main queue: {e}")
-
-                try:
-                    channel.queue_purge(queue=dlq_name)
-                except Exception as e:
-                    logger.warning(f"Failed to purge DLQ: {e}")
-
-                cancel_queue_name = self._get_cancel_queue_name(thread_id)
-                try:
-                    channel.queue_declare(queue=cancel_queue_name, durable=True, passive=True)
-                    channel.queue_purge(queue=cancel_queue_name)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"Failed to clear queues: {e}")
+        # 清空所有队列
+        self._purge_all_queues(thread_id, include_cancel_queue=True)
 
     def get_cached_count(self, thread_id: str) -> int:
         """获取主队列中的消息数量"""
@@ -1029,13 +1031,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         dlq_count = self._get_dlq_count(thread_id)
         return main_count + dlq_count
 
-    def is_empty(self, thread_id: str) -> bool:
-        """检查指定 thread_id 的队列是否为空（包括主队列和死信队列）"""
-        return self.get_total_count(thread_id) == 0
-
-    def size(self, thread_id: str) -> int:
-        """获取主队列中的消息数量"""
-        return self.get_cached_count(thread_id)
+    # is_empty() 和 size() 使用基类的通用实现
 
     def __del__(self):
         """析构函数：停止守护线程并关闭连接池"""

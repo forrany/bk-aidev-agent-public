@@ -3,7 +3,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from logging import getLogger
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from ag_ui.core import (
     CustomEvent,
@@ -97,6 +97,7 @@ class LangGraphAgent:
         graph: CompiledStateGraph,
         description: str | None = None,
         config: RunnableConfig | None | dict = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ):
         self.name = name
         self.description = description
@@ -105,6 +106,8 @@ class LangGraphAgent:
         self.messages_in_process: MessagesInProgressRecord = {}
         self.active_run: RunMetadata | None = None
         self.constant_schema_keys = ["messages", "tools"]
+        # 取消检测回调，返回 True 表示应该取消
+        self._cancel_checker = cancel_checker
 
     def _dispatch_event(self, event: ProcessedEvents) -> str:
         if event.type == EventType.RAW:
@@ -186,8 +189,16 @@ class LangGraphAgent:
 
         should_exit = False
         current_graph_state = state
+        # 标记是否被取消（用于后续发送正确的 RunFinishedEvent）
+        _cancelled = False
 
         async for event in stream:
+            # 检测取消信号（在每次循环迭代时检查）
+            if self._cancel_checker and self._cancel_checker():
+                logger.info(f"Agent cancelled by cancel_checker, thread_id={thread_id}")
+                _cancelled = True
+                break
+
             if event["event"] == "error":
                 yield self._dispatch_event(
                     RunErrorEvent(
@@ -231,6 +242,22 @@ class LangGraphAgent:
 
             async for single_event in self._handle_single_event(event, state):
                 yield single_event
+
+        # 如果被取消，跳过正常的状态获取，直接发送 RunFinishedEvent
+        if _cancelled:
+            # 结束当前步骤（如果有）
+            for ev in self.handle_node_change(None):
+                yield ev
+            # 发送 RunFinishedEvent，让前端走正常的结束流程
+            yield self._dispatch_event(
+                RunFinishedEvent(
+                    type=EventType.RUN_FINISHED,
+                    thread_id=thread_id,
+                    run_id=self.active_run["id"] or "cancelled",
+                )
+            )
+            self.active_run = INITIAL_ACTIVE_RUN
+            return
 
         state = await self.graph.aget_state(config)
 
@@ -995,83 +1022,21 @@ class LangGraphAGUIAgent(LangGraphAgent):
         graph: CompiledStateGraph,
         description: str | None = None,
         config: RunnableConfig | None | dict = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ):
-        super().__init__(name=name, graph=graph, description=description, config=config)
+        super().__init__(name=name, graph=graph, description=description, config=config, cancel_checker=cancel_checker)
         self.constant_schema_keys = self.constant_schema_keys + ["copilotkit"]
 
     def _dispatch_event(self, event) -> str:
-        """Override the dispatch event method to handle custom CopilotKit events and filtering"""
+        """Override the dispatch event method to handle custom CopilotKit events and filtering
 
+        Note: ManuallyEmitMessage/ManuallyEmitToolCall/ManuallyEmitState 事件的处理
+        已在父类 _handle_single_event 中完成，此处仅处理 CopilotKit 特有的 copilotkit_exit
+        和基于 metadata 的过滤逻辑。
+        """
         if event.type == EventType.CUSTOM:
             custom_event = event
-
-            if custom_event.name == CustomEventNames.ManuallyEmitMessage.value:
-                # Emit the message events
-                super()._dispatch_event(
-                    TextMessageStartEvent(
-                        type=EventType.TEXT_MESSAGE_START,
-                        role="assistant",
-                        message_id=custom_event.value["message_id"],
-                        raw_event=event,
-                    )
-                )
-                super()._dispatch_event(
-                    TextMessageContentEvent(
-                        type=EventType.TEXT_MESSAGE_CONTENT,
-                        message_id=custom_event.value["message_id"],
-                        delta=custom_event.value["message"],
-                        raw_event=event,
-                    )
-                )
-                super()._dispatch_event(
-                    TextMessageEndEvent(
-                        type=EventType.TEXT_MESSAGE_END,
-                        message_id=custom_event.value["message_id"],
-                        raw_event=event,
-                    )
-                )
-                return super()._dispatch_event(event)
-
-            if custom_event.name == CustomEventNames.ManuallyEmitToolCall.value:
-                # Emit the tool call events
-                super()._dispatch_event(
-                    ToolCallStartEvent(
-                        type=EventType.TOOL_CALL_START,
-                        tool_call_id=custom_event.value["id"],
-                        tool_call_name=custom_event.value["name"],
-                        parent_message_id=custom_event.value["id"],
-                        raw_event=event,
-                    )
-                )
-                super()._dispatch_event(
-                    ToolCallArgsEvent(
-                        type=EventType.TOOL_CALL_ARGS,
-                        tool_call_id=custom_event.value["id"],
-                        delta=custom_event.value["args"]
-                        if isinstance(custom_event.value["args"], str)
-                        else json.dumps(custom_event.value["args"]),
-                        raw_event=event,
-                    )
-                )
-                super()._dispatch_event(
-                    ToolCallEndEvent(
-                        type=EventType.TOOL_CALL_END,
-                        tool_call_id=custom_event.value["id"],
-                        raw_event=event,
-                    )
-                )
-                return super()._dispatch_event(event)
-
-            if custom_event.name == CustomEventNames.ManuallyEmitState.value:
-                self.active_run["manually_emitted_state"] = custom_event.value
-                return super()._dispatch_event(
-                    StateSnapshotEvent(
-                        type=EventType.STATE_SNAPSHOT,
-                        snapshot=self.get_state_snapshot(self.active_run["manually_emitted_state"]),
-                        raw_event=event,
-                    )
-                )
-
+            # 仅处理 CopilotKit 特有的 exit 事件
             if custom_event.name == "copilotkit_exit":
                 return super()._dispatch_event(
                     CustomEvent(

@@ -92,6 +92,9 @@ class BaseSessionWriter(ABC):
         # 用于追踪正在流式输出的消息，累积内容
         # key: message_id, value: {"content": str}
         self._streaming_messages: dict[str, dict] = {}
+        # 用于追踪 thinking/reasoning 内容
+        # key: "thinking", value: {"content": str}
+        self._thinking_content: str = ""
 
     # ---------- 公共事件入口 ----------
 
@@ -111,6 +114,14 @@ class BaseSessionWriter(ABC):
             self.handle_text_message_content(event)
         elif event.type == EventType.TEXT_MESSAGE_END:
             self.handle_text_message_end(event)
+        elif event.type == EventType.THINKING_TEXT_MESSAGE_START:
+            self.handle_thinking_message_start(event)
+        elif event.type == EventType.THINKING_TEXT_MESSAGE_CONTENT:
+            self.handle_thinking_message_content(event)
+        elif event.type == EventType.THINKING_TEXT_MESSAGE_END:
+            self.handle_thinking_message_end(event)
+        elif event.type == EventType.RUN_FINISHED:
+            self.handle_run_finished(event)
 
     def _dispatch_raw_event(self, event: RawEvent) -> None:
         """分发原始事件到类型化处理方法"""
@@ -172,6 +183,78 @@ class BaseSessionWriter(ABC):
         if not message_id:
             return
 
+    def handle_thinking_message_start(self, event: BaseEvent) -> None:
+        """处理 thinking 消息开始事件，重置 thinking 内容"""
+        self._thinking_content = ""
+
+    def handle_thinking_message_content(self, event: BaseEvent) -> None:
+        """处理 thinking 消息内容事件，累积 thinking 内容"""
+        # event 应该有 delta 属性
+        delta = getattr(event, "delta", "") or ""
+        self._thinking_content += delta
+
+    def handle_thinking_message_end(self, event: BaseEvent) -> None:
+        """处理 thinking 消息结束事件"""
+
+    def handle_run_finished(self, event: BaseEvent) -> None:
+        """处理运行结束事件，回写所有累积的消息内容
+
+        这是一个后备机制：当 on_chat_model_end 事件没有被触发时，
+        通过 RUN_FINISHED 事件来回写累积的流式消息内容。
+
+        Args:
+            event: RUN_FINISHED 事件
+        """
+        # 获取 thinking 内容
+        thinking_content = self._thinking_content.strip() if self._thinking_content else ""
+
+        # 回写所有未写入的流式消息（包含 thinking 内容）
+        for message_id, message_data in list(self._streaming_messages.items()):
+            if message_id in self._written_message_ids:
+                continue
+
+            content = message_data.get("content", "")
+
+            # 先回写 reasoning 内容（如果有）
+            if thinking_content:
+                self._write_reasoning_message_simple(
+                    message_id=message_id,
+                    reasoning_content=thinking_content,
+                )
+
+            # 回写 assistant 消息
+            self._write_assistant_message(
+                message_id=message_id,
+                content=content if content else "",
+                tool_calls=[],
+            )
+
+            # 标记为已写入
+            self._written_message_ids.add(message_id)
+
+        # 如果没有流式消息但有 thinking 内容，也需要回写
+        if not self._streaming_messages and thinking_content:
+            fallback_message_id = str(uuid.uuid4())
+
+            # 回写 reasoning
+            self._write_reasoning_message_simple(
+                message_id=fallback_message_id,
+                reasoning_content=thinking_content,
+            )
+
+            # 回写空的 assistant 消息
+            self._write_assistant_message(
+                message_id=fallback_message_id,
+                content="",
+                tool_calls=[],
+            )
+
+            self._written_message_ids.add(fallback_message_id)
+
+        # 清理
+        self._streaming_messages.clear()
+        self._thinking_content = ""
+
     def handle_model_end(self, event: RawEvent) -> None:
         """处理模型输出结束事件，回写 assistant 消息
 
@@ -183,6 +266,7 @@ class BaseSessionWriter(ABC):
             return
 
         message_id = output_message.id
+
         if message_id in self._written_message_ids:
             return
 
@@ -211,6 +295,8 @@ class BaseSessionWriter(ABC):
         self._written_message_ids.add(message_id)
         # 清理追踪
         self._streaming_messages.pop(message_id, None)
+        # 清空 thinking 内容，避免 handle_run_finished 重复回写
+        self._thinking_content = ""
 
     def handle_tool_finish(self, event: RawEvent) -> None:
         """处理工具执行完成事件，回写 tool 消息
@@ -227,7 +313,7 @@ class BaseSessionWriter(ABC):
             return
 
         # 映射状态：success -> success, error -> fail
-        platform_status = "fail" if output_message.status == "error" else "success"
+        platform_status = "fail" if output_message.status == "error" else "complete"
 
         self._create_session_content(
             message_id=output_message.id or tool_call_id,
@@ -328,20 +414,22 @@ class BaseSessionWriter(ABC):
         elif not content_stripped:
             # 没有 tool_calls 也没有内容，使用空字符串（可能会失败）
             return ""
-        return reasoning_content
+        return content_stripped
 
     def _write_reasoning_message(
         self,
         message_id: str,
         reasoning_content: str,
-        output_message: Any,
+        output_message: Any = None,
+        duration: int = 0,
     ) -> None:
         """回写 reasoning 消息
 
         Args:
             message_id: 当前 assistant 消息 ID
             reasoning_content: reasoning 内容
-            output_message: 模型输出对象
+            output_message: 模型输出对象（可选，用于提取 duration）
+            duration: reasoning 时长（当 output_message 为 None 时使用）
         """
         reasoning_message_id = f"rsn_{message_id}"
         if reasoning_message_id in self._written_message_ids:
@@ -349,20 +437,38 @@ class BaseSessionWriter(ABC):
 
         reasoning_content_list = reasoning_content if isinstance(reasoning_content, list) else [reasoning_content]
         reasoning_json = json.dumps(reasoning_content_list, ensure_ascii=False)
+
+        # 优先从 output_message 获取 duration，否则使用参数
+        actual_duration = duration
+        if output_message is not None:
+            actual_duration = output_message.additional_kwargs.get("reasoning_time", 0)
+
         reasoning_property = {
             "message_id": reasoning_message_id,
-            "duration": output_message.additional_kwargs.get("reasoning_time", 0),
+            "duration": actual_duration,
         }
 
         self._create_session_content(
             message_id=reasoning_message_id,
             role=PromptRole.REASONING.value,
             content=reasoning_json,
-            status="success",
+            status="complete",
             builtin_property=reasoning_property,
         )
 
         self._written_message_ids.add(reasoning_message_id)
+
+    # 保留别名以保持向后兼容
+    def _write_reasoning_message_simple(
+        self,
+        message_id: str,
+        reasoning_content: str,
+    ) -> None:
+        """回写 reasoning 消息（简化版，无 duration 信息）
+
+        Note: 此方法为向后兼容保留，内部调用 _write_reasoning_message
+        """
+        self._write_reasoning_message(message_id, reasoning_content, duration=0)
 
     def _write_assistant_message(
         self,
@@ -386,7 +492,7 @@ class BaseSessionWriter(ABC):
             message_id=message_id,
             role=PromptRole.ASSISTANT.value,
             content=content,
-            status="success",
+            status="complete",
             builtin_property=assistant_property,
         )
 

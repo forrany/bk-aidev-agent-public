@@ -4,19 +4,29 @@ import uuid
 from logging import getLogger
 from typing import Any, Callable, Generator
 
-from .base import (
+from .base import BaseMessageQueueHandler, ConsumerPreemptedError
+from .constants import (
     CANCELLED_CHUNK,
     EOD_CHUNK,
     HEARTBEAT_CHUNK,
     HEARTBEAT_INTERVAL,
     HEARTBEAT_TIMEOUT,
-    BaseMessageQueueHandler,
-    ConsumerPreemptedError,
-    StreamCancelledError,
+    STOPPED_CHUNK,
+    TimeoutConfig,
 )
 from .factory import message_handler_factory
 
 logger = getLogger(__name__)
+
+# 断点续传时需要过滤的事件类型（这些事件在续传时会导致前端重复显示）
+# 因为前端已经从数据库加载了完整的 reasoning 内容
+_RESUME_FILTER_EVENT_TYPES = frozenset({
+    "THINKING_START",
+    "THINKING_END",
+    "THINKING_TEXT_MESSAGE_START",
+    "THINKING_TEXT_MESSAGE_CONTENT",
+    "THINKING_TEXT_MESSAGE_END",
+})
 
 
 class GeneratorStreamingHelper:
@@ -51,9 +61,89 @@ class GeneratorStreamingHelper:
     _cancel_events: dict[str, "threading.Event"] = {}
     _cancel_lock = threading.Lock()
 
+    @staticmethod
+    def _should_filter_on_resume(item: Any) -> bool:
+        """判断断点续传时是否应该过滤该消息
+
+        断点续传时，前端已经从数据库加载了完整的 reasoning 内容，
+        如果再次发送 THINKING_* 事件，会导致前端显示两份 thinking 框。
+
+        Args:
+            item: 队列中的消息（SSE 编码字符串或其他格式）
+
+        Returns:
+            True 表示应该过滤（跳过），False 表示应该保留
+        """
+        if not isinstance(item, str):
+            return False
+
+        # 快速检查：如果不包含 THINKING，肯定不需要过滤
+        if "THINKING" not in item:
+            return False
+
+        # 尝试解析并检查 type 字段
+        try:
+            import json
+            # SSE 格式: "data: {...}"
+            if item.startswith("data: "):
+                json_str = item[6:].strip()
+                data = json.loads(json_str)
+                event_type = data.get("type", "")
+                return event_type in _RESUME_FILTER_EVENT_TYPES
+        except (json.JSONDecodeError, AttributeError, KeyError):
+            pass
+
+        return False
+
     def __init__(self, message_handler: BaseMessageQueueHandler | None = None, thread_id: str | None = None) -> None:
         self.message_handler = message_handler if message_handler else message_handler_factory.get()
         self.thread_id = thread_id or uuid.uuid4().hex
+
+    @classmethod
+    def _check_cancel_status(
+        cls,
+        thread_id: str,
+        message_handler: BaseMessageQueueHandler | None = None,
+        set_event_on_cross_process: bool = False,
+        cancel_event: "threading.Event | None" = None,
+    ) -> bool:
+        """检查取消状态的公共逻辑（内部使用）
+
+        同时检查：
+        1. 进程内取消事件（快速路径）
+        2. 跨进程取消信号（通过 RabbitMQ）
+
+        Args:
+            thread_id: 线程 ID / session_code
+            message_handler: 消息处理器，用于检查跨进程取消信号
+            set_event_on_cross_process: 如果检测到跨进程取消信号，是否同时设置进程内事件
+            cancel_event: 进程内取消事件（当 set_event_on_cross_process=True 时使用）
+
+        Returns:
+            True 表示已被取消，应该停止
+        """
+        # 1. 快速路径：检查进程内取消事件
+        with cls._cancel_lock:
+            event = cls._cancel_events.get(thread_id)
+            if event and event.is_set():
+                return True
+
+        # 2. 慢速路径：检查跨进程取消信号
+        if message_handler is None:
+            message_handler = message_handler_factory.get()
+
+        if hasattr(message_handler, "check_cancel_signal"):
+            try:
+                cross_cancelled = message_handler.check_cancel_signal(thread_id)
+                if cross_cancelled:
+                    # 跨进程取消信号存在，同时设置进程内事件（让后续检查更快）
+                    if set_event_on_cross_process and cancel_event:
+                        cancel_event.set()
+                    return True
+            except Exception as e:
+                logger.warning(f"Error checking cancel signal for thread_id={thread_id}: {e}")
+
+        return False
 
     @classmethod
     def cancel(cls, thread_id: str, message_handler: BaseMessageQueueHandler | None = None) -> bool:
@@ -94,6 +184,20 @@ class GeneratorStreamingHelper:
                 logger.exception(f"Error setting cross-process cancel signal: {e}")
 
         return result
+
+    @classmethod
+    def is_cancelled(cls, thread_id: str, message_handler: BaseMessageQueueHandler | None = None) -> bool:
+        """检查指定 thread_id 是否已被取消（供 Agent 内部使用）
+
+        Args:
+            thread_id: 线程 ID / session_code
+            message_handler: 消息处理器，用于检查跨进程取消信号。如果为 None，
+                           使用默认的消息处理器
+
+        Returns:
+            True 表示已被取消，应该停止
+        """
+        return cls._check_cancel_status(thread_id, message_handler)
 
     @classmethod
     def has_output(cls, thread_id: str, message_handler: BaseMessageQueueHandler | None = None) -> bool:
@@ -141,21 +245,70 @@ class GeneratorStreamingHelper:
         Returns:
             True 表示被取消，应该停止
         """
-        # 1. 快速路径：检查进程内取消事件
-        if cancel_event.is_set():
-            return True
+        # 直接使用公共方法检查，并在检测到跨进程取消时同步设置进程内事件
+        return self._check_cancel_status(
+            self.thread_id,
+            self.message_handler,
+            set_event_on_cross_process=True,
+            cancel_event=cancel_event,
+        )
 
-        # 2. 慢速路径：检查跨进程取消信号（通过 RabbitMQ）
-        if hasattr(self.message_handler, "check_cancel_signal"):
+    def _consume_stopped_session(
+        self,
+        consumer_id: str,
+    ) -> Generator[Any, None, None]:
+        """消费已停止会话的消息（内部方法）
+
+        用于用户点击 Stop 后再次进入会话的场景，只展示已有内容，不启动新生产者。
+
+        Args:
+            consumer_id: 消费者 ID
+
+        Yields:
+            队列中的消息（跳过控制消息）
+        """
+        max_empty_rounds = 3  # 最多空轮询3次就结束
+        empty_rounds = 0
+
+        while True:
             try:
-                if self.message_handler.check_cancel_signal(self.thread_id):
-                    # 跨进程取消信号存在，同时设置进程内事件（让后续检查更快）
-                    cancel_event.set()
-                    return True
-            except Exception as e:
-                logger.warning(f"Error checking cross-process cancel signal: {e}")
+                self.message_handler.check_consumer(self.thread_id, consumer_id)
+                messages = self.message_handler.get(self.thread_id, timeout=0.3)
 
-        return False
+                if not messages:
+                    empty_rounds += 1
+                    if empty_rounds >= max_empty_rounds:
+                        # 没有更多消息了，发送 STOPPED_CHUNK 并结束
+                        yield STOPPED_CHUNK
+                        # 清理队列（因为已经展示完了）
+                        self.message_handler.mark_completed(self.thread_id)
+                        # 清除停止标记
+                        if hasattr(self.message_handler, "clear_stopped"):
+                            self.message_handler.clear_stopped(self.thread_id)
+                        return
+                    continue
+
+                empty_rounds = 0  # 重置空轮询计数
+                for item in messages:
+                    if item in (HEARTBEAT_CHUNK, EOD_CHUNK, CANCELLED_CHUNK):
+                        continue  # 跳过控制消息
+                    # 已停止会话也是恢复模式，过滤 thinking 事件避免重复显示
+                    if self._should_filter_on_resume(item):
+                        logger.debug(f"Filtered thinking event in stopped session for thread_id={self.thread_id}")
+                        continue
+                    yield item
+            except ConsumerPreemptedError:
+                logger.info(f"Consumer preempted in stopped session for thread_id={self.thread_id}")
+                raise
+            except TimeoutError:
+                empty_rounds += 1
+                if empty_rounds >= max_empty_rounds:
+                    yield STOPPED_CHUNK
+                    self.message_handler.mark_completed(self.thread_id)
+                    if hasattr(self.message_handler, "clear_stopped"):
+                        self.message_handler.clear_stopped(self.thread_id)
+                    return
+                continue
 
     def stream(
         self,
@@ -193,14 +346,56 @@ class GeneratorStreamingHelper:
         # 注册为当前活跃消费者
         consumer_id = self.message_handler.acquire_consumer(self.thread_id)
 
+        # 检查是否已被用户停止（Stop 后再次进入会话）
+        is_stopped = False
+        if hasattr(self.message_handler, "is_stopped"):
+            is_stopped = self.message_handler.is_stopped(self.thread_id)
+
         # 检查队列中是否有未消费的数据
         has_pending = self.message_handler.has_pending_messages(self.thread_id)
+
+        # 如果用户之前点击了 Stop，检查是否有未展示的内容
+        if is_stopped:
+            # 等待旧消费者完全退出（缩短超时）
+            self.message_handler.wait_for_previous_consumer(self.thread_id, timeout=1.0)
+            # 将死信队列的消息恢复到主队列
+            restored = self.message_handler.restore_messages(self.thread_id)
+
+            # 检查主队列是否有消息
+            main_count = (
+                self.message_handler.get_cached_count(self.thread_id)
+                if hasattr(self.message_handler, "get_cached_count")
+                else 0
+            )
+
+            # 如果没有任何消息可展示，说明用户是"重新生成"，清除停止标记并继续正常流程
+            if restored == 0 and main_count == 0:
+                if hasattr(self.message_handler, "clear_stopped"):
+                    self.message_handler.clear_stopped(self.thread_id)
+                # 重置 is_stopped，让后续流程启动新生产者
+                is_stopped = False
+                has_pending = False
+            else:
+                # 有消息可展示，进入"恢复流"模式，使用提取的方法处理
+                try:
+                    yield from self._consume_stopped_session(consumer_id)
+                finally:
+                    self._unregister_cancel_event()
+                    if hasattr(self.message_handler, "clear_cancel_signal"):
+                        try:
+                            self.message_handler.clear_cancel_signal(self.thread_id)
+                        except Exception as e:
+                            logger.warning(f"Error clearing cancel signal: {e}")
+                    self.message_handler.release_consumer(self.thread_id, consumer_id)
+                return
 
         producer_thread = None
         # 记录最后一次收到消息的时间（用于心跳超时检测）
         last_message_time = time.time()
         # 是否启用心跳检测（仅在启动新生产者时启用）
         enable_heartbeat_check = False
+        # 是否为断点续传模式（恢复 DLQ 消息时需要过滤 thinking 事件，因为前端已从数据库加载）
+        is_resuming = False
 
         if not has_pending:
             # 队列看起来为空，但可能旧消费者正在被抢占过程中（消息在 processing 中还未进入 DLQ）
@@ -220,6 +415,9 @@ class GeneratorStreamingHelper:
             # 确认队列确实为空（不存在旧消费者 restore 的消息），需要启动新的生产者
             # 先清空队列确保干净状态
             self.message_handler.clear(self.thread_id)
+            # 清除停止标记（用户发起了新的生成请求）
+            if hasattr(self.message_handler, "clear_stopped"):
+                self.message_handler.clear_stopped(self.thread_id)
 
             # 启动生产者线程（传入 cancel_event 以支持取消）
             producer_thread = threading.Thread(target=self._producer, args=(generator, cancel_event), daemon=True)
@@ -238,17 +436,34 @@ class GeneratorStreamingHelper:
             )
 
         # 消费者：从队列中获取消息
+        # 标记是否进入取消 drain 模式（检测到取消后继续消费剩余消息，等待 RUN_FINISHED + EOD_CHUNK）
+        consumer_draining = False
+        consumer_drain_start = 0.0
         try:
             while True:
                 try:
                     # 检查是否被取消（同时检查进程内事件和跨进程信号）
-                    if self._is_cancelled(cancel_event):
-                        logger.info(f"Stream cancelled for thread_id={self.thread_id}")
-                        # 不立即清理 DLQ，而是通知 stop_session 可以读取了
-                        # stop_session 读取完后会自己调用 mark_completed() 清理
-                        if hasattr(self.message_handler, "notify_consumer_cancelled"):
-                            self.message_handler.notify_consumer_cancelled(self.thread_id)
-                        raise StreamCancelledError(f"Stream cancelled for thread_id={self.thread_id}")
+                    if not consumer_draining and self._is_cancelled(cancel_event):
+                        logger.info(
+                            f"Stream cancel detected for thread_id={self.thread_id}, "
+                            f"entering drain mode to wait for RUN_FINISHED"
+                        )
+                        consumer_draining = True
+                        consumer_drain_start = time.time()
+                        # 不立即退出，继续消费队列中的剩余消息（等待生产者 yield RUN_FINISHED）
+
+                    # drain 模式超时检查
+                    if consumer_draining and (time.time() - consumer_drain_start > self.CANCEL_DRAIN_TIMEOUT):
+                        logger.warning(
+                            f"Consumer drain timeout ({self.CANCEL_DRAIN_TIMEOUT}s) "
+                            f"for thread_id={self.thread_id}, force exit"
+                        )
+                        # drain 超时也用 mark_stopped 保留 DLQ 内容
+                        if hasattr(self.message_handler, "mark_stopped"):
+                            self.message_handler.mark_stopped(self.thread_id)
+                        # 发送 STOPPED_CHUNK 告诉前端
+                        yield STOPPED_CHUNK
+                        return
 
                     # 检查是否被新消费者抢占
                     self.message_handler.check_consumer(self.thread_id, consumer_id)
@@ -278,9 +493,16 @@ class GeneratorStreamingHelper:
                             logger.info(f"Stream completed for thread_id={self.thread_id}")
                             return
                         if item == CANCELLED_CHUNK:
-                            # 主动取消，同样清理队列并结束
-                            self.message_handler.mark_completed(self.thread_id)
-                            logger.info(f"Stream cancelled for thread_id={self.thread_id}")
+                            # 主动取消：不清空队列，而是标记为已停止
+                            # 这样下次进入会话时可以展示已输出的内容
+
+                            # 标记 session 已停止（下次进入时只展示已有内容）
+                            if hasattr(self.message_handler, "mark_stopped"):
+                                self.message_handler.mark_stopped(self.thread_id)
+
+                            logger.info(f"Stream cancelled for thread_id={self.thread_id}, DLQ content preserved")
+                            # 发送 STOPPED_CHUNK 告诉前端流已停止
+                            yield STOPPED_CHUNK
                             return
                         yield item
                 except ConsumerPreemptedError:
@@ -316,68 +538,87 @@ class GeneratorStreamingHelper:
             # 等待生产者线程结束（如果是本次启动的）
             if producer_thread is not None:
                 try:
-                    producer_thread.join(timeout=2.0)
+                    producer_thread.join(timeout=self.CANCEL_DRAIN_TIMEOUT + 2.0)
                 except Exception as e:
                     logger.exception(f"Error joining producer thread for thread_id={self.thread_id}: {e}")
+
+    # 取消后等待 generator 产出 RUN_FINISHED 的宽限时间（秒）
+    CANCEL_DRAIN_TIMEOUT = TimeoutConfig.CANCEL_DRAIN_TIMEOUT
 
     def _producer(self, generator: Generator[Any, None, None], cancel_event: threading.Event | None = None) -> None:
         """生产者线程：将生成器产生的消息推送到队列
 
         即使消费者断开连接，生产者也会继续运行直到完成。
         会定期发送心跳消息，让消费者知道生产者仍然存活。
-        如果 cancel_event 被设置（进程内或跨进程），生产者会尽快退出。
+        如果 cancel_event 被设置（进程内或跨进程），生产者不会直接退出，
+        而是继续 drain generator 一段时间，等待 Agent 内部的 cancel_checker 触发
+        并 yield RUN_FINISHED 事件，确保前端能收到完整的结束信号。
         """
         last_heartbeat_time = time.time()
         # 跨进程取消检查计数器（每 N 个 chunk 检查一次，避免频繁访问 RabbitMQ）
         chunk_count = 0
         CROSS_PROCESS_CHECK_INTERVAL = 10  # 每处理 10 个 chunk 检查一次跨进程取消
+        # 标记是否进入取消 drain 模式（检测到取消后继续读取 generator，等待 RUN_FINISHED）
+        draining = False
+        drain_start_time = 0.0
 
         try:
             for chunk in generator:
                 chunk_count += 1
 
-                # 检查是否被取消（进程内快速检查）
-                if cancel_event and cancel_event.is_set():
-                    logger.info(f"Producer cancelled (in-process) for thread_id={self.thread_id}")
-                    break
+                if not draining:
+                    # 检查是否被取消（进程内快速检查）
+                    if cancel_event and cancel_event.is_set():
+                        logger.info(f"Producer entering drain mode (in-process cancel) for thread_id={self.thread_id}")
+                        draining = True
+                        drain_start_time = time.time()
+                        # 不 break，继续 drain generator 等待 RUN_FINISHED
 
-                # 定期检查跨进程取消信号（每 N 个 chunk 或心跳时检查）
-                current_time = time.time()
-                should_check_cross_process = (
-                    chunk_count % CROSS_PROCESS_CHECK_INTERVAL == 0
-                    or current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL
-                )
-                if should_check_cross_process and hasattr(self.message_handler, "check_cancel_signal"):
-                    try:
-                        if self.message_handler.check_cancel_signal(self.thread_id):
-                            logger.info(f"Producer cancelled (cross-process) for thread_id={self.thread_id}")
-                            if cancel_event:
-                                cancel_event.set()  # 同步设置进程内标志
-                            break
-                    except Exception as e:
-                        logger.warning(f"Error checking cross-process cancel signal in producer: {e}")
+                    # 定期检查跨进程取消信号（每 N 个 chunk 或心跳时检查）
+                    current_time = time.time()
+                    should_check_cross_process = (
+                        chunk_count % CROSS_PROCESS_CHECK_INTERVAL == 0
+                        or current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL
+                    )
+                    if should_check_cross_process and hasattr(self.message_handler, "check_cancel_signal"):
+                        try:
+                            cross_cancelled = self.message_handler.check_cancel_signal(self.thread_id)
+                            if cross_cancelled:
+                                logger.info(
+                                    f"Producer entering drain mode (cross-process cancel) "
+                                    f"for thread_id={self.thread_id}"
+                                )
+                                if cancel_event:
+                                    cancel_event.set()  # 同步设置进程内标志
+                                draining = True
+                                drain_start_time = time.time()
+                        except Exception as e:
+                            logger.warning(f"Error checking cross-process cancel signal in producer: {e}")
+                else:
+                    # drain 模式：检查是否超时
+                    if time.time() - drain_start_time > self.CANCEL_DRAIN_TIMEOUT:
+                        logger.warning(
+                            f"Producer drain timeout ({self.CANCEL_DRAIN_TIMEOUT}s) "
+                            f"for thread_id={self.thread_id}, force exit"
+                        )
+                        break
 
                 self.message_handler.put(self.thread_id, chunk)
                 logger.debug(f"Produced chunk for thread_id={self.thread_id}")
 
-                # 检查是否需要发送心跳
-                if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL:
-                    self.message_handler.put(self.thread_id, HEARTBEAT_CHUNK)
-                    last_heartbeat_time = current_time
-                    logger.debug(f"Sent heartbeat for thread_id={self.thread_id}")
+                # 检查是否需要发送心跳（drain 模式下不发心跳）
+                if not draining:
+                    current_time = time.time()
+                    if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL:
+                        self.message_handler.put(self.thread_id, HEARTBEAT_CHUNK)
+                        last_heartbeat_time = current_time
+                        logger.debug(f"Sent heartbeat for thread_id={self.thread_id}")
         except GeneratorExit:
             logger.info(f"Generator closed for thread_id={self.thread_id}")
         except Exception as e:
             logger.debug(f"Sent error chunk for thread_id={self.thread_id}: {e}")
         finally:
-            cancelled = cancel_event.is_set() if cancel_event else False
-            if cancelled:
-                # 被取消时，消费者已经调用了 mark_completed() 清理队列
-                # 不再推送 EOD_CHUNK，避免残留消息导致重新生成时误走断点续传
-                logger.info(f"Producer cancelled, skip EOD_CHUNK for thread_id={self.thread_id}")
-            else:
-                # 正常结束，推送结束标记
-                self.message_handler.put(self.thread_id, EOD_CHUNK)
-                # 立即刷新缓冲区，确保 EOD_CHUNK 被及时发送到队列
-                self.message_handler.flush(self.thread_id)
-                logger.debug(f"Producer finished, sent EOD_CHUNK for thread_id={self.thread_id}")
+            # 无论是正常结束还是取消，都推送 EOD_CHUNK 让消费者知道流已结束
+            self.message_handler.put(self.thread_id, EOD_CHUNK)
+            self.message_handler.flush(self.thread_id)
+            logger.debug(f"Producer finished, sent EOD_CHUNK for thread_id={self.thread_id}")

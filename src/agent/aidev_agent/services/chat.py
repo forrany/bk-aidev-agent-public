@@ -180,7 +180,10 @@ class ChatCompletionAgent(BaseModel):
             thread_id=self.thread_id,
         )
         if not helper.message_handler.is_cancel_requested(self.thread_id):
+            logger.info(f"[STOP_DEBUG] Calling message_handler.request_cancel() for thread_id={self.thread_id}")
             helper.message_handler.request_cancel(self.thread_id)
+        else:
+            logger.info(f"[STOP_DEBUG] Cancel already requested for thread_id={self.thread_id}")
 
     def _execute(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs):
         if not messages:
@@ -232,14 +235,25 @@ class ChatCompletionAgent(BaseModel):
             "messages": langchain_messages_to_agui(messages),
         }
         agent_input = AgentInput(**body)
+
+        # 创建取消检测回调，让 Agent 内部能够感知取消信号
+        # 当用户点击停止按钮时，cancel_checker 会返回 True，Agent 会优雅地发送 RunFinishedEvent
+        def make_cancel_checker(thread_id: str):
+            def cancel_checker() -> bool:
+                return GeneratorStreamingHelper.is_cancelled(thread_id)
+
+            return cancel_checker
+
         agui_entry = AidevAGUIAgent(
             name="test_agui_agent",
             graph=agent_e,
             event_handler=self.event_handler,
             config=cfg,
             tools={each.name: each for each in self.tools} if self.tools else {},
+            cancel_checker=make_cancel_checker(stream_thread_id),
         )
-        return self._stream_with_queue(agui_entry, agent_input)
+
+        return self._stream_with_queue(agui_entry, agent_input, queue_thread_id=stream_thread_id)
 
     def _stream_with_queue(
         self, agui_entry: AidevAGUIAgent, agent_input: AgentInput, queue_thread_id: str | None = None
