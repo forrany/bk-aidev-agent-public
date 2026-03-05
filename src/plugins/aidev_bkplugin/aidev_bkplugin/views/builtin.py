@@ -7,6 +7,8 @@ from logging import getLogger
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.enums import PromptRole
 from aidev_agent.services.chat import ChatPrompt
+from aidev_agent.services.messages_handler import ConsumerPreemptedError, StreamCancelledError
+from aidev_agent.services.pydantic_models import ExecuteKwargs
 from bk_plugin_framework.kit.api import custom_authentication_classes
 from bk_plugin_framework.kit.decorators import inject_user_token, login_exempt
 from blueapps.core.exceptions import ClientBlueException
@@ -16,6 +18,7 @@ from django.utils.decorators import method_decorator
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.negotiation import DefaultContentNegotiation
+from rest_framework.parsers import FileUploadParser
 from rest_framework.request import Request
 from rest_framework.status import is_success
 from rest_framework.views import APIView, Response
@@ -28,6 +31,8 @@ from aidev_bkplugin.services.agent import (
     build_chat_completion_agent_by_session_code,
     build_execute_kwargs,
     get_agent_config_info,
+    get_agent_version,
+    run_chat_completion_with_thread_id,
 )
 from aidev_bkplugin.utils import set_user_access_token
 
@@ -71,6 +76,7 @@ class PluginViewSet(ViewSetMixin, APIView):
             return response
         # 目前仅对 Restful Response 进行处理
         if isinstance(response, Response):
+            trace_id = getattr(request, "otel_trace_id", None)
             if is_success(response.status_code):
                 response.status_code = status.HTTP_200_OK
                 response.data = {
@@ -78,6 +84,7 @@ class PluginViewSet(ViewSetMixin, APIView):
                     "data": response.data,
                     "code": "success",
                     "message": "ok",
+                    "trace_id": trace_id,
                 }
             else:
                 response.data = {
@@ -85,6 +92,7 @@ class PluginViewSet(ViewSetMixin, APIView):
                     "data": None,
                     "code": f"{response.status_code}",
                     "message": response.data,
+                    "trace_id": trace_id,
                 }
         return super().finalize_response(request, response, *args, **kwargs)
 
@@ -118,6 +126,30 @@ class ChatSessionViewSet(PluginViewSet):
     @action(["POST"], url_path="ai_rename", detail=True)
     def ai_rename(self, request, pk, **kwargs):
         result = client.api.rename_chat_session(path_params={"session_code": pk})
+        return Response(data=result["data"])
+
+    @action(
+        ["POST"],
+        url_path="upload/(?P<file_name>.+)",
+        detail=True,
+        parser_classes=[FileUploadParser],
+    )
+    def upload(self, request, pk, file_name, **kwargs):
+        if not request.data.get("file", None):
+            raise ClientBlueException(message="file is required")
+        _data = dict(
+            path_params={"session_code": pk, "file_name": file_name},
+            data=request.data.get("file", None).read(),
+            keep_data=True,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Disposition": f'attachment; filename="{file_name}"',
+            },
+        )
+        logger.info(f"upload_chat_session_file data: {_data}")
+        result = client.api.upload_chat_session_file(
+            **_data,
+        )
         return Response(data=result["data"])
 
     def destroy(self, request, pk, **kwargs):
@@ -174,19 +206,32 @@ class ChatCompletionViewSet(PluginViewSet):
 
     def create(self, request):
         # 调用Agent 的时候需要传入的相关参数
-        execute_kwargs = build_execute_kwargs(request.data.get("execute_kwargs", {}), request.user.username)
+        username = request.user.username
+        execute_kwargs = build_execute_kwargs(request.data.get("execute_kwargs", {}), username)
         session_code = request.data.get("session_code", "")
-        execute_kwargs.session_code = session_code
-        # 构造 agent_instance
-        # 有 session_code 时走 build_chat_completion_agent_by_session_code（传入 client 启用回写）
-        # 否则用 chat_history/input 走 build_chat_completion_agent_by_chat_history
+        execute_kwargs.session_code = request.data.get("session_code", "")
+
         _input = request.data.get("input", "")
+        event_handler = None  # 用于断点续传
+
+        thread_id = execute_kwargs.thread_id
+        if thread_id:
+            return self._handle_thread_id_mode(
+                thread_id=thread_id,
+                input_text=_input,
+                username=username,
+                execute_kwargs=execute_kwargs,
+            )
+
+        # 构造 agent_instance，在 ChatCompletion 中，获取到的是 ChatCompletionAgent
         if session_code:
             agent_instance = build_chat_completion_agent_by_session_code(
                 session_code=session_code,
                 client=client,
                 username=request.user.username,
             )
+            # 获取 event_handler 用于后续更新会话状态
+            event_handler = agent_instance.event_handler
             # 如果有 input 参数，追加到会话历史（支持新会话或追加消息）
             if _input:
                 if agent_instance.chat_history is None:
@@ -199,17 +244,65 @@ class ChatCompletionViewSet(PluginViewSet):
             chat_history = [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history]
             if _input:
                 chat_history.append(ChatPrompt(role="user", content=_input))
-            agent_instance = build_chat_completion_agent_by_chat_history(
-                chat_history=chat_history, username=request.user.username
-            )
-
+            agent_instance = build_chat_completion_agent_by_chat_history(chat_history, username)
         # 执行 agent
         if execute_kwargs.stream:
             generator = agent_instance.execute(execute_kwargs)
+            # 断点续传：在流式开始/结束时更新会话状态
+            if event_handler and all(
+                hasattr(event_handler, m) for m in ["set_streaming_started", "set_streaming_finished"]
+            ):
+                event_handler.set_streaming_started()
+                generator = self._wrap_streaming_with_status(generator, event_handler)
             return self.streaming_response(generator)
         else:
             result = agent_instance.execute(execute_kwargs)
             return Response(result)
+
+    def _handle_thread_id_mode(self, thread_id: str, input_text: str, username: str, execute_kwargs: ExecuteKwargs):
+        """
+        通过 thread_id 自动管理会话，自动保存用户消息和 AI 回复
+        """
+        if not input_text:
+            raise ClientBlueException(message="input is required when using thread_id")
+
+        result, _ = run_chat_completion_with_thread_id(
+            thread_id=thread_id,
+            input_text=input_text,
+            username=username,
+            execute_kwargs=execute_kwargs,
+            save_content=True,
+        )
+        if execute_kwargs.stream:
+            return self.streaming_response(result)
+        return Response(result)
+
+    def _wrap_streaming_with_status(self, generator, event_handler):
+        """包装流式生成器，在结束时更新会话状态为 finished
+
+        如果消费者被新消费者抢占（断点续传场景），不更新 status，
+        让新消费者负责管理会话状态。
+        如果客户端断开连接（GeneratorExit），也不更新 status，
+        因为 agent 可能仍在运行，用户刷新后需要续传。
+        """
+        _preempted = False
+        _client_disconnected = False
+        _cancelled = False
+        try:
+            for chunk in generator:
+                yield chunk
+        except GeneratorExit:
+            _client_disconnected = True
+            return
+        except ConsumerPreemptedError:
+            _preempted = True
+        except StreamCancelledError:
+            _cancelled = True
+        except Exception:
+            raise
+        finally:
+            if not _preempted and not _client_disconnected and not _cancelled:
+                event_handler.set_streaming_finished()
 
     def streaming_response(self, generator):
         sr = StreamingHttpResponse(generator)
@@ -250,6 +343,11 @@ class AgentInfoViewSet(PluginViewSet):
         response["Access-Control-Max-Age"] = "1000"
         response["Access-Control-Allow-Headers"] = "X-Requested-With, Content-Type"
         return response
+
+    @action(detail=False, methods=["GET"], url_path="version", url_name="version")
+    def version(self, request, *args, **kwargs):
+        """获取所有以 aidev 开头的已安装包及其版本"""
+        return Response(data=get_agent_version())
 
 
 class ChatGroupViewSet(PluginViewSet):

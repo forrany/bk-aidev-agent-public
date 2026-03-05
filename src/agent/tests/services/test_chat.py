@@ -1,14 +1,19 @@
+import json
+import threading
+import time
+from unittest.mock import patch
+
 import pytest
 from ag_ui.core import EventType
-from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.config import settings
+from aidev_agent.core.ag_ui.types import CustomMessageType
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.models.mock import MockChatModel, MockResponse
+from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.services.chat import ChatCompletionAgent, ExecuteKwargs
 from aidev_agent.services.pydantic_models import (
     ChatPrompt,
 )
-from bkapi_client_core.client import json
 from langchain_core.tools import tool
 
 
@@ -18,6 +23,26 @@ def assert_content_type_equal(results: list[dict], event_type: EventType, conten
         if each["type"] == event_type:
             contents.append(each["delta"])
     assert "".join(contents) == content
+
+
+def assert_custom_event_exists(results: list[dict], custom_message_type: CustomMessageType) -> dict:
+    """断言指定的自定义消息类型存在于 results 中并返回该事件
+
+    Args:
+        results: 事件结果列表
+        custom_message_type: 自定义消息类型枚举
+
+    Returns:
+        找到的第一个匹配事件
+
+    Raises:
+        AssertionError: 如果未找到匹配的事件
+    """
+    matched_events = [
+        e for e in results if e.get("type") == EventType.CUSTOM and e.get("name") == custom_message_type.value
+    ]
+    assert len(matched_events) > 0, f"应该有 {custom_message_type.value} 事件"
+    return matched_events[0]
 
 
 @tool
@@ -32,26 +57,11 @@ def get_weather_error(location: str) -> str:
     raise ValueError("天气预报获取失败")
 
 
-@pytest.fixture
-def add_session():
-    client = BKAidevApi.get_client()
-    session_code = "onlyfortest1"
-    client.api.create_chat_session(json={"session_code": session_code, "session_name": "testonly"})
-    # 添加一些session content
-    client.api.create_chat_session_content(
-        json={
-            "session_code": session_code,
-            "role": "user",
-            "content": "明天深圳天气怎么样?",
-            "status": "success",
-        }
-    )
-    yield session_code
-    result = client.api.get_chat_session_contents(params={"session_code": session_code})
-    for each in result.get("data", []):
-        _id = each["id"]
-        client.api.destroy_chat_session_content(path_params={"id": _id})
-    client.api.destroy_chat_session(path_params={"session_code": session_code})
+@tool
+def slow_task(seconds: float = 1.0) -> str:
+    """模拟耗时任务，用于主动停止测试"""
+    time.sleep(seconds)
+    return "任务执行完毕"
 
 
 class TestCommonAgentChatStreaming:
@@ -282,11 +292,6 @@ class TestCommonAgentChatStreaming:
         使用MockChatModel模拟模型调用异常。
         错误响应格式: data: {"event": "error", "code": "UNKNOWN", "message": "模型调用异常: ..."}
         """
-        import json
-        from unittest.mock import patch
-
-        # 使用MockChatModel，通过mock其_astream方法来模拟异常（因为agent使用流式调用）
-        from aidev_agent.packages.langchain_core.models.mock import MockChatModel
 
         llm = MockChatModel(
             responses=[""],  # 空响应
@@ -360,6 +365,83 @@ class TestCommonAgentChatStreaming:
         # 验证3：最终文本响应应该是第二个MockResponse的内容
         assert_content_type_equal(results, EventType.TEXT_MESSAGE_CONTENT, "抱歉，获取天气信息时出现错误，请稍后再试。")
 
+    def test_knowledge_base(self):
+        """case 7: 知识库"""
+        with open("tests/mock_data/knowledgebase.json") as fi:
+            knowledgebase = json.load(fi)
+        with open("tests/mock_data/knowledge_query.json") as fi:
+            knowledge_query_result = json.load(fi)
+
+        # Mock _query_instance 属性以返回固定的知识库查询结果
+        with patch.object(BkRetriever, "_query_instance", return_value=knowledge_query_result) as mocked_query_instance:
+            agent = ChatCompletionAgent(
+                chat_model=MockChatModel(responses=["根据知识库，云桌面黑屏的处理方法是重启"]),
+                chat_history=[
+                    ChatPrompt(role="user", content="云桌面黑屏怎么处理?"),
+                ],
+                knowledge_bases=[knowledgebase],
+            )
+            results = []
+            for each in agent.execute(ExecuteKwargs(stream=True)):
+                _each = json.loads(each[6:])
+                results.append(_each)
+            assert_content_type_equal(results, EventType.TEXT_MESSAGE_CONTENT, "根据知识库，云桌面黑屏的处理方法是重启")
+            mocked_query_instance.assert_called_once()
+
+            # 验证知识库相关的自定义消息类型
+            assert_custom_event_exists(results, CustomMessageType.KNOWLEDGE_RAG_START)
+            assert_custom_event_exists(results, CustomMessageType.KNOWLEDGE_RAG_END)
+            assert_custom_event_exists(results, CustomMessageType.KNOWLEDGE_RAG_TEXT_CONTENT)
+            assert_custom_event_exists(results, CustomMessageType.KNOWLEDGE_RAG_RESULT)
+
+    def test_stop_during_long_tool_streaming(self):
+        """case 8: 耗时工具执行中主动停止，验证流式输出在停止后正常结束且为部分结果
+
+        流程：先触发耗时工具调用，在工具执行期间调用 stop()，
+        断言流式输出包含工具调用开始事件，且未包含完整最终文本（或流已结束）。
+        """
+        thread_id = "test_stop_during_tool"
+        llm = MockChatModel(
+            mock_responses=[
+                MockResponse(
+                    content="",
+                    tool_calls=[{"name": "slow_task", "args": {"seconds": 1.5}, "id": "call_slow"}],
+                ),
+                MockResponse(content="根据结果，耗时任务已完成。"),
+            ],
+            stream_chunk_size=2,
+            loop=False,
+        )
+        agent = ChatCompletionAgent(
+            thread_id=thread_id,
+            chat_model=llm,
+            chat_history=[ChatPrompt(role="user", content="执行一个慢任务")],
+            tools=[slow_task],
+        )
+        results = []
+        stream_done = threading.Event()
+
+        def consume():
+            nonlocal results
+            for each in agent.execute(ExecuteKwargs(stream=True)):
+                _each = json.loads(each[6:])
+                results.append(_each)
+            stream_done.set()
+
+        t = threading.Thread(target=consume)
+        t.start()
+        time.sleep(0.5)
+        agent.stop()
+        stream_done.wait(timeout=5.0)
+        t.join(timeout=3.0)
+        assert not t.is_alive(), "消费线程应在超时内结束"
+
+        tool_start_events = [r for r in results if r.get("type") == EventType.TOOL_CALL_START]
+        assert len(tool_start_events) >= 1, "流式输出应包含工具调用开始事件"
+        assert any(e.get("toolCallName") == "slow_task" for e in tool_start_events), "应调用了 slow_task 工具"
+        # 主动停止后流应正常结束；可能收到工具结果或部分最终回复（取决于取消检查时机）
+        assert stream_done.is_set(), "流式消费应在超时内结束"
+
 
 @pytest.mark.skipif(
     not all([settings.APP_CODE, settings.SECRET_KEY]),
@@ -370,7 +452,7 @@ class TestCommonAgentChatStreamingLive:
     """测试聊天代理的流式响应功能"""
 
     def setup_method(self):
-        self.llm = ChatModel.get_setup_instance(model="qwen3-235B")
+        self.llm = ChatModel.get_setup_instance(model="qwen3-5-27B")
 
     def test_knowledge_base(self):
         """case 1: 知识库"""
@@ -387,3 +469,69 @@ class TestCommonAgentChatStreamingLive:
             result = agent.execute(ExecuteKwargs(stream=True))
             for each in result:
                 fo.write(each)
+
+    def test_tool_call_legacy(self):
+        """case 2: 知识库"""
+        agent = ChatCompletionAgent(
+            chat_model=self.llm,
+            chat_history=[
+                ChatPrompt(role="user", content="今天广州天气怎么样?"),
+            ],
+            tools=[get_weather],
+        )
+        with open("text.log", "w") as fo:
+            result = agent.execute(ExecuteKwargs(stream=True, legacy_streaming=True))
+            for each in result:
+                fo.write(each)
+
+    def test_knowledge_base_legacy(self):
+        """case 3: 知识库 legacy streaming"""
+        with open("tests/mock_data/knowledgebase.json") as fi:
+            knowledgebase = json.load(fi)
+        agent = ChatCompletionAgent(
+            chat_model=self.llm,
+            chat_history=[
+                ChatPrompt(role="user", content="云桌面黑屏怎么处理?"),
+            ],
+            knowledge_bases=[knowledgebase],
+        )
+        with open("text.log", "w") as fo:
+            result = agent.execute(ExecuteKwargs(stream=True, legacy_streaming=True))
+            for each in result:
+                fo.write(each)
+
+
+class TestCommonAgentChatStreamingWithAgent:
+    """测试聊天代理的流式响应功能"""
+
+    def test_basic_chat(self):
+        """case 1: 基础聊天测试"""
+        llm = MockChatModel(
+            responses=["你好\n我可以帮你什么?"],
+            reasoning_contents=["用户希望我帮他复述一下上下文"],
+            stream_chunk_size=2,
+        )
+        agent = ChatCompletionAgent(
+            chat_model=llm,
+            chat_history=[
+                ChatPrompt(
+                    id="1",
+                    role="system",
+                    content="You are a professional translator, please help translate the user input to English.",
+                ),
+                ChatPrompt(id="2", role="user", content="안녕하세요"),
+                ChatPrompt(id="3", role="assistant", content="Hello, how can I help you?"),
+                ChatPrompt(id="4", role="user", content="复述一下上下文的内容"),
+            ],
+        )
+        results = []
+        for each in agent.execute(ExecuteKwargs(stream=True, legacy_streaming=True)):
+            if each == "data: [DONE]\n\n":
+                continue
+            _each = json.loads(each[6:])
+            results.append(_each)
+        # Legacy stream uses "event": "think" / "text" and "content"
+        think_contents = [e.get("content", "") for e in results if e.get("event") == "think"]
+        text_contents = [e.get("content", "") for e in results if e.get("event") == "text"]
+        assert "".join(think_contents) == "用户希望我帮他复述一下上下文"
+        assert "".join(text_contents) == "你好\n我可以帮你什么?"
