@@ -320,6 +320,8 @@ class GeneratorStreamingHelper:
 
         # 检查队列中是否有未消费的数据
         has_pending = self.message_handler.has_pending_messages(self.thread_id)
+        # 是否是恢复流
+        is_resuming = False
 
         # 如果用户之前点击了 Stop，检查是否有未展示的内容
         if is_stopped:
