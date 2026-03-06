@@ -7,7 +7,6 @@ from functools import lru_cache
 
 import pkg_resources
 from aidev_agent.api.bk_aidev import BKAidevApi
-from aidev_agent.api.bkaidev_client.client import Client
 from aidev_agent.enums import AgentBuildType, ChatContentStatus, PromptRole, StreamEventType
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.chat import ChatCompletionAgent
@@ -20,6 +19,7 @@ from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from .factory import agent_config_factory, agent_factory
+from ..utils import bkaidev_api_client
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,6 @@ def _get_checkpointer():
 
 def build_chat_completion_agent_by_session_code(
     session_code: str,
-    client: Client | None = None,
     username: str = "",
 ) -> ChatCompletionAgent:
     """构建 ChatCompletionAgent
@@ -52,7 +51,7 @@ def build_chat_completion_agent_by_session_code(
     config_manager = agent_config_factory.get(settings.DEFAULT_NAME)
 
     # 构建 event_handler（如果提供了 client）
-    event_handler = AGUISessionWriter(session_code=session_code, client=client, username=username) if client else None
+    event_handler = AGUISessionWriter(session_code=session_code, client=bkaidev_api_client, username=username)
 
     agent_instance = AgentInstanceFactory.build_agent(
         build_type=AgentBuildType.SESSION,
@@ -290,11 +289,20 @@ def build_chat_completion_agent_by_thread_id(
     agent_cls = agent_factory.get(settings.DEFAULT_NAME)
     config_manager = agent_config_factory.get(settings.DEFAULT_NAME)
 
+    event_handler = (
+        AGUISessionWriter(session_code=session_code, client=bkaidev_api_client, username=username)
+        if bkaidev_api_client
+        else None
+    )
+
     agent_instance = AgentInstanceFactory.build_agent(
         build_type=AgentBuildType.SESSION,
         session_code=session_code,
         agent_cls=agent_cls,
         config_manager_class=config_manager,
+        checkpointer=_get_checkpointer(),
+        event_handler=event_handler,
+        username=username,
     )
 
     return agent_instance, session_code

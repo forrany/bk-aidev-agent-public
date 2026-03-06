@@ -4,7 +4,6 @@ import copy
 import json
 from logging import getLogger
 
-from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.enums import PromptRole
 from aidev_agent.services.chat import ChatPrompt
 from aidev_agent.services.messages_handler import ConsumerPreemptedError, GeneratorStreamingHelper, StreamCancelledError
@@ -29,14 +28,12 @@ from aidev_bkplugin.permissions import AgentPluginPermission
 from aidev_bkplugin.services.agent import (
     build_chat_completion_agent_by_chat_history,
     build_chat_completion_agent_by_session_code,
-    build_chat_completion_agent_by_thread_id,
     build_execute_kwargs,
-    execute_agent_with_save,
     get_agent_config_info,
     get_agent_version,
     run_chat_completion_with_thread_id,
 )
-from aidev_bkplugin.utils import set_user_access_token
+from aidev_bkplugin.utils import bkaidev_api_client, set_user_access_token
 
 
 class IgnoreClientContentNegotiation(DefaultContentNegotiation):
@@ -51,6 +48,7 @@ class IgnoreClientContentNegotiation(DefaultContentNegotiation):
 
 
 logger = getLogger(__name__)
+client = bkaidev_api_client
 
 
 @method_decorator(login_exempt, name="dispatch")
@@ -97,9 +95,6 @@ class PluginViewSet(ViewSetMixin, APIView):
                     "trace_id": trace_id,
                 }
         return super().finalize_response(request, response, *args, **kwargs)
-
-
-client = BKAidevApi.get_client(app_code=settings.BK_APP_CODE, app_secret=settings.BK_APP_SECRET)
 
 
 class ChatSessionViewSet(PluginViewSet):
@@ -245,7 +240,6 @@ class ChatCompletionViewSet(PluginViewSet):
         if session_code:
             agent_instance = build_chat_completion_agent_by_session_code(
                 session_code=session_code,
-                client=client,
                 username=request.user.username,
             )
             # 获取 event_handler 用于后续更新会话状态
@@ -280,28 +274,6 @@ class ChatCompletionViewSet(PluginViewSet):
         else:
             result = agent_instance.execute(execute_kwargs)
             return Response(result)
-
-    def _handle_thread_id_mode(self, thread_id: str, input_text: str, username: str, execute_kwargs: ExecuteKwargs):
-        """
-        通过 thread_id 自动管理会话，自动保存用户消息和 AI 回复
-        """
-        if not input_text:
-            raise ClientBlueException(message="input is required when using thread_id")
-
-        agent_instance, session_code = build_chat_completion_agent_by_thread_id(
-            thread_id=thread_id,
-            input_text=input_text,
-            username=username,
-            save_content=True,
-        )
-        execute_kwargs.session_code = session_code
-
-        # 执行 Agent 并保存 AI 回复
-        result = execute_agent_with_save(agent_instance, execute_kwargs, session_code, username)
-
-        if execute_kwargs.stream:
-            return self.streaming_response(result)
-        return Response(result)
 
     def _handle_thread_id_mode(self, thread_id: str, input_text: str, username: str, execute_kwargs: ExecuteKwargs):
         """

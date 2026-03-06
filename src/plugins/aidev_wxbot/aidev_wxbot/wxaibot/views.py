@@ -8,6 +8,7 @@ import time
 import uuid
 from logging import getLogger
 
+from ag_ui.core.events import EventType
 from aidev_bkplugin.services.agent import build_execute_kwargs, run_chat_completion_with_thread_id
 from django.conf import settings
 from django.http import HttpResponse
@@ -256,9 +257,11 @@ class WxAiBotViewSet(ViewSet):
                     f"stream_id:{stream_id} 从请求开始到第一次收到流式响应耗时: {first_response_time - start_time:.3f} 秒"
                 )
 
-            event_type = chunk_json.get("event", "")
-            if event_type == "text":
-                text_content = chunk_json.get("content", "")
+            # agui 格式
+            logger.debug(f"stream_id:{stream_id} 处理流式响应: {chunk_json}")
+            event_type = chunk_json.get("type", "")
+            if event_type == EventType.TEXT_MESSAGE_CONTENT:
+                text_content = chunk_json.get("delta", "")
                 if text_content == "正在思考...":
                     return
                 added_content += text_content
@@ -271,13 +274,14 @@ class WxAiBotViewSet(ViewSet):
                     llm_chunk.append_to_cache(rabbitmq_client)
                     added_content = ""
                 return
-            if event_type == "reference_doc":
+            elif event_type == EventType.CUSTOM:
+                # handle custom event
                 for doc_info in chunk_json.get("documents", []):
                     if isinstance(doc_info, dict) and "metadata" in doc_info:
                         docs.append(doc_info["metadata"])
                 return
-            if event_type == "think":
-                think_text = chunk_json.get("content", "")
+            elif event_type == EventType.THINKING_TEXT_MESSAGE_CONTENT:
+                think_text = chunk_json.get("delta", "")
                 if think_text == "正在思考...":
                     return
                 if not think_content:
@@ -289,7 +293,7 @@ class WxAiBotViewSet(ViewSet):
                     llm_chunk.append_to_cache(rabbitmq_client)
                     think_content = ""
                 return
-            if event_type == "error":
+            elif event_type == EventType.RUN_ERROR:
                 has_error = True
                 err_chunk = LlmChunkMsg(
                     content=f"处理请求时发生错误: {chunk_json.get('message', chunk_json)}",
@@ -297,6 +301,8 @@ class WxAiBotViewSet(ViewSet):
                     stream_id=stream_id,
                 )
                 err_chunk.append_to_cache(rabbitmq_client)
+                return
+            elif event_type in [EventType.RAW]:
                 return
             logger.info(f"stream_id:{stream_id} 未知的事件类型: {event_type}")
 

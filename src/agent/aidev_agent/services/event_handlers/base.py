@@ -514,7 +514,7 @@ class BaseSessionWriter(ABC):
         try:
             fn(**kwargs)
         except Exception as e:
-            logger.error(f"Failed to {action} session content: message_id={message_id}, error={e}", exc_info=True)
+            logger.exception(f"Failed to {action} session content: message_id={message_id}, error={e}", exc_info=True)
 
     def _create_session_content(
         self,
