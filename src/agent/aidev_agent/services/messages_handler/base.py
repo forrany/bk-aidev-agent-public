@@ -276,8 +276,19 @@ class BaseMessageQueueHandler(ABC):
         Returns:
             主队列中的消息数量
         """
-        if hasattr(self, "get_cached_count"):
-            return self.get_cached_count(thread_id)
+        return self.get_cached_count(thread_id)
+
+    def get_cached_count(self, thread_id: str) -> int:
+        """获取主队列中缓存的消息数量
+
+        默认实现返回 0，子类可覆盖。
+
+        Args:
+            thread_id: 线程ID
+
+        Returns:
+            缓存的消息数量
+        """
         return 0
 
     # ================== 停止状态管理接口 ==================
@@ -318,4 +329,47 @@ class BaseMessageQueueHandler(ABC):
 
         Args:
             thread_id: 线程ID
+        """
+
+    # ================== 跨进程取消信号接口 ==================
+    # 以下方法用于支持多进程环境下的取消信号传递（如 RabbitMQ）
+    # 默认实现返回 False/空操作，MultiProcessMixin 会覆盖这些方法
+
+    def set_cancel_signal(self, thread_id: str) -> bool:
+        """设置跨进程取消信号
+
+        可以从任意进程调用，生产者/消费者会通过 check_cancel_signal() 检测到取消。
+
+        默认实现返回 False（不支持跨进程取消），MultiProcessMixin 会覆盖此方法。
+
+        Args:
+            thread_id: 线程ID / session_code
+
+        Returns:
+            True 表示成功设置取消信号，False 表示不支持或设置失败
+        """
+        return False
+
+    def check_cancel_signal(self, thread_id: str) -> bool:
+        """检查是否存在取消信号
+
+        用于生产者/消费者定期检查是否需要停止。
+
+        默认实现返回 False（不支持跨进程取消），MultiProcessMixin 会覆盖此方法。
+
+        Args:
+            thread_id: 线程ID / session_code
+
+        Returns:
+            True 表示存在取消信号，应该停止
+        """
+        return False
+
+    def clear_cancel_signal(self, thread_id: str) -> None:
+        """清除取消信号（在流结束后调用）
+
+        默认实现为空操作，MultiProcessMixin 会覆盖此方法。
+
+        Args:
+            thread_id: 线程ID / session_code
         """

@@ -17,6 +17,7 @@ to the current version of the project delivered to anyone in the future.
 """
 
 import contextlib
+import functools
 import json
 import re
 from copy import deepcopy
@@ -588,6 +589,7 @@ class MCPExceptionWrapper:
     def __init__(self, coro, agent_options):
         self.coro = coro
         self.agent_options = agent_options
+        functools.update_wrapper(self, coro)
         # 预编译正则表达式并存储为编译后的模式对象字典
         self.compiled_pattern_to_retry_guide = {
             re.compile(pattern): retry_guide for pattern, retry_guide in PATTERN_TO_RETRY_GUIDE.items()
