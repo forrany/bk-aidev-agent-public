@@ -58,7 +58,6 @@ class AgentInstanceFactory:
         :param resource_manager:  bkaidev 资源管理
         :param temperature: 模型温度
         :param max_tokens: 模型最大回复长度
-        :param max_tokens: 模型最大回复长度
         :param switch_agent_by_scene: 是否根据场景切换智能体
         :param is_temporary: 是否为临时Agent
         :param checkpointer: Checkpoint 存储后端，用于会话状态持久化
@@ -73,7 +72,6 @@ class AgentInstanceFactory:
         self.callbacks = [each for each in callbacks if each] if callbacks else []
         self.auth_headers = auth_headers or None
         self.temperature = temperature or None
-        self.max_tokens = max_tokens or None
         self.max_tokens = max_tokens or None
         self.switch_agent_by_scene = switch_agent_by_scene
         self.config_manager_class = config_manager_class or AgentConfigManager
@@ -112,7 +110,6 @@ class AgentInstanceFactory:
         :param callbacks: 回调函数列表
         :param resource_manager: 资源管理类
         :param temperature: 模型温度
-        :param max_tokens: 模型最大回复长度
         :param max_tokens: 模型最大回复长度
         :param switch_agent_by_scene: 是否根据场景切换智能体
         :param config_manager_class: 配置管理类

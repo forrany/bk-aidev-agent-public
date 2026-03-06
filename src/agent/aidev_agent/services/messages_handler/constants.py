@@ -11,6 +11,7 @@
 
 # 用于标识流的各种状态变化
 
+
 class StreamMarkers:
     """流控制标记常量"""
 
@@ -29,7 +30,6 @@ EOD_CHUNK = StreamMarkers.EOD
 CANCELLED_CHUNK = StreamMarkers.CANCELLED
 STOPPED_CHUNK = StreamMarkers.STOPPED
 HEARTBEAT_CHUNK = StreamMarkers.HEARTBEAT
-
 
 
 class HeartbeatConfig:
@@ -69,7 +69,6 @@ class QueueTTLConfig:
     WAIT_POLL_INTERVAL = 0.2
 
 
-
 class QueueNamePrefixes:
     """RabbitMQ 队列名称前缀
 
@@ -90,7 +89,6 @@ class QueueNamePrefixes:
     CANCEL_SIGNAL = "aidev_agent.cancel."
 
 
-
 class TimeoutConfig:
     """超时配置常量"""
 
@@ -102,7 +100,6 @@ class TimeoutConfig:
 
     # 获取 RabbitMQ 连接的超时时间（秒）
     CONNECTION_TIMEOUT = 10.0
-
 
 
 class ConnectionPoolConfig:

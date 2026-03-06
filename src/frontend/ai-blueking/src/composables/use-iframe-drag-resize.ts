@@ -1,6 +1,6 @@
 /**
  * useIframeDragResize - iframe 拖拽调整大小处理 Composable
- * 
+ *
  * 职责：
  * - 禁用/启用页面中所有 iframe 的指针事件
  * - 包装拖拽和调整大小事件，解决 iframe 导致的事件丢失问题

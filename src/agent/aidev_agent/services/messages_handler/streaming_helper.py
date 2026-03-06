@@ -20,13 +20,15 @@ logger = getLogger(__name__)
 
 # 断点续传时需要过滤的事件类型（这些事件在续传时会导致前端重复显示）
 # 因为前端已经从数据库加载了完整的 reasoning 内容
-_RESUME_FILTER_EVENT_TYPES = frozenset({
-    "THINKING_START",
-    "THINKING_END",
-    "THINKING_TEXT_MESSAGE_START",
-    "THINKING_TEXT_MESSAGE_CONTENT",
-    "THINKING_TEXT_MESSAGE_END",
-})
+_RESUME_FILTER_EVENT_TYPES = frozenset(
+    {
+        "THINKING_START",
+        "THINKING_END",
+        "THINKING_TEXT_MESSAGE_START",
+        "THINKING_TEXT_MESSAGE_CONTENT",
+        "THINKING_TEXT_MESSAGE_END",
+    }
+)
 
 
 class GeneratorStreamingHelper:
@@ -84,6 +86,7 @@ class GeneratorStreamingHelper:
         # 尝试解析并检查 type 字段
         try:
             import json
+
             # SSE 格式: "data: {...}"
             if item.startswith("data: "):
                 json_str = item[6:].strip()
@@ -394,8 +397,6 @@ class GeneratorStreamingHelper:
         last_message_time = time.time()
         # 是否启用心跳检测（仅在启动新生产者时启用）
         enable_heartbeat_check = False
-        # 是否为断点续传模式（恢复 DLQ 消息时需要过滤 thinking 事件，因为前端已从数据库加载）
-        is_resuming = False
 
         if not has_pending:
             # 队列看起来为空，但可能旧消费者正在被抢占过程中（消息在 processing 中还未进入 DLQ）

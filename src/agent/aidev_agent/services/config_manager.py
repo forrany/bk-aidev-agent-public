@@ -76,7 +76,6 @@ class AgentConfigManager:
 
         # 处理特殊字段,兼容特殊role
         role_prompts = res["prompt_setting"].get("content", None)
-        role_prompts = res["prompt_setting"].get("content", None)
 
         # 创建配置实例
         prompt_setting = res.get("prompt_setting", {})

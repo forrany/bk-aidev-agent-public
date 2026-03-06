@@ -1,5 +1,10 @@
 from logging import getLogger
 
+from aidev_agent.api.bk_aidev import BKAidevApi
+from django.conf import settings
+
+bkaidev_api_client = BKAidevApi.get_client(app_code=settings.APP_CODE, app_secret=settings.SECRET_KEY)
+
 logger = getLogger(__name__)
 
 

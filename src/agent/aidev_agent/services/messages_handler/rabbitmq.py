@@ -944,9 +944,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
 
                 # 清空取消请求队列（如果需要，先检查是否存在）
                 if include_cancel_queue:
-                    self._safe_purge_queue(
-                        channel, self._get_cancel_queue_name(thread_id), passive_check=True
-                    )
+                    self._safe_purge_queue(channel, self._get_cancel_queue_name(thread_id), passive_check=True)
         except Exception as e:
             logger.error(f"Error purging queues for thread_id={thread_id}: {e}")
 
