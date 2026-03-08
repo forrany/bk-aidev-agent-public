@@ -86,7 +86,9 @@ class BaseSessionWriter(ABC):
         """
         self.session_code: str = session_code
         self.username: str = username
-        self._tools_mapping: dict[str, Any] = {tool.name: tool for tool in tools} if tools else {}
+        self._tools_mapping: dict[str, Any] = {}
+        if tools:
+            self.set_tools(tools)
         # 用于内存去重，避免重复回写
         self._written_message_ids: set[str] = set()
         # 用于追踪正在流式输出的消息，累积内容
@@ -97,6 +99,9 @@ class BaseSessionWriter(ABC):
         self._thinking_content: str = ""
 
     # ---------- 公共事件入口 ----------
+
+    def set_tools(self, tools: list | None) -> None:
+        self._tools_mapping = {tool.name: tool for tool in tools} if tools else {}
 
     def __call__(self, event: BaseEvent) -> None:
         """事件入口 - 分发到对应的处理方法

@@ -469,8 +469,7 @@ def mock_agent_options():
 
 
 @patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
-@patch("aidev_agent.packages.langchain_core.tools.base.get_event_loop")
-def test_make_mcp_tools_basic(mock_get_loop, mock_mcp_client_class, sample_mcp_config, mock_agent_options):
+def test_make_mcp_tools_basic(mock_mcp_client_class, sample_mcp_config, mock_agent_options):
     """测试基本的 make_mcp_tools 功能"""
     # Mock 工具列表
     mock_tool = MagicMock(spec=StructuredTool)
@@ -484,12 +483,7 @@ def test_make_mcp_tools_basic(mock_get_loop, mock_mcp_client_class, sample_mcp_c
     mock_client.get_tools = AsyncMock(return_value=[mock_tool])
     mock_mcp_client_class.return_value = mock_client
 
-    # Mock 事件循环
-    mock_loop = MagicMock()
-    mock_loop.run_until_complete.return_value = [mock_tool]
-    mock_get_loop.return_value = mock_loop
-
-    # 调用 make_mcp_tools
+    # 调用 make_mcp_tools（使用真实的事件循环）
     tools = make_mcp_tools(sample_mcp_config, mock_agent_options)
 
     # 验证
@@ -497,58 +491,46 @@ def test_make_mcp_tools_basic(mock_get_loop, mock_mcp_client_class, sample_mcp_c
     assert tools[0].name == "test-mcp-tool"
     assert tools[0].metadata["mcp_name"] == "tencentcloud-doc-mcp"
     mock_mcp_client_class.assert_called_once()
-    mock_loop.run_until_complete.assert_called_once()
 
 
 @patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
-@patch("aidev_agent.packages.langchain_core.tools.base.get_event_loop")
-def test_make_mcp_tools_with_blueapps_auth(
-    mock_get_loop, mock_mcp_client_class, sample_mcp_config_with_auth, mock_agent_options
-):
+def test_make_mcp_tools_with_blueapps_auth(mock_mcp_client_class, sample_mcp_config_with_auth, mock_agent_options):
     """测试带 blueapps 认证的 MCP 工具"""
     # Mock 工具
     mock_tool = MagicMock(spec=StructuredTool)
     mock_tool.coroutine = AsyncMock()
     mock_tool.metadata = {}  # 添加 metadata 属性
 
-    # Mock 客户端
+    # Mock MCP 客户端
     mock_client = MagicMock()
     mock_client.get_tools = AsyncMock(return_value=[mock_tool])
     mock_mcp_client_class.return_value = mock_client
 
-    # Mock 事件循环
-    mock_loop = MagicMock()
-    mock_loop.run_until_complete.return_value = [mock_tool]
-    mock_get_loop.return_value = mock_loop
-
-    # 调用 make_mcp_tools
+    # 调用 make_mcp_tools（使用真实的事件循环）
     tools = make_mcp_tools(sample_mcp_config_with_auth, mock_agent_options)
 
     # 验证认证信息被添加到配置中
-    call_args = mock_mcp_client_class.call_args[0][0]
-    assert "authenticated-mcp" in call_args
-    assert "headers" in call_args["authenticated-mcp"]
-    assert "X-Bkapi-Authorization" in call_args["authenticated-mcp"]["headers"]
+    # MultiServerMCPClient 在异步函数内部被调用，需要检查 mock 的调用参数
+    call_args = mock_mcp_client_class.call_args
+    assert call_args is not None, "MultiServerMCPClient 应该被调用"
+    config_arg = call_args[0][0]  # 第一个位置参数是 server_config
+    assert "authenticated-mcp" in config_arg
+    assert "headers" in config_arg["authenticated-mcp"]
+    assert "X-Bkapi-Authorization" in config_arg["authenticated-mcp"]["headers"]
 
     # 验证工具被包装
     assert len(tools) == 1
 
 
 @patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
-@patch("aidev_agent.packages.langchain_core.tools.base.get_event_loop")
-def test_make_mcp_tools_error_handling(mock_get_loop, mock_mcp_client_class, sample_mcp_config, mock_agent_options):
+def test_make_mcp_tools_error_handling(mock_mcp_client_class, sample_mcp_config, mock_agent_options):
     """测试 MCP 工具获取失败的场景"""
     # Mock 客户端抛出异常
     mock_client = MagicMock()
     mock_client.get_tools = AsyncMock(side_effect=Exception("Connection failed"))
     mock_mcp_client_class.return_value = mock_client
 
-    # Mock 事件循环
-    mock_loop = MagicMock()
-    mock_loop.run_until_complete.side_effect = Exception("Connection failed")
-    mock_get_loop.return_value = mock_loop
-
-    # 调用应该抛出 AIDevException
+    # 调用应该抛出 AIDevException（使用真实的事件循环）
     from aidev_agent.exceptions import AIDevException
 
     with pytest.raises(AIDevException, match="获取MCP工具列表失败"):
@@ -556,8 +538,7 @@ def test_make_mcp_tools_error_handling(mock_get_loop, mock_mcp_client_class, sam
 
 
 @patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
-@patch("aidev_agent.packages.langchain_core.tools.base.get_event_loop")
-def test_make_mcp_tools_multiple_servers(mock_get_loop, mock_mcp_client_class, mock_agent_options):
+def test_make_mcp_tools_multiple_servers(mock_mcp_client_class, mock_agent_options):
     """测试多个 MCP 服务器"""
     multi_server_config = {
         "server1": {"url": "http://server1.com/mcp", "transport": "streamable_http"},
@@ -580,17 +561,13 @@ def test_make_mcp_tools_multiple_servers(mock_get_loop, mock_mcp_client_class, m
     mock_client.get_tools = AsyncMock(return_value=[mock_tool1, mock_tool2])
     mock_mcp_client_class.return_value = mock_client
 
-    # Mock 事件循环 - 返回两个工具
-    mock_loop = MagicMock()
-    mock_loop.run_until_complete.return_value = [mock_tool1, mock_tool2]
-    mock_get_loop.return_value = mock_loop
-
-    # 调用
+    # 调用（使用真实的事件循环）
     tools = make_mcp_tools(multi_server_config, mock_agent_options)
 
-    # 验证 - 应该有2个工具
-    assert len(tools) == 2
-    assert mock_mcp_client_class.call_count == 1  # 只创建一个客户端实例
+    # 验证 - 应该有4个工具（两个服务器，每个返回两个工具）
+    assert len(tools) == 4
+    # MultiServerMCPClient 被调用两次（每个服务器一次）
+    assert mock_mcp_client_class.call_count == 2
 
 
 # ================== wrap_mcp_exception 测试 ==================
@@ -1005,3 +982,19 @@ async def test_tool_with_langgraph_integration():
         # 验证 state 被正确注入和渲染
         assert headers.get("X-User") == "alice", "X-User 应该从 state.user 渲染"
         assert body.get("session_id") == "session_789", "session_id 应该从 state.session_id 渲染"
+
+
+# ONLY FOR DEBUG, NEED TO DELETE LATER
+def test_get_mcp_tools_only():
+    server_config = {
+        "bk-itsm-prod-ticket": {
+            "url": "https://bk-apigateway.apigw.o.woa.com/prod/api/v2/mcp-servers/bk-itsm-prod-ticket/application/mcp/",
+            "transport": "streamable_http",
+            "headers": {
+                "X-Bkapi-Authorization": '{"access_token": "bWKN8FlNbROhBKxIE96g55i0l06oL7"}',
+                "X-Bkapi-Timeout": "300",
+            },
+        }
+    }
+    _tools = make_mcp_tools(server_config, AgentOptions())
+    assert _tools[0].metadata.get("mcp_name")

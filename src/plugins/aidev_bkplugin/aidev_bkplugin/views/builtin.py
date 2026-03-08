@@ -2,10 +2,12 @@
 
 import copy
 import json
+import uuid
 from logging import getLogger
 
 from aidev_agent.enums import PromptRole
 from aidev_agent.services.chat import ChatPrompt
+from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
 from aidev_agent.services.messages_handler import ConsumerPreemptedError, GeneratorStreamingHelper, StreamCancelledError
 from aidev_agent.services.pydantic_models import ExecuteKwargs
 from bk_plugin_framework.kit.api import custom_authentication_classes
@@ -227,53 +229,74 @@ class ChatCompletionViewSet(PluginViewSet):
         _input = request.data.get("input", "")
         event_handler = None  # 用于断点续传
 
-        thread_id = execute_kwargs.thread_id
-        if thread_id:
-            return self._handle_thread_id_mode(
-                thread_id=thread_id,
-                input_text=_input,
-                username=username,
-                execute_kwargs=execute_kwargs,
-            )
+        try:
+            thread_id = execute_kwargs.thread_id
+            if thread_id:
+                return self._handle_thread_id_mode(
+                    thread_id=thread_id,
+                    input_text=_input,
+                    username=username,
+                    execute_kwargs=execute_kwargs,
+                )
 
-        # 构造 agent_instance，在 ChatCompletion 中，获取到的是 ChatCompletionAgent
-        if session_code:
-            agent_instance = build_chat_completion_agent_by_session_code(
-                session_code=session_code,
-                username=request.user.username,
-            )
-            # 获取 event_handler 用于后续更新会话状态
-            event_handler = agent_instance.event_handler
-            # 如果有 input 参数，追加到会话历史（支持新会话或追加消息）
-            if _input:
-                # 处理 chat_history 为 None 或空列表的情况（如编辑第一条消息时）
-                if not agent_instance.chat_history:
-                    agent_instance.chat_history = []
-                agent_instance.chat_history.append(ChatPrompt(role="user", content=_input))
-            # 校验：如果没有 input 且 chat_history 为空，抛出明确的错误
-            elif not agent_instance.chat_history:
-                raise ClientBlueException(message="The chat history cannot be empty. Please provide 'input' parameter.")
-        else:
-            chat_history = request.data.get("chat_prompts", []) or request.data.get("chat_history", [])
-            if not chat_history and not _input:
-                raise ClientBlueException(message="chat_history, input or session_code is required")
-            chat_history = [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history]
-            if _input:
-                chat_history.append(ChatPrompt(role="user", content=_input))
-            agent_instance = build_chat_completion_agent_by_chat_history(chat_history, username)
-        # 执行 agent
-        if execute_kwargs.stream:
-            generator = agent_instance.execute(execute_kwargs)
-            # 断点续传：在流式开始/结束时更新会话状态
-            if event_handler and all(
-                hasattr(event_handler, m) for m in ["set_streaming_started", "set_streaming_finished"]
-            ):
-                event_handler.set_streaming_started()
-                generator = self._wrap_streaming_with_status(generator, event_handler)
-            return self.streaming_response(generator)
-        else:
-            result = agent_instance.execute(execute_kwargs)
-            return Response(result)
+            # 构造 agent_instance，在 ChatCompletion 中，获取到的是 ChatCompletionAgent
+            if session_code:
+                agent_instance = build_chat_completion_agent_by_session_code(
+                    session_code=session_code,
+                    username=request.user.username,
+                )
+                # 获取 event_handler 用于后续更新会话状态
+                event_handler = agent_instance.event_handler
+                # 如果有 input 参数，追加到会话历史（支持新会话或追加消息）
+                if _input:
+                    # 处理 chat_history 为 None 或空列表的情况（如编辑第一条消息时）
+                    if not agent_instance.chat_history:
+                        agent_instance.chat_history = []
+                    agent_instance.chat_history.append(ChatPrompt(role="user", content=_input))
+                # 校验：如果没有 input 且 chat_history 为空，抛出明确的错误
+                elif not agent_instance.chat_history:
+                    raise ClientBlueException(
+                        message="The chat history cannot be empty. Please provide 'input' parameter."
+                    )
+            else:
+                chat_history = request.data.get("chat_prompts", []) or request.data.get("chat_history", [])
+                if not chat_history and not _input:
+                    raise ClientBlueException(message="chat_history, input or session_code is required")
+                chat_history = [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history]
+                if _input:
+                    chat_history.append(ChatPrompt(role="user", content=_input))
+                agent_instance = build_chat_completion_agent_by_chat_history(chat_history, username)
+            # 执行 agent
+            if execute_kwargs.stream:
+                generator = agent_instance.execute(execute_kwargs)
+                # 断点续传：在流式开始/结束时更新会话状态
+                if event_handler and all(
+                    hasattr(event_handler, m) for m in ["set_streaming_started", "set_streaming_finished"]
+                ):
+                    event_handler.set_streaming_started()
+                    generator = self._wrap_streaming_with_status(generator, event_handler)
+                return self.streaming_response(generator)
+            else:
+                result = agent_instance.execute(execute_kwargs)
+                return Response(result)
+        except Exception as err:
+            logger.exception(f"ChatCompletionViewSet create error: {err}")
+            message = getattr(err, "message", str(err))
+            if session_code:
+                error_message_id = str(uuid.uuid4())
+                AGUISessionWriter(
+                    session_code=session_code, client=bkaidev_api_client, username=username
+                )._create_session_content(
+                    message_id=error_message_id,
+                    role=PromptRole.ASSISTANT.value,
+                    content=message,
+                    status="fail",
+                    builtin_property={
+                        "message_id": error_message_id,
+                        "error": True,
+                    },
+                )
+            raise ClientBlueException(message=message)
 
     def _handle_thread_id_mode(self, thread_id: str, input_text: str, username: str, execute_kwargs: ExecuteKwargs):
         """

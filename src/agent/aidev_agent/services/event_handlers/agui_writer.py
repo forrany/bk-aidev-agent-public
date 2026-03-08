@@ -61,6 +61,7 @@ class AGUISessionWriter(BaseSessionWriter):
 
     def _do_create_content(self, payload: dict[str, Any], headers: dict[str, str]) -> None:
         """通过 API 创建会话内容"""
+        logger.info("开始创建会话内容: session_code=%s, payload=%s, headers=%s", self.session_code, payload, headers)
         self.client.api.create_chat_session_content(json=payload, headers=headers)
 
     def set_streaming_started(self) -> None:

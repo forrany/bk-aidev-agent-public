@@ -16,6 +16,7 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
+import asyncio
 import contextlib
 import functools
 import json
@@ -561,26 +562,38 @@ def make_mcp_tools(
             _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
 
     _loop = get_event_loop()
+
     # 重试2次
-    for _i in range(2):
-        client = MultiServerMCPClient(new_server_config)
-        try:
-            tools: List[StructuredTool] = _loop.run_until_complete(client.get_tools())
-            for each in tools:
-                each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
-            return tools
-        except Exception as err:
-            # 记录详细的异常信息用于调试
-            _logger.exception(
-                f"Failed to get MCP tools list: {err}, retry: {_i}, server_config: {new_server_config}, agent_options: {agent_options}, username: {username}"
-            )
-            # 创建详细的错误信息，类似于MCPExceptionWrapper
-            error_detail = _extract_mcp_tools_error_detail(err)
-            error_msg = f"获取MCP工具列表失败:  {error_detail}"
-            if _i == 0:
-                continue
-            # 抛出包含详细错误信息的ValueError
-            raise AIDevException(message=error_msg)
+    async def _load_tool(server_name) -> list[StructuredTool]:
+        for _i in range(2):
+            client = MultiServerMCPClient(new_server_config)
+            try:
+                tools: list[StructuredTool] = await client.get_tools(server_name=server_name)
+                for each in tools:
+                    each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
+                    if not each.metadata:
+                        each.metadata = {}
+                    each.metadata["mcp_name"] = server_name
+                return tools
+            except Exception as err:
+                # 记录详细的异常信息用于调试
+                _logger.exception(
+                    f"Failed to get MCP tools list: {err}, retry: {_i}, server_config: {new_server_config}, agent_options: {agent_options}, username: {username}"
+                )
+                # 创建详细的错误信息，类似于MCPExceptionWrapper
+                error_detail = _extract_mcp_tools_error_detail(err)
+                error_msg = f"获取MCP工具列表失败:  {error_detail}"
+                if _i == 0:
+                    continue
+                # 抛出包含详细错误信息的ValueError
+                raise AIDevException(message=error_msg)
+
+    coros = [_load_tool(server_name) for server_name in new_server_config]
+    coro_results = _loop.run_until_complete(asyncio.gather(*coros))
+    results = []
+    for _each in coro_results:
+        results.extend(_each)
+    return results
 
 
 class MCPExceptionWrapper:

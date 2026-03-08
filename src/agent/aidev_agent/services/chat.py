@@ -21,6 +21,7 @@ from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
 from aidev_agent.enums import PromptRole
 from aidev_agent.exceptions import AgentException
 from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
 from aidev_agent.utils.async_utils import async_to_sync_generator
@@ -244,6 +245,8 @@ class ChatCompletionAgent(BaseModel):
 
             return cancel_checker
 
+        if isinstance(self.event_handler, BaseSessionWriter):
+            self.event_handler.set_tools(self.tools)
         agui_entry = AidevAGUIAgent(
             name="test_agui_agent",
             graph=agent_e,
