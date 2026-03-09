@@ -4,8 +4,11 @@ import contextlib
 import threading
 import time
 
+import aidev_agent.services.messages_handler.streaming_helper as streaming_helper_module
 import pytest
 from aidev_agent.services.messages_handler import (
+    CANCELLED_CHUNK,
+    STOPPED_CHUNK,
     GeneratorStreamingHelper,
     InMemoryQueueMessageHandler,
     message_handler_factory,
@@ -294,6 +297,111 @@ class TestInMemoryQueueMessageHandler:
         # 可能收到 0、1 或 2 条后因取消而结束
         assert len(result) <= 2
         assert handler.is_empty(thread_id)
+
+    def test_stream_stopped_session_with_pending_messages(self, handler, monkeypatch):
+        """已停止且有缓存内容时，只回放内容并返回 STOPPED_CHUNK。"""
+        thread_id = "test_stream_stopped_pending"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+        clear_stopped_called = []
+
+        handler.put(thread_id, "chunk_0")
+        handler.put(thread_id, "chunk_1")
+        monkeypatch.setattr(handler, "is_stopped", lambda _tid: True)
+        monkeypatch.setattr(handler, "clear_stopped", lambda _tid: clear_stopped_called.append(True))
+
+        result = list(helper.stream(iter(())))
+
+        assert result == ["chunk_0", "chunk_1", STOPPED_CHUNK]
+        assert clear_stopped_called
+        assert handler.is_empty(thread_id)
+
+    def test_stream_stopped_session_without_messages_starts_new_producer(self, handler, monkeypatch):
+        """已停止但无缓存内容时，清理 stopped 状态并进入重新生成流程。"""
+        thread_id = "test_stream_stopped_empty"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+        clear_stopped_called = []
+
+        monkeypatch.setattr(handler, "is_stopped", lambda _tid: True)
+        monkeypatch.setattr(handler, "restore_messages", lambda _tid: 0)
+        monkeypatch.setattr(handler, "get_cached_count", lambda _tid: 0)
+        monkeypatch.setattr(handler, "clear_stopped", lambda _tid: clear_stopped_called.append(True))
+
+        result = list(helper.stream(iter(["new_chunk"])))
+
+        assert result == ["new_chunk"]
+        assert clear_stopped_called
+
+    @pytest.mark.parametrize(
+        ("gen_items", "expected"),
+        [
+            ([CANCELLED_CHUNK], [STOPPED_CHUNK]),
+            (["chunk_0"], ["chunk_0"]),
+        ],
+    )
+    def test_stream_handles_control_and_data_messages(self, handler, gen_items, expected):
+        """验证 CANCELLED_CHUNK 与普通数据在消费侧的处理行为。"""
+        thread_id = f"test_stream_control_{len(gen_items)}_{expected[0]}"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+
+        result = list(helper.stream(iter(gen_items)))
+
+        assert result == expected
+
+    def test_stream_on_complete_exception_is_swallowed(self, handler):
+        """on_complete 抛异常时不影响流返回和队列清理。"""
+        thread_id = "test_stream_on_complete_error"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+        callback_called = []
+
+        def broken_on_complete():
+            callback_called.append(True)
+            raise RuntimeError("boom")
+
+        result = list(helper.stream(iter(["chunk_0"]), on_complete=broken_on_complete))
+
+        assert result == ["chunk_0"]
+        assert callback_called
+        assert handler.is_empty(thread_id)
+
+    def test_stream_keeps_alive_when_generator_blocked(self, handler, monkeypatch):
+        """generator 长时间无产出时，独立心跳应维持连接且不超时。"""
+        thread_id = "test_stream_heartbeat_keepalive"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+        monkeypatch.setattr(streaming_helper_module, "HEARTBEAT_INTERVAL", 0.05)
+        monkeypatch.setattr(streaming_helper_module, "HEARTBEAT_TIMEOUT", 0.2)
+        heartbeat_count = 0
+
+        original_put = handler.put
+
+        def put_with_count(tid, message):
+            nonlocal heartbeat_count
+            if tid == thread_id and message == streaming_helper_module.HEARTBEAT_CHUNK:
+                heartbeat_count += 1
+            original_put(tid, message)
+
+        monkeypatch.setattr(handler, "put", put_with_count)
+
+        def slow_first_chunk():
+            time.sleep(0.8)
+            yield "late_chunk"
+
+        result = list(helper.stream(slow_first_chunk()))
+        assert result == ["late_chunk"]
+        assert heartbeat_count > 0
+
+    def test_stream_raises_when_heartbeat_timeout(self, handler, monkeypatch):
+        """心跳发送慢于超时阈值时，消费者应抛出心跳超时异常。"""
+        thread_id = "test_stream_heartbeat_timeout"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+        monkeypatch.setattr(streaming_helper_module, "HEARTBEAT_INTERVAL", 1.0)
+        monkeypatch.setattr(streaming_helper_module, "HEARTBEAT_TIMEOUT", 0.2)
+
+        def slow_first_chunk():
+            time.sleep(0.8)
+            yield "late_chunk"
+
+        with pytest.raises(RuntimeError, match="心跳超时"):
+            list(helper.stream(slow_first_chunk()))
 
     def test_factory(self):
         """测试工厂方法"""
