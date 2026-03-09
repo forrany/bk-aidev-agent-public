@@ -294,6 +294,7 @@ class ChatCompletionAgent(BaseModel):
             self.agent_options.knowledge_query_options.knowledge_bases = self.knowledge_bases
         if self.knowledges:
             self.agent_options.knowledge_query_options.knowledge_items = self.knowledges
+        logger.info(f"callbacks: {self.callbacks}")
         return self.agent_cls.get_agent_executor(
             llm=self.chat_model,
             knowledge_llm=self.chat_model,

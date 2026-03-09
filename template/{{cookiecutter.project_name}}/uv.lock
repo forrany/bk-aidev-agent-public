@@ -69,7 +69,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aidev-agent", editable = "../../src/agent" },
-    { name = "aidev-ai-blueking", specifier = "==2.0.0.dev18" },
+    { name = "aidev-ai-blueking", specifier = "==2.0.0.dev23" },
     { name = "aidev-bkplugin", editable = "../../src/plugins/aidev_bkplugin" },
     { name = "aidev-wxbot", editable = "../../src/plugins/aidev_wxbot" },
     { name = "bk-plugin-framework", specifier = ">=2.3.7" },
@@ -132,7 +132,6 @@ dependencies = [
     { name = "langchain-core" },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
-    { name = "langfuse" },
     { name = "langgraph" },
     { name = "mcp" },
     { name = "pika" },
@@ -141,6 +140,7 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
     { name = "werkzeug" },
+    { name = "wrapt" },
 ]
 
 [package.metadata]
@@ -157,7 +157,6 @@ requires-dist = [
     { name = "langchain-core", specifier = ">1.1.3" },
     { name = "langchain-mcp-adapters", specifier = "==0.1.12" },
     { name = "langchain-openai", specifier = ">=0.3.0,<1.0.0" },
-    { name = "langfuse", specifier = "<3" },
     { name = "langgraph", specifier = ">=1.0.0" },
     { name = "mcp", specifier = "==1.25.0" },
     { name = "pika", specifier = ">=1.3.0" },
@@ -166,6 +165,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.0.0" },
     { name = "urllib3", specifier = ">=2.6.3" },
     { name = "werkzeug", specifier = ">=3.1.3,<4.0.0" },
+    { name = "wrapt", specifier = ">1,<2" },
 ]
 
 [package.metadata.requires-dev]
@@ -186,15 +186,15 @@ dev = [
 
 [[package]]
 name = "aidev-ai-blueking"
-version = "2.0.0.dev18"
+version = "2.0.0.dev23"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aidev-agent" },
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/df/41/a1de0ad88c202eeb7e76e7f76bded9d74f32b39823e9c3ed1e175e0f89ea/aidev_ai_blueking-2.0.0.dev18.tar.gz", hash = "sha256:9de70f84c1a7f456586f1c97ffb9510e2ee2a9fc5ed43d1082ca1ccba8af0016", size = 6129763, upload-time = "2026-03-06T09:00:57.907Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/0f/3ec0e5bcd0b5172dcb1ad1795435ae3072b2df012620a095351234bdadf3/aidev_ai_blueking-2.0.0.dev23.tar.gz", hash = "sha256:a784534e740cdebb72517942c2eafe64fa90be401c242b0dcb847e3693397d97", size = 6277022, upload-time = "2026-03-10T08:41:06.158Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/b3/a7a1c9ac0245ff57c638e743980547665f0c0e0e0658d2708d0d0016db9c/aidev_ai_blueking-2.0.0.dev18-py3-none-any.whl", hash = "sha256:ee1c0dbfbc1ee3e1960fb982e2a49dfc0227210283bf0d66e135305bef43237b", size = 6190594, upload-time = "2026-03-06T09:00:50.519Z" },
+    { url = "https://files.pythonhosted.org/packages/de/20/51f90329ce8f439d9f24b54f7011f7ddd39bdf63de258739bc2b9584610e/aidev_ai_blueking-2.0.0.dev23-py3-none-any.whl", hash = "sha256:4d52ba5576a23600d1cccbeb13395755b01f0eeb1ddbd9f676f0ec0a2519524e", size = 6350665, upload-time = "2026-03-10T08:40:57.803Z" },
 ]
 
 [[package]]
@@ -372,15 +372,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6b/5c/685e6633917e101e5dcb62b9dd76946cbb57c26e133bae9e0cd36033c0a9/attrs-25.4.0.tar.gz", hash = "sha256:16d5969b87f0859ef33a48b35d55ac1be6e42ae49d5e853b597db70c35c57e11", size = 934251, upload-time = "2025-10-06T13:54:44.725Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3a/2a/7cc015f5b9f5db42b7d48157e23356022889fc354a2813c15934b7cb5c0e/attrs-25.4.0-py3-none-any.whl", hash = "sha256:adcf7e2a1fb3b36ac48d97835bb6d8ade15b8dcce26aba8bf1d14847b57a3373", size = 67615, upload-time = "2025-10-06T13:54:43.17Z" },
-]
-
-[[package]]
-name = "backoff"
-version = "2.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001, upload-time = "2022-10-05T19:19:32.061Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148, upload-time = "2022-10-05T19:19:30.546Z" },
 ]
 
 [[package]]
@@ -1416,25 +1407,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/41/42/c178dcdc157b473330eb7cc30883ea69b8ec60078c7b85e2d521054c4831/langchain_text_splitters-1.1.0.tar.gz", hash = "sha256:75e58acb7585dc9508f3cd9d9809cb14751283226c2d6e21fb3a9ae57582ca22", size = 272230, upload-time = "2025-12-14T01:15:38.659Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/1a/a84ed1c046deecf271356b0179c1b9fba95bfdaa6f934e1849dee26fad7b/langchain_text_splitters-1.1.0-py3-none-any.whl", hash = "sha256:f00341fe883358786104a5f881375ac830a4dd40253ecd42b4c10536c6e4693f", size = 34182, upload-time = "2025-12-14T01:15:37.382Z" },
-]
-
-[[package]]
-name = "langfuse"
-version = "2.60.10"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "backoff" },
-    { name = "httpx" },
-    { name = "idna" },
-    { name = "packaging" },
-    { name = "pydantic" },
-    { name = "requests" },
-    { name = "wrapt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/eb/45/77fdf53c9e9f49bb78f72eba3f992f2f3d8343e05976aabfe1fca276a640/langfuse-2.60.10.tar.gz", hash = "sha256:a26d0d927a28ee01b2d12bb5b862590b643cc4e60a28de6e2b0c2cfff5dbfc6a", size = 152648, upload-time = "2025-09-16T15:08:12.426Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/69/08584fbd69e14398d3932a77d0c8d7e20389da3e6470210d6719afba2801/langfuse-2.60.10-py3-none-any.whl", hash = "sha256:815c6369194aa5b2a24f88eb9952f7c3fc863272c41e90642a71f3bc76f4a11f", size = 275568, upload-time = "2025-09-16T15:08:10.166Z" },
 ]
 
 [[package]]

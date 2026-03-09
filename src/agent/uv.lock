@@ -31,7 +31,6 @@ dependencies = [
     { name = "langchain-core" },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
-    { name = "langfuse" },
     { name = "langgraph" },
     { name = "mcp" },
     { name = "pika" },
@@ -40,6 +39,7 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
     { name = "werkzeug" },
+    { name = "wrapt" },
 ]
 
 [package.dev-dependencies]
@@ -72,7 +72,6 @@ requires-dist = [
     { name = "langchain-core", specifier = ">1.1.3" },
     { name = "langchain-mcp-adapters", specifier = "==0.1.12" },
     { name = "langchain-openai", specifier = ">=0.3.0,<1.0.0" },
-    { name = "langfuse", specifier = "<3" },
     { name = "langgraph", specifier = ">=1.0.0" },
     { name = "mcp", specifier = "==1.25.0" },
     { name = "pika", specifier = ">=1.3.0" },
@@ -81,6 +80,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.0.0" },
     { name = "urllib3", specifier = ">=2.6.3" },
     { name = "werkzeug", specifier = ">=3.1.3,<4.0.0" },
+    { name = "wrapt", specifier = ">1,<2" },
 ]
 
 [package.metadata.requires-dev]
@@ -147,15 +147,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/b0/1367933a8532ee6ff8d63537de4f1177af4bff9f3e829baf7331f595bb24/attrs-25.3.0.tar.gz", hash = "sha256:75d7cefc7fb576747b2c81b4442d4d4a1ce0900973527c011d1030fd3bf4af1b", size = 812032, upload-time = "2025-03-13T11:10:22.779Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/77/06/bb80f5f86020c4551da315d78b3ab75e8228f89f0162f2c3a819e407941a/attrs-25.3.0-py3-none-any.whl", hash = "sha256:427318ce031701fea540783410126f03899a97ffc6f61596ad581ac2e40e3bc3", size = 63815, upload-time = "2025-03-13T11:10:21.14Z" },
-]
-
-[[package]]
-name = "backoff"
-version = "2.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001, upload-time = "2022-10-05T19:19:32.061Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148, upload-time = "2022-10-05T19:19:30.546Z" },
 ]
 
 [[package]]
@@ -736,25 +727,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/41/42/c178dcdc157b473330eb7cc30883ea69b8ec60078c7b85e2d521054c4831/langchain_text_splitters-1.1.0.tar.gz", hash = "sha256:75e58acb7585dc9508f3cd9d9809cb14751283226c2d6e21fb3a9ae57582ca22", size = 272230, upload-time = "2025-12-14T01:15:38.659Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/1a/a84ed1c046deecf271356b0179c1b9fba95bfdaa6f934e1849dee26fad7b/langchain_text_splitters-1.1.0-py3-none-any.whl", hash = "sha256:f00341fe883358786104a5f881375ac830a4dd40253ecd42b4c10536c6e4693f", size = 34182, upload-time = "2025-12-14T01:15:37.382Z" },
-]
-
-[[package]]
-name = "langfuse"
-version = "2.60.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "backoff" },
-    { name = "httpx" },
-    { name = "idna" },
-    { name = "packaging" },
-    { name = "pydantic" },
-    { name = "requests" },
-    { name = "wrapt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/06/1a/2443e3715767f1bf9d8cf32d74ac59cfb60e1d9b84e99df13fd656639eb3/langfuse-2.60.9.tar.gz", hash = "sha256:040753346d7df4a0be6967dfc7efe3de313fee362524fe2f801867fcbbca3c98", size = 152684, upload-time = "2025-06-29T09:39:27.628Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/50/3aa93fc284ba5f81dcdd00b6414caee338fd45d77fa4959c3e4f838cebc6/langfuse-2.60.9-py3-none-any.whl", hash = "sha256:e4291a66bc579c66d7652da5603ca7f0409536700d7b812e396780b5d9a0685d", size = 275543, upload-time = "2025-06-29T09:39:26.234Z" },
 ]
 
 [[package]]

@@ -356,6 +356,17 @@ class AgentInfoViewSet(PluginViewSet):
     def info(self, request):
         agent_info = get_agent_config_info(request.user.username)
 
+        conversation_settings = agent_info.get("conversation_settings", {})
+        commands = conversation_settings.get("commands", [])
+        if isinstance(commands, list):
+            for command in commands:
+                if not isinstance(command, dict):
+                    continue
+                command_id = command.get("id")
+                command_name = command.get("name")
+                if command_id and command_name and command_id == command_name:
+                    command["components"] = []
+
         # 新增群聊信息
         agent_info["chat_group"] = {
             "enabled": settings.CHAT_GROUP_ENABLED,

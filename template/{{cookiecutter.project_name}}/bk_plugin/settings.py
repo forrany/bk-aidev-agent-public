@@ -62,6 +62,7 @@ DEFAULT_CONFIG_MANAGER = os.environ.get(
 REST_FRAMEWORK = {
     "DATETIME_FORMAT": "%Y-%m-%d %H:%M:%S",
     "EXCEPTION_HANDLER": "aidev_bkplugin.packages.drf.exception.custom_exception_handler",
+    "DEFAULT_RENDERER_CLASSES": ("aidev_bkplugin.packages.drf.renderers.APIRenderer",),
 }
 
 # 智能体接口授权
