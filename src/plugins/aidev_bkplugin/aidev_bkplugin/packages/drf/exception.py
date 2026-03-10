@@ -5,6 +5,7 @@ from json.decoder import JSONDecodeError
 from blueapps.core.exceptions import BlueException, ServerBlueException
 from blueapps.utils.logger import logger
 from rest_framework import status
+from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
 
@@ -65,11 +66,6 @@ def custom_exception_handler(exc, context):
             status_code = exc.STATUS_CODE
 
     # 使用json方便提取
-    logger.exception(json.dumps({"code": code, "message": exc_message, "status_code": status_code, "data": exc_data}))
-    # 对于 BlueException 类型的异常，保持原有行为
-    if isinstance(exc, BlueException):
-        raise BlueException(message=exc_message, code=code, status_code=status_code, data=exc_data)
-    else:
-        # 对于非 BlueException 的异常（如 TypeError、ValueError 等系统异常），
-        # 使用 InternalServerError 表示内部服务器错误（错误码 533），便于问题定位
-        raise InternalServerError(message=exc_message, data=exc_data)
+    data = {"code": code, "message": exc_message, "status_code": status_code}
+    logger.exception(f"exception: {json.dumps(data)}")
+    return Response(data, status=status_code)

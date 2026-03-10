@@ -31,7 +31,7 @@ class ExecuteKwargs(BaseModel):
 class SessionTool(BaseModel):
     tool_id: int
     tool_code: str
-    icon: str
+    icon: str | None = None
     tool_name: str = Field(validation_alias=AliasChoices("tool_name", "tool_cn_name"))
     description: str
     is_sensitive: bool
@@ -56,6 +56,7 @@ class SessionContentExtra(BaseModel):
     context: list[dict] | None = None
     command: str | None = None
     rendered_content: str | None = None
+    resources: list[dict] | None = None
 
 
 class SessionContentProperty(BaseModel):

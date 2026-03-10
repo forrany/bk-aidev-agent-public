@@ -1,8 +1,8 @@
 ag-ui-protocol==0.1.10
-aidev-agent==1.1.0b8
+aidev-agent==1.1.0b10
 aidev-ai-blueking==2.0.0-dev.27
-aidev-bkplugin==1.1.0b4
-aidev-wxbot==1.1.0b1
+aidev-bkplugin==1.1.0b6
+aidev-wxbot==1.1.0b2
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
 aiosignal==1.4.0
@@ -12,7 +12,6 @@ anyio==4.11.0
 apigw-manager==4.2.3
 asgiref==3.10.0
 attrs==25.4.0
-backoff==2.2.1
 billiard==4.2.2
 bk-plugin-framework==2.3.7
 bk-plugin-runtime==2.1.6
@@ -33,10 +32,11 @@ colorama==0.4.6 ; sys_platform == 'win32'
 cron-descriptor==2.0.6
 cryptography==46.0.3
 curlify==3.0.0
+dataclasses-json==0.6.7
 ddtrace==0.14.1
 deprecated==1.3.1
 distro==1.9.0
-django==4.2.26
+django==4.2.29
 django-celery-beat==2.7.0
 django-celery-results==2.5.1
 django-cors-headers==4.9.0
@@ -69,12 +69,11 @@ jsonschema-specifications==2025.9.1
 kombu==5.6.0
 langchain==1.2.7
 langchain-classic==1.0.1
+langchain-community==0.4.1
 langchain-core==1.2.7
 langchain-mcp-adapters==0.1.12
 langchain-openai==0.3.34
 langchain-text-splitters==1.1.0
-langchain-community==0.4.1
-langfuse==2.60.10
 langgraph==1.0.7
 langgraph-checkpoint==4.0.0
 langgraph-prebuilt==1.0.7

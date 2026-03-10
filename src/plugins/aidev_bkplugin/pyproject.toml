@@ -1,12 +1,13 @@
 [project]
 name = "aidev-bkplugin"
-version = "1.1.0b4"
+version = "1.1.0b6"
 description = "AiDev Agent Bkplugin builtin functions"
 readme = "readme.md"
 requires-python = ">=3.11.9, <4"
 dependencies = [
-    "aidev-agent>=1.1.0b8",
+    "aidev-agent>=1.1.0b9",
     "blueapps>=4.15.1, <5.0",
+    "django>=4.2.28,<5.0",
 ]
 
 

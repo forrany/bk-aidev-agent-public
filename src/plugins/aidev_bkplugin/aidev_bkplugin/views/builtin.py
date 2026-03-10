@@ -290,7 +290,7 @@ class ChatCompletionViewSet(PluginViewSet):
                     message_id=error_message_id,
                     role=PromptRole.ASSISTANT.value,
                     content=message,
-                    status="fail",
+                    status="error",
                     builtin_property={
                         "message_id": error_message_id,
                         "error": True,
@@ -348,6 +348,7 @@ class ChatCompletionViewSet(PluginViewSet):
         sr.headers["Cache-Control"] = "no-cache"
         sr.headers["X-Accel-Buffering"] = "no"
         sr.headers["content-type"] = "text/event-stream"
+        sr.headers["Otel-Trace-Id"] = getattr(self.request._request, "otel_trace_id", "") or ""
         return sr
 
 

@@ -362,6 +362,9 @@ class BaseSessionWriter(ABC):
         message_id = event_data.get("message_id")
         reference_documents = [dict_keys_camel_to_snake(each) for each in event_data.get("data", [])]
 
+        if not reference_documents:
+            return
+
         if not message_id:
             message_id = f"ref_{uuid.uuid4().hex[:12]}"
 

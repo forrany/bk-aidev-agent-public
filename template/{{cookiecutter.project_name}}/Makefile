@@ -49,24 +49,11 @@ clean:
 lint:
 	uv run pre-commit run -a --hook-stage commit
 
-# 本地开发：首次运行前请先执行 make migrate，并确保 local.$(BKPAAS_BK_DOMAIN) 已写入 hosts
-.PHONY: migrate
-migrate:
-	set -e; \
-	. ./.env; \
-	uv run python bin/manage.py migrate; \
-	uv run python bin/manage.py createcachetable
-
-.PHONY: runserver
-runserver:
-	. ./.env; \
-	uv run python bin/manage.py runserver 0.0.0.0:5000
-
 # 一键启动：migrate + createcachetable 后启动本地服务（需已配置 .env 与 hosts）
 .PHONY: dev
 dev:
 	set -e; \
 	. ./.env; \
-	uv run python bin/manage.py migrate; \
-	uv run python bin/manage.py createcachetable; \
-	uv run python bin/manage.py runserver 0.0.0.0:5000
+	uv run --no-sync python bin/manage.py migrate; \
+	uv run --no-sync python bin/manage.py createcachetable; \
+	uv run --no-sync python bin/manage.py runserver 0.0.0.0:5000

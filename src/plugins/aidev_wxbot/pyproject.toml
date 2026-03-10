@@ -1,6 +1,6 @@
 [project]
 name = "aidev-wxbot"
-version = "1.1.0b1"
+version = "1.1.0b2"
 description = "A Django app for WeChat AI bot integration with BK AI Dev platform"
 authors = [
     {name = "tencentblueking"}
@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "django>=4.0,<5.0",
+    "django>=4.2.28,<5.0",
     "djangorestframework>=3.14.0",
     "pydantic>=2.11.7",
     "stackprinter>=0.2.12",

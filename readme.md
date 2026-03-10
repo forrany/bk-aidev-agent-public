@@ -65,6 +65,18 @@
    - [蓝鲸插件开发指南](./src/plugins/aidev_bkplugin/readme.md)
    - [企业微信机器人开发指南](./src/plugins/aidev_wxbot/readme.md)
 
+### 模板项目本地开发（快捷方式）
+可参考 `template/{{cookiecutter.project_name}}/Makefile` 使用一键启动命令：
+```bash
+cd template/{{cookiecutter.project_name}}
+make dev
+```
+
+> `make dev` 会自动执行 `migrate`、`createcachetable` 并启动本地服务（`0.0.0.0:5000`）。
+> `.env` 请优先到 bkaidev 平台进入对应智能体，通过「下载源码」获取完整工程；源码包中已包含该智能体对应的 `.env` 文件。
+> 下载后请将源码包中的 `.env` 放到本地模板项目根目录（`template/{{cookiecutter.project_name}}/.env`）再执行 `make dev`。
+> 首次运行前请按模板说明完成本地域名 hosts 映射。
+
 ### 前端开发
 #### 组件开发
 ```bash

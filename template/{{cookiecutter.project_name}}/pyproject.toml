@@ -9,7 +9,7 @@ dependencies = [
     "aidev-agent==1.1.0b8",
     "aidev-bkplugin==1.1.0b3",
     "aidev-wxbot==1.1.0b1",
-    "aidev-ai-blueking==2.0.0-dev.27",
+    "aidev-ai-blueking==2.0.0.dev27",
     "bk-plugin-framework>=2.3.7",
     "bkapi-bk-apigateway==1.0.12",
     "celery==5.4.0",
@@ -40,6 +40,7 @@ dependencies = [
     "opentelemetry-util-http==0.54b1",
     "tiktoken==0.11.0",
     "langchain-community>=0.4.1",
+    "django>=4.2.28,<5.0",
 ]
 
 [tool.pdm.build]

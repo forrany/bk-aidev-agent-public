@@ -8,7 +8,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from aidev_agent.api import BKAidevApi
 from aidev_agent.api.abstract_client import AbstractBKAidevResourceManager
 from aidev_agent.config import settings
-from aidev_agent.enums import AgentBuildType, AgentType
+from aidev_agent.enums import AgentBuildType, AgentType, PromptRole
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.tools import make_mcp_tools
 from aidev_agent.services.chat import ChatCompletionAgent
@@ -78,6 +78,7 @@ class AgentInstanceFactory:
         self.is_temporary = is_temporary
         self.checkpointer = checkpointer
         self.username = username
+        self._specific_resources: list[dict] = []
 
     @classmethod
     def build_agent(
@@ -225,6 +226,9 @@ class AgentInstanceFactory:
         # 处理最后一条assistant消息
         self._clean_last_assistant_message(session_context_data, base_agent_config)
 
+        # 处理最后一条human消息,判断有无resources
+        self._handle_last_human_message(session_context_data)
+
         return {
             "agent_code": final_agent_code,
             "session_context_data": session_context_data,
@@ -244,6 +248,20 @@ class AgentInstanceFactory:
             "switch_agent": False,
             "config_manager_class": self.config_manager_class,
         }
+
+    def _handle_last_human_message(self, session_context_data: List[dict]):
+        """处理最后一条human消息,判断有resources"""
+        if not session_context_data:
+            return
+
+        for item in reversed(session_context_data):
+            logger.info(
+                f"AgentInstanceFactory: handling last human message with resources in session_context_data->[{item}]"
+            )
+            if item.get("role") == PromptRole.USER.value:
+                if item.get("extra", {}).get("resources"):
+                    self._specific_resources = item.get("extra", {}).get("resources")
+                break
 
     # ============== 通用构建方法 ==============
 
@@ -282,7 +300,8 @@ class AgentInstanceFactory:
 
         # 添加系统历史
         config = self.config_manager_class.get_config(
-            agent_code=agent_code or self.agent_code, resource_manager=self.resource_manager
+            agent_code=agent_code or self.agent_code,
+            resource_manager=self.resource_manager,
         )
         role_history = (
             [
@@ -315,7 +334,19 @@ class AgentInstanceFactory:
     def build_knowledge_bases(self, agent_code: str) -> List[dict]:
         """构建知识库"""
         config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
-        return [self.resource_manager.retrieve_knowledgebase(_id) for _id in config.knowledgebase_ids]
+        specific_resources = [
+            each.get("id") for each in self._specific_resources if each.get("type") == "knowledgebase"
+        ]
+        if specific_resources:
+            knowledgebase_ids = [
+                each for each in config.knowledgebase_ids if specific_resources and each in specific_resources
+            ]
+        else:
+            knowledgebase_ids = config.knowledgebase_ids
+        logger.info(
+            f"AgentInstanceFactory: config knowledgebase_ids->[{config.knowledgebase_ids}], specific_resources->[{specific_resources}]"
+        )
+        return [self.resource_manager.retrieve_knowledgebase(_id) for _id in knowledgebase_ids]
 
     def build_knowledge_items(self, agent_code: str) -> List[dict]:
         """构建知识条目"""
@@ -325,12 +356,20 @@ class AgentInstanceFactory:
     def build_tools(self, agent_code: str) -> List[Any]:
         """构建工具"""
         config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
-        mcp_tools = (
-            make_mcp_tools(config.mcp_server_config, config.agent_options, username=self.username)
-            if config.mcp_server_config
-            else []
-        )
-        return [self.resource_manager.construct_tool(tool_code) for tool_code in config.tool_codes] + mcp_tools
+        specific_mcps = [each.get("code") for each in self._specific_resources if each.get("type") == "mcp"]
+        if specific_mcps:
+            mcp_server_config = {each: config.mcp_server_config.get(each) for each in specific_mcps}
+        else:
+            mcp_server_config = config.mcp_server_config
+        mcp_tools = make_mcp_tools(mcp_server_config, config.agent_options, username=self.username)
+        logger.info(f"AgentInstanceFactory: mcp_server_config->[{mcp_server_config}]")
+        specific_tools = [each.get("code") for each in self._specific_resources if each.get("type") == "tool"]
+        if specific_tools:
+            tool_codes = [each for each in config.tool_codes if each in specific_tools]
+        else:
+            tool_codes = config.tool_codes
+        logger.info(f"AgentInstanceFactory: tool_codes->[{tool_codes}]")
+        return [self.resource_manager.construct_tool(tool_code) for tool_code in tool_codes] + mcp_tools
 
     def get_role_prompt(self, agent_code: str) -> str | None:
         """获取角色提示词"""
@@ -533,10 +572,18 @@ def _remove_think(content: str) -> str:
         清理后的内容字符串
     """
     # 第一步：移除思考头部（使用DOTALL模式匹配多行内容）
-    _content = re.sub(r'<section class="think-head click-close">[\s\S]*?</section>', "", content, flags=re.DOTALL)
+    _content = re.sub(
+        r'<section class="think-head click-close">[\s\S]*?</section>',
+        "",
+        content,
+        flags=re.DOTALL,
+    )
 
     _content = re.sub(
-        r'<section class="think-head click-close closed">[\s\S]*?</section>', "", _content, flags=re.DOTALL
+        r'<section class="think-head click-close closed">[\s\S]*?</section>',
+        "",
+        _content,
+        flags=re.DOTALL,
     )
 
     # 第二步：移除思考主体部分

@@ -70,6 +70,37 @@ BK_APIGW_GRANTED_APPS = os.getenv("BKAPP_APIGW_GRANTED_APPS") or os.getenv("BK_A
 BK_APIGW_GRANTED_APPS = BK_APIGW_GRANTED_APPS.split(",") if BK_APIGW_GRANTED_APPS else []
 BK_APIGW_GRANTED_APPS.append(locals().get("BKPAAS_APP_CODE"))
 
+# 本地开发环境全局放开跨域（仅 dev/development 生效）
+if os.getenv("BKPAAS_ENVIRONMENT", "dev").lower() in {"dev", "development"}:
+    if "corsheaders" not in INSTALLED_APPS:
+        INSTALLED_APPS = (*INSTALLED_APPS, "corsheaders")
+
+    # 避免在 MIDDLEWARE 尚未就绪时覆盖默认中间件链
+    middleware = locals().get("MIDDLEWARE")
+    if middleware and "corsheaders.middleware.CorsMiddleware" not in middleware:
+        MIDDLEWARE = ("corsheaders.middleware.CorsMiddleware", *middleware)
+
+    runtime_module_names = (
+        "bk_plugin_runtime.config.dev",
+        "bk_plugin_runtime.config.stag",
+        "bk_plugin_runtime.config.prod",
+    )
+    for module_name in runtime_module_names:
+        runtime_module = sys.modules.get(module_name)
+        if runtime_module is None:
+            continue
+
+        runtime_installed_apps = getattr(runtime_module, "INSTALLED_APPS", ())
+        if "corsheaders" not in runtime_installed_apps:
+            setattr(runtime_module, "INSTALLED_APPS", (*runtime_installed_apps, "corsheaders"))
+
+        runtime_middleware = getattr(runtime_module, "MIDDLEWARE", ())
+        if runtime_middleware and "corsheaders.middleware.CorsMiddleware" not in runtime_middleware:
+            setattr(runtime_module, "MIDDLEWARE", ("corsheaders.middleware.CorsMiddleware", *runtime_middleware))
+
+    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_CREDENTIALS = True
+
 # 自定义应用：在 apps 目录下创建应用，然后在这里加载
 # load_settings("apps.demo.settings")
 
