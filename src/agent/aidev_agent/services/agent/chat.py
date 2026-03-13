@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+import warnings
 from importlib.metadata import version as pkg_version
 from logging import getLogger
 from typing import Any, Callable, ClassVar, Generator, List, Optional
@@ -16,14 +17,19 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
+from aidev_agent.api.bk_agent import BkAgentApi
 from aidev_agent.config import settings
 from aidev_agent.core.ag_ui.aidev_agent import AidevAGUIAgent
 from aidev_agent.core.ag_ui.types import AgentInput
 from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
+
+# 延迟导入：遵守 services → tools 依赖方向，避免模块级 import 违规
+from aidev_agent.core.tools.a2a_tools.types import AgentBackendType, AgentSpec
 from aidev_agent.core.tools.runtime_tools import RuntimeBackendResolver
 from aidev_agent.enums import AgentType, PromptRole
 from aidev_agent.exceptions import AgentException
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
+from aidev_agent.packages.resource_manager.registry import resource_manager
 from aidev_agent.pydantic_models import (
     AgentOptions,
     ChatPrompt,
@@ -33,6 +39,7 @@ from aidev_agent.pydantic_models import (
 )
 from aidev_agent.services.agent.registry import AgentBuildContext, ChatBuildExtras
 from aidev_agent.services.common_agent import CommonAgentProtocol, CommonQAAgent
+from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 from aidev_agent.utils.async_utils import async_to_sync_generator
@@ -44,6 +51,30 @@ from aidev_agent.utils.migrations import (
 )
 
 logger = getLogger(__name__)
+
+
+def _extract_tool_calls(builtin_property: dict) -> list[dict]:
+    """从 builtin_property 中提取 tool_calls 列表。
+
+    注意：arguments 在数据库中存储为 JSON 字符串，需要解析为字典。
+    """
+    tool_calls = []
+    for tc in builtin_property.get("tool_calls", []):
+        args_str = tc.get("function", {}).get("arguments", "{}")
+        try:
+            args = json.loads(args_str) if isinstance(args_str, str) else args_str
+        except json.JSONDecodeError:
+            args = {}
+
+        tool_calls.append(
+            {
+                "id": tc.get("id", ""),
+                "name": tc.get("function", {}).get("name", ""),
+                "args": args,
+                "type": "tool_call",
+            }
+        )
+    return tool_calls
 
 
 class ChatCompletionAgent(BaseModel):
@@ -63,6 +94,7 @@ class ChatCompletionAgent(BaseModel):
     files: list[dict] = Field(default_factory=list)
     tools: Optional[list[StructuredTool]] = None
     skills: Optional[list] = None
+    subagent_specs: Optional[list[Any]] = None  # 实际类型为 list[AgentSpec]，使用 Any 避免 services→tools 依赖方向违规
     executor_info: Optional[dict] = None
     knowledge_bases: Optional[list[dict]] = None
     knowledges: Optional[list[dict]] = None
@@ -136,6 +168,7 @@ class ChatCompletionAgent(BaseModel):
         self.support_vision = builder.build_support_vision()
         self.chat_history = builder.build_chat_history(ctx.session_context_data)
         self.checkpointer = builder.build_checkpointer()
+        self.subagent_specs = builder.build_subagents(ctx.agent_code)
         self.callbacks = chat.callbacks
         # 构造 RuntimeBackendResolver（在 ChatAgentBuilder 层管理生命周期）
         self.runtime_backend_resolver = builder.build_runtime_backend_resolver()
@@ -460,6 +493,7 @@ class ChatCompletionAgent(BaseModel):
             knowledge_query_options=self.knowledge_query_options,
             model_context_options=self.model_context_options,
             skills=self.skills,
+            subagent_specs=self.subagent_specs,
             executor_info=self.executor_info,
             execute_kwargs=execute_kwargs,
             checkpointer=self.checkpointer if self.checkpointer else MemorySaver(),
@@ -490,7 +524,7 @@ class ChatCompletionAgent(BaseModel):
                     else:
                         messages.append(HumanMessage(id=each.id, content=str(each.content)))
                 case PromptRole.ASSISTANT.value | PromptRole.AI.value:
-                    tool_calls = self._extract_tool_calls(bp)
+                    tool_calls = _extract_tool_calls(bp)
                     messages.append(AIMessage(id=each.id, content=each.content, tool_calls=tool_calls))
                 case PromptRole.SYSTEM.value:
                     messages.append(SystemMessage(id=each.id, content=each.content))
@@ -498,29 +532,6 @@ class ChatCompletionAgent(BaseModel):
                     content = each.content if isinstance(each.content, str) else str(each.content)
                     messages.append(ToolMessage(id=each.id, content=content, tool_call_id=bp.get("tool_call_id", "")))
         return messages
-
-    def _extract_tool_calls(self, builtin_property: dict) -> list[dict]:
-        """从 builtin_property 中提取 tool_calls 列表
-
-        注意：arguments 在数据库中存储为 JSON 字符串，需要解析为字典
-        """
-        tool_calls = []
-        for tc in builtin_property.get("tool_calls", []):
-            args_str = tc.get("function", {}).get("arguments", "{}")
-            try:
-                args = json.loads(args_str) if isinstance(args_str, str) else args_str
-            except json.JSONDecodeError:
-                args = {}
-
-            tool_calls.append(
-                {
-                    "id": tc.get("id", ""),
-                    "name": tc.get("function", {}).get("name", ""),
-                    "args": args,
-                    "type": "tool_call",
-                }
-            )
-        return tool_calls
 
     def _convert_contents(self, contents: list[ChatPrompt]) -> list[ChatPrompt]:
         """将无需送到大模型处理的 content 去掉"""
@@ -681,8 +692,6 @@ class ChatAgentBuilder:
         .. deprecated::
             Use :meth:`build_chat_model_non_thinking` instead.
         """
-        import warnings
-
         warnings.warn(
             "build_non_thinking_llm is deprecated, use build_chat_model_non_thinking instead",
             DeprecationWarning,
@@ -739,6 +748,144 @@ class ChatAgentBuilder:
     def build_skills(self) -> list | None:
         """构建关联技能"""
         return self.ctx.agent_config.related_skills
+
+    def build_subagents(self, agent_code: str) -> list[Any]:
+        """构建子 Agent 规格，基于 ping 检查动态选择 BKAI/LOCAL 后端。
+
+        - 始终构造 Client 并通过 ping 判断远端可达性；
+          api_url 有值时传入 endpoint，否则由 get_client 自动构建
+        - BKAI 路径：仅构造 `AgentSpec(params={"agent_code", "client"})` 远端服务可用，走 API 网关直调，无需构造 agent_cls/ctx
+        - LOCAL 路径：通过 `resource_manager.get_agent_config(agent_code=child_agent_code, version=None)` 获取子 Agent 配置
+          每条子 Agent 产出 ``AgentSpec(params={"agent_cls", "ctx"})``，
+          让 LocalBackend 在运行时 ``agent_cls()`` 创建实例再 ``.build(ctx)``
+        - **硬约束**：子 ``agent_config.related_agents`` 被清空，实现递归断开 ——
+          即使配置里有嵌套 subagents 也不会生成第二层 AgentSpec
+
+        Args:
+            agent_code: 父 Agent 的 agent_code（仅用于日志输出，与子 Agent 无关）
+
+        Returns:
+            ``list[AgentSpec]``，每条对应一个子 Agent；related_agents 为空时返回空列表
+        """
+        parent_config = self.ctx.agent_config
+        related_agents = parent_config.related_agents if parent_config else []
+        logger.info(
+            "build_subagents: parent_agent_code=%s, related_agents count=%d",
+            agent_code,
+            len(related_agents),
+        )
+
+        # 关键设计：所有 Agent（父 + 所有子）共享同一 checkpointer 实例（Phase 16-fix）
+        # 理由：
+        # - member 模式依赖 LangGraph checkpointer + thread_id 续接多轮对话
+        # - 若子 Agent 每次新建 MemorySaver，每次 chat_completion 构建的 child 只能看到
+        #   自己这一个 MemorySaver 的历史；而真正的期望是「同一 thread_id 跨父子/成员的
+        #   state 在同一 checkpointer 存取」
+        # - 父 ctx.chat.checkpointer 在 factory.py:170 处一定非空（fallback 到 MemorySaver），
+        #   此处直接复用；仅在极端情况下（ctx.chat 为 None 或 checkpointer 缺失）
+        #   fallback，新建实例也仅对当前这一批 subagents 生效
+        parent_chat = self.ctx.chat
+        shared_checkpointer = (
+            parent_chat.checkpointer
+            if parent_chat is not None and parent_chat.checkpointer is not None
+            else MemorySaver()
+        )
+
+        specs: list[Any] = []
+        for agent in related_agents:
+            child_agent_code = agent.get("agent_code", "")
+            if not child_agent_code:
+                continue
+
+            # ★ 始终构造 Client 并通过 ping 判断远端可达性
+            # api_url 有值时传入 endpoint，否则由 get_client 自动构建
+            # validate_endpoint=True：若平台提供的 url 不含环境，则由 get_client 自动补全
+            access_token = (self._executor_info or {}).get("access_token", "")
+            api_url: Any = agent.get("api_url", "")
+
+            bkai_client = BkAgentApi.get_client(
+                agent_code=child_agent_code,
+                access_token=access_token,
+                endpoint=api_url,
+                validate_endpoint=True,
+            )
+            try:
+                bkai_client.ping()
+                is_remote = True
+                logger.info("build_subagents: ping %s → available, is_remote", child_agent_code)
+            except Exception:
+                is_remote = False
+                logger.info("build_subagents: ping %s → unavailable, fallback to LOCAL", child_agent_code)
+
+            if is_remote:
+                # BKAI 路径：只需 client（远端服务可用，走 API 网关直调）
+                specs.append(
+                    AgentSpec(
+                        name=child_agent_code,
+                        description=agent.get("description") or agent.get("agent_name", ""),
+                        backend_type=AgentBackendType.BKAI,
+                        params={
+                            "client": bkai_client,  # 注入已构造好的 Client 实例
+                            "resource_manager": self.ctx.resource_manager,
+                            "caller_bk_app_code": self.ctx.agent_code,
+                        },
+                    )
+                )
+            else:
+                # LOCAL 路径：构造 agent_cls + ctx（由 LocalBackend 运行时实例化并 build）
+                # 1. 取子 Agent 配置（version=None → 最新版；子 agent_code 不继承父 version 语义）
+                child_config = self.ctx.resource_manager.get_agent_config(agent_code=child_agent_code, version=None)
+
+                # 2. 递归断开：清空子 config 的 related_agents（D-06）
+                child_config = child_config.model_copy(update={"related_agents": []})
+
+                # 3. 构造子 ChatBuildExtras：与父共享 agent_cls/auth_headers/checkpointer；
+                #    仅 callbacks 隔离避免事件双发
+                child_chat = ChatBuildExtras(
+                    agent_cls=parent_chat.agent_cls if parent_chat is not None else None,
+                    callbacks=[],  # 子 Agent 不继承父 callbacks，避免事件双发
+                    auth_headers=parent_chat.auth_headers if parent_chat is not None else None,
+                    temperature=None,  # 由子 agent_config.temperature 决定（build_chat_model 读取）
+                    max_tokens=None,  # 同上
+                    checkpointer=shared_checkpointer,  # 共享父 checkpointer，使 member 模式可跨调用续接
+                )
+
+                # 4. 构造子 AgentBuildContext（D-05）
+                child_ctx = AgentBuildContext(
+                    agent_code=child_agent_code,
+                    agent_type=AgentType.CHAT,
+                    agent_config=child_config,
+                    resource_manager=self.ctx.resource_manager,  # 复用父 rm
+                    session_code=None,  # 子 Agent 不继承父 session_code；member 模式由 LocalBackend 运行时注入
+                    username=self.ctx.username,  # 复用父 username（日志/审计）
+                    session_context_data=[],  # 子 Agent 不继承父会话历史
+                    switch_agent=False,  # 子 Agent 不走切换逻辑
+                    event_handler=AGUISessionWriter(
+                        session_code="",
+                        client=resource_manager().get_client(),
+                        username=self.ctx.username,
+                        turn_id="",
+                    ),  # 子 Agent 使用独立 AGUISessionWriter，session_code 由 LocalBackend 运行时注入
+                    chat=child_chat,
+                    flow=None,
+                    extra={},
+                )
+
+                # 5. 构造子 Agent 规格（agent_cls + ctx，由 LocalBackend 运行时实例化并 build）
+                specs.append(
+                    AgentSpec(
+                        name=child_agent_code,
+                        description=agent.get("description") or agent.get("agent_name", ""),
+                        backend_type=AgentBackendType.LOCAL,
+                        params={
+                            "agent_cls": ChatCompletionAgent,
+                            "ctx": child_ctx,
+                            "caller_bk_app_code": self.ctx.agent_code,
+                        },
+                    )
+                )
+            logger.info("build_subagents: ping %s → available, is_remote %s", child_agent_code, str(specs))
+        return specs
 
     def build_knowledge_query_options(self):
         """从 AgentConfig 构建 KnowledgeSettings；新协议为空时兼容旧 agent_options。"""
@@ -888,31 +1035,7 @@ class ChatAgentBuilder:
         Returns:
             tool_calls 列表，每个元素包含 id, name, args 字段
         """
-        builtin_property = prompt.builtin_property or {}
-        tool_calls_raw = builtin_property.get("tool_calls", [])
-
-        if not tool_calls_raw:
-            return []
-
-        tool_calls = []
-        for tc in tool_calls_raw:
-            # arguments 在数据库中存储为 JSON 字符串，需要解析为字典
-            args_str = tc.get("function", {}).get("arguments", "{}")
-            try:
-                args = json.loads(args_str) if isinstance(args_str, str) else args_str
-            except json.JSONDecodeError:
-                args = {}
-
-            tool_calls.append(
-                {
-                    "id": tc.get("id", ""),
-                    "name": tc.get("function", {}).get("name", ""),
-                    "args": args,
-                    "type": "tool_call",
-                }
-            )
-
-        return tool_calls
+        return _extract_tool_calls(prompt.builtin_property or {})
 
     def _update_tool_calls_in_prompt(self, prompt: ChatPrompt, matched_tool_calls: List[dict]) -> None:
         """更新 ChatPrompt 中的 tool_calls，只保留匹配的调用

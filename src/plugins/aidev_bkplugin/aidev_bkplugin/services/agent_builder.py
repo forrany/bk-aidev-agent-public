@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from logging import getLogger
 
-from aidev_agent.enums import AgentBuildType, PromptRole
+from aidev_agent.enums import AgentBuildType, PromptRole, SessionsStatus
 from aidev_agent.packages.resource_manager.agent import AgentResourceManager
 from aidev_agent.pydantic_models import ChatPrompt
 from aidev_agent.services.agent import AgentInstanceFactory, ChatCompletionAgent
@@ -102,11 +102,22 @@ class AgentBuilder:
             ) or self.turn_id
         else:
             self.session_manager.save_chat_history(session_code, chat_history)
-        return self._build_session_agent_for_thread(
-            session_code,
-            version=version,
-            channel_type=channel_type,
-        ), session_code
+        try:
+            agent = self._build_session_agent_for_thread(
+                session_code,
+                version=version,
+                channel_type=channel_type,
+            )
+        except Exception:
+            # D-03: Agent 构建失败，尝试标记 session 为 FAILED
+            try:
+                self.session_manager.update_session_status(session_code, SessionsStatus.FAILED.value)
+            except Exception:
+                logger.exception(
+                    "Failed to mark session as FAILED after agent build error: session_code=%s", session_code
+                )
+            raise
+        return agent, session_code
 
     def _build_session_agent_for_thread(
         self,

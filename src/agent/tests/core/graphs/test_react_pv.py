@@ -88,11 +88,12 @@ def test_default_state_has_pv_field():
 
 
 def test_graph_source_contains_resource_manager_retention():
-    """graph builder 应保留每次请求的 resource_manager，且没有技能时也会设置。"""
+    """graph builder 应保留每次请求的 resource_manager，且没有技能时不会自动创建。"""
     source = _read_graph_source()
 
     assert "self._resource_manager = None" in source
-    assert "self._resource_manager = options.resource_manager or resource_manager()" in source
+    assert "if options.resource_manager is not None:" in source
+    assert "self._resource_manager = options.resource_manager" in source
     assert "client=self._resource_manager" in source
 
 

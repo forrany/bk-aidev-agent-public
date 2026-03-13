@@ -358,6 +358,10 @@ def build_model_node(
         ),
     )
 
+    # Extension: allow graph layer to inject additional tool middlewares
+    for m in getattr(node_options, "extra_tool_middlewares", []) or []:
+        context_assembly.add_middleware("tool", m)
+
     def model_node(
         state: ModelState,
         config: RunnableConfig,

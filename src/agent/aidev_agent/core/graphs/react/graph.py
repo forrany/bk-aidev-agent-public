@@ -19,7 +19,7 @@ to the current version of the project delivered to anyone in the future.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated, Callable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Annotated, Callable, List, Optional, Sequence, Tuple, get_type_hints
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -39,11 +39,30 @@ from langgraph.graph.state import StateGraph
 from langgraph.store.memory import InMemoryStore
 from typing_extensions import Literal, TypedDict, TypeVar
 
+from aidev_agent.config import settings
+from aidev_agent.core.graphs.react.skill_middleware import (
+    SkillsPromptMiddleware,
+    _extract_e2b_params,
+    _extract_local_params,
+    _extract_paas_params,
+)
+from aidev_agent.core.graphs.react.team_middleware import TeamInfo, TeamPromptMiddleware
 from aidev_agent.core.nodes.knowledge import make_knowledge_node
 from aidev_agent.core.nodes.model import ModelNodeSettings
 from aidev_agent.core.nodes.model import build_model_node as std_make_model_node
 from aidev_agent.core.nodes.pv import add_pv_info, make_pv_node
 from aidev_agent.core.nodes.tool import ToolNodeSettings, build_tool_node
+from aidev_agent.core.tools.a2a_tools.bkai_backend import BkaiBackend
+from aidev_agent.core.tools.a2a_tools.local_backend import LocalBackend
+from aidev_agent.core.tools.a2a_tools.provider import AgentBackendResolver, get_agent_tools
+from aidev_agent.core.tools.runtime_tools import get_client_tools_with_runtime
+from aidev_agent.core.tools.runtime_tools.e2b_backend import E2BSandboxBackend
+from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
+from aidev_agent.core.tools.runtime_tools.paas_backend import PaasSandboxBackend
+from aidev_agent.core.tools.skill.bkai_backend import BkAiBackend
+from aidev_agent.core.tools.skill.provider import SkillRegistry
+from aidev_agent.core.tools.skill.types import SkillOptions, SkillProviderBackend
+from aidev_agent.core.tools.task import TeamTaskRecord, get_task_tools
 from aidev_agent.enums import Decision
 from aidev_agent.packages.langchain_core.models.utils import is_model_without_function_calling
 from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
@@ -53,10 +72,8 @@ if TYPE_CHECKING:
     from langchain_core.runnables import Runnable
     from langgraph.store.base import BaseStore
 
-from aidev_agent.core.tools.skill.bkai_backend import BkAiBackend
-from aidev_agent.core.tools.skill.provider import SkillRegistry
-from aidev_agent.core.tools.skill.types import SkillOptions, SkillProviderBackend
-from aidev_agent.packages.resource_manager.registry import resource_manager
+    from aidev_agent.core.tools.a2a_tools.types import AgentSpec
+
 
 ResponseT = TypeVar("ResponseT")
 
@@ -66,6 +83,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Runtime 参数提取函数（模块级，供 enable_runtime_* 注册到 _runtime_param_with_skill）
 # ---------------------------------------------------------------------------
+
+
+def _resolve_task_state_schema(schemas: List[type]) -> type:
+    """Resolve state schema by merging multiple TypedDict schemas.
+
+    Args:
+        schemas: List of TypedDict schemas to merge
+
+    Returns:
+        A new TypedDict class with all fields from input schemas
+    """
+    all_annotations = {}
+    for schema in schemas:
+        hints = get_type_hints(schema, include_extras=True)
+        all_annotations.update(hints)
+
+    return TypedDict("FinalState", all_annotations)  # type: ignore[misc]
 
 
 class DefaultState(TypedDict):
@@ -107,6 +141,14 @@ class ReActAgentBuilder:
         # 对话设置
         self._suffix: str | None = None
         self._chat_history: list[BaseMessage] | None = None
+        # 多智能体设置
+        self._enable_a2a_tool: bool = False
+        self._a2a_specs: list[AgentSpec] = []
+        self._a2a_backend_types: dict[str, type] = {}  # 后端类型名称 -> 后端类
+        self._a2a_resolver: AgentBackendResolver | None = None
+        self._enable_team: bool = False
+        self._team_config = None  # TeamConfig | None
+        self._enable_task: bool = False
         # 知识库设置
         self._knowledge_items: list[dict] | None = None
         self._knowledge_bases: list[dict] | None = None
@@ -174,6 +216,130 @@ class ReActAgentBuilder:
 
     def set_chat_history(self, chat_history: list[BaseMessage] | None) -> "ReActAgentBuilder":
         self._chat_history = chat_history
+        return self
+
+    # ====================================================================================================
+    # 多智能体设置
+    # ====================================================================================================
+    def enable_a2a_tool(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 A2A 工具用于多智能体交互。
+
+        启用后，将根据注册的 AgentSpec 注入 A2A Agent 工具。
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._enable_a2a_tool = bool(enable)
+        return self
+
+    def enable_team(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 Team 模式插件。
+
+        注意：对于新的 AgentSpec+AgentBackend 范式，请使用 add_subagent_specs() 替代。
+        此方法保留用于向后兼容，仅设置内部标志。
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._enable_team = bool(enable)
+        # Team 模式隐式启用任务管理
+        if enable:
+            self._enable_task = True
+        return self
+
+    def set_team_config(self, config) -> "ReActAgentBuilder":
+        """设置 Team 配置。
+
+        Args:
+            config: TeamConfig 实例（或 None 清除配置）
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._team_config = config
+        return self
+
+    def enable_task(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用任务管理工具。
+
+        启用后，将注入任务工具（TaskCreate、TaskGet、TaskUpdate、TaskList）
+        并将 TaskState 字段合并到状态 schema 中。
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._enable_task = bool(enable)
+        return self
+
+    def enable_a2a_backend_local(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 A2A 本地后端类型（local）。
+
+        - enable=True：注册 a2a 后端类型 ``local`` -> ``LocalBackend``
+        - enable=False：移除 a2a 后端类型 ``local``
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        if enable:
+            self._a2a_backend_types["local"] = LocalBackend
+            return self
+
+        self._a2a_backend_types.pop("local", None)
+        return self
+
+    def enable_a2a_backend_bkai(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 A2A 蓝鲸智能体后端类型（bkai）。
+
+        - enable=True：注册 a2a 后端类型 ``bkai`` -> ``BkaiBackend``
+        - enable=False：移除 a2a 后端类型 ``bkai``
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        if enable:
+            self._a2a_backend_types["bkai"] = BkaiBackend
+            return self
+
+        self._a2a_backend_types.pop("bkai", None)
+        return self
+
+    def add_subagent_specs(self, specs: list[AgentSpec]) -> "ReActAgentBuilder":
+        """添加子 Agent 规格。
+
+        使用 AgentSpec+AgentBackend 新范式替代旧的 enable_team() 路径。
+        仅负责将 specs 添加到内部列表，后端注册和工具注入由 _prepare_a2a 在 build() 时统一处理。
+
+        Args:
+            specs: AgentSpec 列表，定义可调用的子 Agent
+
+        Returns:
+            self（支持链式调用）
+
+        Example:
+            builder.enable_a2a_backend_bkai().add_subagent_specs([
+                AgentSpec(name="helper", description="...", backend_type=AgentBackendType.BKAI, params={"agent_code": "xxx"}),
+                AgentSpec(name="local_worker", description="...", backend_type=AgentBackendType.LOCAL, params={"prompt_overrides": {...}}),
+            ])
+        """
+        if not specs:
+            return self
+
+        self._a2a_specs.extend(specs)
         return self
 
     # ====================================================================================================
@@ -248,9 +414,6 @@ class ReActAgentBuilder:
         - enable=False：移除 runtime type `local`
         """
         if enable:
-            from aidev_agent.core.graphs.react.skill_middleware import _extract_local_params
-            from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
-
             self._runtime_param_with_skill["local"] = _extract_local_params
             return self.register_runtime_type("local", FilesystemBackend)
 
@@ -264,9 +427,6 @@ class ReActAgentBuilder:
         - enable=False：移除 runtime type `sandbox`
         """
         if enable:
-            from aidev_agent.core.graphs.react.skill_middleware import _extract_e2b_params
-            from aidev_agent.core.tools.runtime_tools.e2b_backend import E2BSandboxBackend
-
             self._runtime_param_with_skill["agent_run"] = _extract_e2b_params
             return self.register_runtime_type("agent_run", E2BSandboxBackend)
 
@@ -280,9 +440,6 @@ class ReActAgentBuilder:
         - enable=False：移除 runtime type `paas_sandbox`
         """
         if enable:
-            from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-            from aidev_agent.core.tools.runtime_tools.paas_backend import PaasSandboxBackend
-
             self._runtime_param_with_skill["paas_sandbox"] = _extract_paas_params
             return self.register_runtime_type("paas_sandbox", PaasSandboxBackend)
 
@@ -332,7 +489,8 @@ class ReActAgentBuilder:
 
     def set_bkai_options(self, options: AgentExecutorKwargs) -> "ReActAgentBuilder":
         """将 BkAi 平台通用配置（AgentExecutorKwargs）映射到 builder 内部状态。"""
-        self._resource_manager = options.resource_manager or resource_manager()
+        if options.resource_manager is not None:
+            self._resource_manager = options.resource_manager
         if options.llm is not None:
             self._llm = options.llm
         if options.non_thinking_llm is not None:
@@ -377,6 +535,14 @@ class ReActAgentBuilder:
         # RuntimeBackendResolver（由调用方构造并注入）
         if options.runtime_backend_resolver is not None:
             self._runtime_backend_resolver = options.runtime_backend_resolver
+
+        # Subagents（子 Agent 规格，注册后端 + 注入 A2A 工具）
+        if options.subagent_specs is not None and options.subagent_specs:
+            self.enable_a2a_tool(settings.BKAI_TOOL_A2A_ENABLED)
+            self.enable_team(settings.BKAI_TOOL_TEAM_ENABLED)
+            self.enable_task(settings.BKAI_TOOL_TASK_ENABLED)
+            self.enable_a2a_backend_local(True).enable_a2a_backend_bkai(True)
+            self.add_subagent_specs(options.subagent_specs)
 
         return self
 
@@ -494,14 +660,16 @@ class ReActAgentBuilder:
         node_options = ModelNodeSettings(**node_options_kwargs)
 
         if self._enable_skills and self._skill_registry is not None:
-            from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware
-
             node_options.extra_template_middlewares.append(
                 SkillsPromptMiddleware(
                     registry=self._skill_registry,
                     enable_runtime_tool=self._enable_runtime_tool,
                 )
             )
+
+        # Team middleware registration (A2A Agent paradigm)
+        if self._a2a_specs and self._a2a_resolver is not None:
+            node_options.extra_template_middlewares.append(TeamPromptMiddleware(specs=self._a2a_specs))
 
         # 创建模型节点
         model_node = std_make_model_node(
@@ -528,20 +696,27 @@ class ReActAgentBuilder:
         middleware_tools = [t for m in langchain_middleware for t in getattr(m, "tools", [])]
         tools.extend(middleware_tools)
 
-        # Skills tool injection
+        # 加载 SKILL 工具
         if self._enable_skills and self._skill_registry is not None:
             tools.append(self._skill_registry.get_activate_skill_tool())
 
-        # Runtime client tools injection (ls/read_file/write_file/edit_file/glob/grep/execute)
+        # 加载 Runtime 工具 (ls/read_file/write_file/edit_file/glob/grep/execute)
         if self._enable_runtime_tool and self._runtime_backend_resolver is not None:
-            from aidev_agent.core.tools.runtime_tools import get_client_tools_with_runtime
-
             tools.extend(
                 get_client_tools_with_runtime(
                     self._runtime_backend_resolver,
                     enable_security=self._enable_security_runtime,
                 )
             )
+
+        # 加载 Task 工具
+        if self._enable_task:
+            tools.extend(get_task_tools())
+
+        # 加载 A2A Agent 工具
+        if self._a2a_specs and self._a2a_resolver is not None:
+            a2a_tools = get_agent_tools(self._a2a_specs, self._a2a_resolver)
+            tools.extend(a2a_tools)
 
         # 为所有工具添加忽略错误表示
         if ignore_errors:
@@ -591,6 +766,20 @@ class ReActAgentBuilder:
                 f"{skill_runtime}_{skill_name}",
                 skill_backend,
             )
+
+    def _prepare_a2a(self) -> None:
+        """准备 A2A 多智能体系统。
+
+        - 根据 self._a2a_backend_types 创建 AgentBackendResolver 并注册所有后端类型
+        - 将 resolver 写入 self._a2a_resolver，供后续工具注入和 prompt middleware 使用
+        """
+        if not self._a2a_backend_types:
+            return
+
+        resolver = AgentBackendResolver()
+        for backend_type_name, backend_cls in self._a2a_backend_types.items():
+            resolver.register(backend_type_name, backend_cls)
+        self._a2a_resolver = resolver
 
     def _prepare_agent_tool_node(
         self,
@@ -644,6 +833,35 @@ class ReActAgentBuilder:
         if store is None:
             store = InMemoryStore()
         return store
+
+    def _prepare_state_schema(self, _TaskState: type | None = None) -> type:
+        """根据 builder 内部状态构造 state_schema。
+
+        逻辑：
+        1. 收集需要合并的 schema 类列表
+        2. 如果有 _TaskState 需求（enable_task / a2a_specs / enable_team），合并 TeamInfo + _TaskState
+        3. 如果用户提供了 _state_schema，追加到列表末尾（而非替换）
+        4. 调用 _resolve_task_state_schema 合并
+
+        Args:
+            _TaskState: 仅在 build() 中有条件定义的 _TaskState TypedDict
+
+        Returns:
+            合并后的 state_schema 类型
+        """
+        schemas: list[type] = [DefaultState]
+
+        if _TaskState is not None and (self._enable_task or self._a2a_specs or self._enable_team):
+            if self._a2a_specs or self._enable_team:
+                schemas.append(TeamInfo)
+            schemas.append(_TaskState)
+
+        if self._state_schema is not None:
+            schemas.append(self._state_schema)
+
+        if len(schemas) == 1:
+            return schemas[0]
+        return _resolve_task_state_schema(schemas)
 
     def _prepare_agent_pv_node(self):
         """构造 PV Node，用于惰性创建/获取持久卷。
@@ -812,9 +1030,6 @@ class ReActAgentBuilder:
         if has_knowledge and self._knowledge_llm is None:
             raise ValueError("ReActAgentBuilder 构建失败：检测到知识库配置，但 knowledge_llm 为空")
 
-        # checkpointer 由调用方决定（ChatCompletionAgent 会在有需要时注入 thread_id 等 configurable key）
-        checkpointer = self._checkpointer
-
         # Skills / runtime tools setup (must run before preparing tools)
         self._skill_registry = None
 
@@ -826,6 +1041,10 @@ class ReActAgentBuilder:
 
         if self._enable_skills:
             self._prepare_skills()
+
+        # A2A 后端注册（必须在工具注入之前执行）
+        if self._enable_a2a_tool:
+            self._prepare_a2a()
 
         # 统一处理 tools
         tool_ignore_errors = self._compute_use_structured_response()
@@ -862,8 +1081,14 @@ class ReActAgentBuilder:
         # 构造 PV Node
         pv_node = self._prepare_agent_pv_node()
 
+        # 定义 _TaskState（如需）——仅在 task/team/a2a 分支中使用
+        if self._enable_task or self._a2a_specs or self._enable_team:
+            _TaskState = TypedDict("_TaskState", {"task_list": Optional[List[TeamTaskRecord]]})
+
         # 定制 ReAct chat prompt template
-        state_schema = self._state_schema or DefaultState
+        state_schema = self._prepare_state_schema(
+            _TaskState if self._enable_task or self._a2a_specs or self._enable_team else None
+        )
 
         # 构建图
         compile_graph, cfg = self._build_graph(
@@ -871,7 +1096,7 @@ class ReActAgentBuilder:
             state_schema=state_schema,
             callbacks=callbacks,
             debug=self._debug,
-            checkpointer=checkpointer,
+            checkpointer=self._checkpointer,
             store=store,
             interrupt_before=self._interrupt_before,
             interrupt_after=self._interrupt_after,

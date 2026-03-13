@@ -123,6 +123,7 @@ LLM_GW_ENDPOINT = env.str("LLM_GW_ENDPOINT", "") or env.str("LLM_GATEWAY_URL", "
 APP_CODE = env.str("BK_AIDEV_AGENT_APP_CODE", "") or env.str("BKPAAS_APP_ID", "") or env.str("APP_ID", "")
 SECRET_KEY = env.str("BK_AIDEV_AGENT_APP_SECRET", "") or env.str("BKPAAS_APP_SECRET", "") or env.str("APP_TOKEN", "")
 RUN_VER = "ieod" if env.str("BKPAAS_ENGINE_REGION", "default") == "ieod" else "open"
+BKPAAS_ENVIRONMENT = env.str("BKPAAS_ENVIRONMENT", "dev")
 BK_AIDEV_GATEWAY_NAME = env.str("AIDEV_GATEWAY_NAME", "bkaidev")
 BK_AIDEV_APIGW_ENDPOINT = env.str("BK_AIDEV_APIGW_ENDPOINT", "")
 BK_APIGW_STAGE = env.str("BK_APIGW_STAGE", "") or env.str("BKAIDEV_RESOURCE_STAGE", "prod")
@@ -145,6 +146,13 @@ SBX_SENSITIVE_VALUES: list[str] = [v.strip() for v in env.str("SBX_SENSITIVE_VAL
 
 # SSM相关配置
 BK_SSM_ENDPOINT = env.str("BK_SSM_ENDPOINT", "https://bkssm.service.consul")  # noqa
+
+# BkAI 工具开关配置
+BKAI_TOOL_A2A_ENABLED = env.bool("BKAI_TOOL_A2A_ENABLED", True)
+BKAI_TOOL_TEAM_ENABLED = env.bool("BKAI_TOOL_TEAM_ENABLED", True)
+BKAI_TOOL_TASK_ENABLED = env.bool("BKAI_TOOL_TASK_ENABLED", True)
+# BKAI 子智能体配置
+BKAI_A2A_SESSION_TEMPORARY = env.bool("BKAI_A2A_SESSION_TEMPORARY", False)
 # end: 配置
 
 

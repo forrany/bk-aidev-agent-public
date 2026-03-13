@@ -59,12 +59,12 @@ def _process_result(
 
     if isinstance(msg, ToolMessage):
         _add_metadata_to_tool_message(msg, duration, description)
+        dispatch_custom_event("on_tool_node_finish", data=msg, config=request.runtime.config)
     elif isinstance(msg, Command) and msg.update:
         for each in msg.update.get("messages", []):
             if isinstance(each, ToolMessage):
                 _add_metadata_to_tool_message(each, duration, description)
-
-    dispatch_custom_event("on_tool_node_finish", data=msg, config=request.runtime.config)
+                dispatch_custom_event("on_tool_node_finish", data=each, config=request.runtime.config)
     return msg
 
 

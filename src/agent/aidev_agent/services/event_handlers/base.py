@@ -862,6 +862,9 @@ class BaseSessionWriter(ABC):
     def _safe_call(self, fn: Callable, message_id: str, action: str, **kwargs: Any) -> Any:
         """安全调用回写函数，统一处理异常和日志
 
+        D-02: 写入失败时不阻断 Agent 执行，但递增 _write_error_count，
+        供 set_streaming_finished 判断 session 最终状态。
+
         Args:
             fn: 实际执行的回写函数（_do_create_content / _do_update_content 等）
             message_id: 消息 ID，仅用于日志

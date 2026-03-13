@@ -142,6 +142,104 @@ class BaseResourceManager(abc.ABC):
         client = self.get_client()
         return client.api.retrieve_chat_session(path_params={"session_code": session_code}, **kwargs).get("data", {})
 
+    def get_or_create_session(
+        self,
+        session_code: str,
+        session_name: str,
+        *,
+        protocol_version: str = "",
+        is_temporary: bool = False,
+        session_type: str = "",
+        **kwargs,
+    ) -> dict:
+        """调用平台 get_or_create 幂等接口，替代 retrieve+create 两步操作。
+
+        优先调用 POST /api/bkaidev/resource/chat/v1/session/get_or_create/ 幂等接口。
+        命中已有 session 时直接返回（不更新任何字段）；未命中则创建。
+        并发唯一键冲突时自动 re-fetch，对调用方仍表现为幂等。
+
+        当幂等接口不可用（如返回 405）时，回退到旧实现：
+        先执行 retrieve_chat_session，若 retrieve 失败则执行 create_chat_session。
+        这与旧版 get_or_create_by_thread_id 的行为完全一致。
+        """
+        client = self.get_client()
+        payload: dict = {"session_code": session_code, "session_name": session_name}
+        if protocol_version:
+            payload["protocol_version"] = protocol_version
+        if is_temporary is not None:
+            payload["is_temporary"] = is_temporary
+        if session_type:
+            payload["session_type"] = session_type
+        try:
+            return client.api.get_or_create_chat_session(json=payload, **kwargs).get("data", {})
+        except Exception as e:
+            if hasattr(e, "response") and getattr(e.response, "status_code", None) == 405:
+                _logger.warning("get_or_create 接口不可用(405)，回退到 retrieve+create: %s", e, exc_info=True)
+                try:
+                    return client.api.retrieve_chat_session(path_params={"session_code": session_code}, **kwargs).get(
+                        "data", {}
+                    )
+                except Exception as retrieve_exc:
+                    _logger.info(
+                        "retrieve 失败，尝试 create: session_code=%s, error=%s",
+                        session_code,
+                        retrieve_exc,
+                        exc_info=True,
+                    )
+                    try:
+                        return client.api.create_chat_session(json=payload, **kwargs).get("data", {})
+                    except Exception:
+                        _logger.error("create_chat_session 也失败: session_code=%s", session_code, exc_info=True)
+                        raise
+            raise
+
+    def update_session_status(self, session_code: str, status: str, **kwargs) -> dict:
+        """更新会话状态到平台（如 running、finished、failed）。
+
+        封装 PUT /api/bkaidev/resource/chat/v1/session/{session_code}/ 接口。
+        对应 AG-UI writer 的 _update_session_status 逻辑，
+        确保通过 resource_manager 创建的 session 也有正确的状态。
+
+        Args:
+            session_code: 会话 code
+            status: 会话状态（"running", "finished", "failed", "cancelled" 等）
+            **kwargs: 透传给 client.api.update_chat_session 的额外参数
+
+        Returns:
+            更新后的 session 数据字典
+        """
+        client = self.get_client()
+        return client.api.update_chat_session(
+            path_params={"session_code": session_code},
+            json={"status": status},
+            **kwargs,
+        ).get("data", {})
+
+    def save_session_content(self, session_code: str, role: str, content: str, **kwargs) -> dict:
+        """保存单条会话内容到平台。
+
+        封装 POST /api/bkaidev/resource/chat/v1/session_content/ 接口。
+        供 LocalBackend 等通过 resource_manager 直接写回 session_content，
+        不经过 BkaiBackend.save_session_content（BkaiBackend 是远端子 Agent 写入路径）。
+
+        Args:
+            session_code: 会话 code
+            role: 消息角色（"user" 或 "assistant"）
+            content: 消息内容
+            **kwargs: 透传给 client.api.create_chat_session_content 的额外参数
+
+        Returns:
+            后端返回的 data 字段（dict），失败时返回空 dict
+        """
+        return (
+            self.get_client()
+            .api.create_chat_session_content(
+                json={"session_code": session_code, "role": role, "content": content},
+                **kwargs,
+            )
+            .get("data", {})
+        )
+
     def update_chat_session_sandbox_pv_id(self, session_code: str, sandbox_pv_id: str, **kwargs) -> dict:
         client = self.get_client()
         return client.api.update_chat_session(
@@ -210,7 +308,18 @@ class BaseResourceManager(abc.ABC):
             model_context_options_data["llm_code_agent_type"] = intent_recognition_data["agent_type"]
 
         conversation_settings = res.get("conversation_settings", {}) or {}
-
+        raw_commands = conversation_settings.get("commands", []) or []
+        related_agents_raw = res.get("related_agents") or []
+        related_agents = [
+            {
+                "agent_code": agent.get("agent_code", ""),
+                "agent_name": agent.get("agent_name", ""),
+                "description": agent.get("description", ""),
+                "api_url": agent.get("api_url", ""),
+            }
+            for agent in related_agents_raw
+            if agent.get("agent_code")
+        ]
         # 构造 agent_info：完整的原始配置字典（不对 otel_info 解码，保持原始数据）
         agent_info = dict(res)
 
@@ -228,9 +337,8 @@ class BaseResourceManager(abc.ABC):
             agent_options=None,
             model_context_options_data=model_context_options_data,
             knowledge_query_options_data=knowledge_query_options_data,
-            command_agent_mapping={
-                each["id"]: each["agent_code"] for each in conversation_settings.get("commands", [])
-            },
+            command_agent_mapping={each["id"]: each["agent_code"] for each in raw_commands},
+            related_agents=related_agents,
             temperature=prompt_setting.get("temperature"),
             max_tokens=prompt_setting.get("max_tokens"),
             agent_info=agent_info,

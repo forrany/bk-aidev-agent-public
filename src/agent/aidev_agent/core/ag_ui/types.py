@@ -42,6 +42,7 @@ class CustomEventNames(str, Enum):
     ManuallyEmitState = "manually_emit_state"
     Exit = "exit"
     OnToolNodeFinish = "on_tool_node_finish"
+    OnToolNodeImmediate = "on_tool_node_immediate"
 
 
 class SessionPersistenceEventNames(str, Enum):
@@ -149,6 +150,9 @@ class CustomMessageType(Enum):
     FLOW_AGENT_RESULT = "flow_agent_result"
     FLOW_AGENT_END = "flow_agent_end"
     FLOW_AGENT_RESTART = "flow_agent_restart"
+
+    # 压缩日志事件
+    COMPRESS_LOG = "compress_log"
 
 
 class ExtendBaseMessage(BaseModel):

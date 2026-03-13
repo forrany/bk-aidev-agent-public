@@ -11,6 +11,9 @@ from ag_ui.core import (
     RawEvent,
     RunAgentInput,
     RunErrorEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
     ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
@@ -28,8 +31,8 @@ from .events import (
 from .types import (
     CustomEventNames,
     CustomMessageType,
-    MessageSnapshotEventExtend,
     MessagesInProgressRecord,
+    MessageSnapshotEventExtend,
     SessionPersistenceEventNames,
 )
 
@@ -95,6 +98,7 @@ class EventDispatcher:
         custom_event_handlers = {
             CustomMessageType.KNOWLEDGE_RAG_RESULT.value: self._handle_reference_document,
             CustomEventNames.OnToolNodeFinish.value: self._handle_tool_node_finish_from_custom,
+            CustomEventNames.OnToolNodeImmediate.value: self._handle_tool_node_immediate,
         }
 
         handler = custom_event_handlers.get(event.name)
@@ -114,6 +118,27 @@ class EventDispatcher:
                 role="tool",
                 duration=tool_msg.additional_kwargs.get("duration", None),
                 is_error=is_error,
+            )
+        )
+
+    def _handle_tool_node_immediate(self, event: CustomEvent) -> str:
+        """处理子 Agent 中间步骤事件，转为 ExtendToolCallResultEvent 但不触发 DB 写入
+
+        与 _handle_tool_node_finish_from_custom 的区别：
+        - duration 为 None（中间步骤无耗时概念）
+        - is_error 为 False（中间步骤不可能是错误）
+        - 事件名 on_tool_node_immediate 不被 BaseSessionWriter 识别，不会写 DB
+        """
+        tool_msg = event.value
+        return self.agent._parent_dispatch(
+            ExtendToolCallResultEvent(
+                type=EventType.TOOL_CALL_RESULT,
+                tool_call_id=tool_msg.tool_call_id,
+                message_id=tool_msg.id or str(uuid.uuid4()),
+                content=tool_msg.content,
+                role="tool",
+                duration=None,
+                is_error=False,
             )
         )
 
@@ -207,6 +232,28 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
                     logger.debug(f"message snapshot: {event}")
                 elif event_type == EventType.CUSTOM and getattr(event, "name", "") in skip_encode_custom:
                     continue
+                elif (
+                    event_type == EventType.CUSTOM
+                    and getattr(event, "name", "") == CustomMessageType.COMPRESS_LOG.value
+                ):
+                    # compress_log 仅输出到 SSE，不写入 DB
+                    # CustomEvent 已经过 _dispatch_event（BaseSessionWriter 忽略了它），
+                    # 此处展开为 TextMessage 三元组直接编码输出，不经过 _dispatch_event，不接触 BaseSessionWriter
+                    compress_log_id = str(uuid.uuid4())
+                    delta = event.value.get("compress_log", "") if isinstance(event.value, dict) else ""
+                    yield event_encoder.encode(
+                        TextMessageStartEvent(
+                            type=EventType.TEXT_MESSAGE_START, role="assistant", message_id=compress_log_id
+                        )
+                    )
+                    yield event_encoder.encode(
+                        TextMessageContentEvent(
+                            type=EventType.TEXT_MESSAGE_CONTENT, message_id=compress_log_id, delta=delta
+                        )
+                    )
+                    yield event_encoder.encode(
+                        TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=compress_log_id)
+                    )
                 else:
                     yield event_encoder.encode(event)
 

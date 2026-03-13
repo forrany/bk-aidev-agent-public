@@ -530,7 +530,9 @@ class TestCommonAgentChatStreaming:
             mcp_fetch_failures=mcp_failures,
         )
         results = [json.loads(each[6:]) for each in agent.execute(ExecuteKwargs(stream=True))]
-        assert results[0].get("type") == EventType.RUN_STARTED.value, "首条事件应为 RUN_STARTED"
+        # 首条事件为 MESSAGES_SNAPSHOT（AidevAGUIAgent.run 每次 SSE 先下发消息快照）
+        assert results[0].get("type") == EventType.MESSAGES_SNAPSHOT.value, "首条事件应为 MESSAGES_SNAPSHOT"
+        assert results[1].get("type") == EventType.RUN_STARTED.value, "第二条事件应为 RUN_STARTED"
         run_finished_indices = [i for i, e in enumerate(results) if e.get("type") == EventType.RUN_FINISHED.value]
         mcp_ev_indices = [
             i
@@ -539,7 +541,7 @@ class TestCommonAgentChatStreaming:
         ]
         assert mcp_ev_indices, "应有 temp_message 事件"
         assert run_finished_indices, "应有 RUN_FINISHED 事件"
-        assert mcp_ev_indices[0] == 1, "temp_message 应紧跟在 RUN_STARTED 后"
+        assert mcp_ev_indices[0] == 2, "temp_message 应紧跟在 RUN_STARTED 后"
         assert max(mcp_ev_indices) < min(run_finished_indices), "temp_message 应在 RUN_FINISHED 前"
         old_events = [
             e
@@ -582,7 +584,7 @@ class TestCommonAgentChatStreaming:
             for i, e in enumerate(results)
             if e.get("type") == EventType.CUSTOM and e.get("name") == CustomMessageType.TEMP_MESSAGE.value
         )
-        assert temp_message_index == 1, "合并后的 temp_message 应紧跟在 RUN_STARTED 后"
+        assert temp_message_index == 2, "合并后的 temp_message 应在 MESSAGES_SNAPSHOT + RUN_STARTED 后"
         value = mcp_events[0].get("value") or {}
         assert value.get("status") == "error"
         assert "mcp-a" in (value.get("message") or "")

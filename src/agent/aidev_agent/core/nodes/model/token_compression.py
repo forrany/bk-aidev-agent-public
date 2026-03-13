@@ -38,6 +38,7 @@ from jinja2 import BaseLoader, Template
 from jinja2.sandbox import SandboxedEnvironment as Environment
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from aidev_agent.core.ag_ui.types import CustomMessageType
 from aidev_agent.packages.langchain_core.retrievers.utils import HUNYUAN_SPECIFIC_RESPONSE
 from aidev_agent.packages.langgraph.streaming.utils import conditional_dispatch_custom_event
 from aidev_agent.utils.decorator import retry
@@ -150,7 +151,7 @@ class BaseCompressionMiddleware:
     @staticmethod
     def _dispatch_log(ctx: ProcessorContext, *, text: str) -> None:
         conditional_dispatch_custom_event(
-            "custom_event",
+            CustomMessageType.COMPRESS_LOG.value,
             {"compress_log": f"\n```text\n{text}\n```\n"},
             enable_custom_event=ctx.metadata.get("enable_custom_event", True),
         )

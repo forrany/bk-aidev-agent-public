@@ -56,15 +56,22 @@ class ChatCompletionViewSet(PluginViewSet):
             )
             serializer.is_valid(raise_exception=True)
             data = serializer.validated_data
-
+            # 获取 execute_kwargs
             execute_kwargs: ExecuteKwargs = data["execute_kwargs"]
             session_code = data["session_code"]
             execute_kwargs.session_code = session_code
             turn_id = execute_kwargs.turn_id or ""
+            session_temporary = data.get("session_temporary")
+            # 获取输入
             _input = data["input"]
             chat_history_raw = data["chat_history"]
             agent_type = data["agent_type"]
             thread_id = data["thread_id"]
+            # persist_input: 当为 True 且 session_code 为空时，自动创建 session
+            if execute_kwargs.persist_input and session_code:
+                session_code = SessionManager(username=username).get_or_create_by_session_code(
+                    session_code, session_name="子智能体调用", is_temporary=session_temporary
+                )
 
             logger.info(f"resolved agent_type={agent_type}, version={execute_kwargs.version}")
 
@@ -107,7 +114,6 @@ class ChatCompletionViewSet(PluginViewSet):
             # session_code 必为真。保留显式校验仅作为不变式被破坏时的防御性兜底。
             if not session_code:
                 raise ClientBlueException(message="session_code or thread_id is required")
-
             turn_id = self._save_user_input(session_code, username, _input, turn_id)
             if hasattr(execute_kwargs, "turn_id"):
                 execute_kwargs.turn_id = turn_id

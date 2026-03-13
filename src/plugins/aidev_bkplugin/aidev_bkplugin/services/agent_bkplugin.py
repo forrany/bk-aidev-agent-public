@@ -161,12 +161,48 @@ class BkpluginAgentRunner(ABC):
         return self._parsed_ek.session_code or ""
 
     @abstractmethod
-    def execute(self) -> str:
-        """同步执行 Agent，返回最终 AI 回复字符串。"""
+    def _do_execute(self) -> str:
+        """子类实现：实际同步执行 Agent。"""
 
     @abstractmethod
+    def _do_dispatch_async(self) -> dict:
+        """子类实现：实际投递 Celery 任务。"""
+
+    def execute(self) -> str:
+        """同步执行 Agent，返回最终 AI 回复字符串；异常时写回失败状态 (D-01)。"""
+        try:
+            return self._do_execute()
+        except Exception as e:
+            logger.exception("[Bkplugin] execute error: %s", e)
+            session_code = self.session_code or ""
+            if session_code:
+                try:
+                    SessionManager(self.username or "").save_stream_failure(
+                        session_code,
+                        f"Agent 执行异常: {e}",
+                        turn_id=self._parsed_ek.turn_id or "",
+                    )
+                except Exception:
+                    logger.exception("[Bkplugin] save_stream_failure also failed for session_code=%s", session_code)
+            raise
+
     def dispatch_async(self) -> dict:
-        """投递 Celery 后台任务并返回 POLL storage。"""
+        """投递 Celery 后台任务并返回 POLL storage；投递失败时写回失败状态 (D-01)。"""
+        try:
+            return self._do_dispatch_async()
+        except Exception as e:
+            logger.exception("[Bkplugin] dispatch_async failed: %s", e)
+            session_code = self.session_code or ""
+            if session_code:
+                try:
+                    SessionManager(self.username or "").save_stream_failure(
+                        session_code,
+                        f"后台任务投递失败: {e}",
+                        turn_id=self._parsed_ek.turn_id or "",
+                    )
+                except Exception:
+                    logger.exception("[Bkplugin] save_stream_failure also failed for session_code=%s", session_code)
+            raise
 
     def run_worker(
         self,
@@ -252,7 +288,7 @@ class BkpluginChat(BkpluginAgentRunner):
         super().__init__(**kwargs)
         self.chat_history = chat_history
 
-    def execute(self) -> str:
+    def _do_execute(self) -> str:
         session_code, turn_id, ek, manager = self._prepare_execution_context()
         ek.stream = False
         agent_instance = build_chat_agent_for_session(
@@ -275,7 +311,7 @@ class BkpluginChat(BkpluginAgentRunner):
             return str(result or "")
         return result["choices"][0]["delta"]["content"]
 
-    def dispatch_async(self) -> dict:
+    def _do_dispatch_async(self) -> dict:
         session_code, turn_id, ek, _ = self._prepare_execution_context()
         return self._enqueue_background(
             session_code,
@@ -324,7 +360,7 @@ class BkpluginChat(BkpluginAgentRunner):
 class BkpluginFlow(BkpluginAgentRunner):
     agent_type = AgentType.FLOW
 
-    def execute(self) -> str:
+    def _do_execute(self) -> str:
         session_code, turn_id, execute_payload = self._prepare_flow_payload()
         execute_payload["stream"] = False
         self.invoke_agent(session_code, execute_payload, chat_context=[])
@@ -333,7 +369,7 @@ class BkpluginFlow(BkpluginAgentRunner):
             raise ValueError(detail or "Agent 执行失败")
         return detail or ""
 
-    def dispatch_async(self) -> dict:
+    def _do_dispatch_async(self) -> dict:
         session_code, turn_id, execute_payload = self._prepare_flow_payload()
         return self._enqueue_background(session_code, turn_id, execute_payload)
 

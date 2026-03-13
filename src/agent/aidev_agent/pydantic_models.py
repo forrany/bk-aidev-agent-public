@@ -29,6 +29,7 @@ class ExecuteKwargs(BaseModel):
 
     # 执行配置
     legacy_streaming: bool = Field(default=False, description="是否使用 legacy streaming protocol")
+    persist_input: bool = Field(default=False, description="当为 True 时，后端自动创建 session 并写入 session_content")
 
 
 class SessionTool(BaseModel):
@@ -339,6 +340,11 @@ class AgentExecutorKwargs(BaseModel):
 
     # 执行用户信息
     executor_info: Optional[dict] = Field(default=None, description="执行用户信息")
+    # 子 Agent 规格列表
+    subagent_specs: Optional[list[Any]] = Field(
+        default=None,
+        description="子 Agent 配置列表",
+    )
 
     # 资源管理器(resource_manager()是全局单例 会使用平台的app_code，这里使用per-request即每次chat_completion请求创建）
     resource_manager: Optional[Any] = Field(
@@ -386,5 +392,9 @@ class AgentConfig(BaseModel):
     # 超参数配置
     temperature: float | None = Field(None, description="模型温度")
     max_tokens: int | None = Field(None, description="最大回复长度")
+    related_agents: list[dict] = Field(
+        default_factory=list,
+        description="关联子智能体列表，从 API 响应顶层 related_agents 读取，每条含 agent_code/agent_name/description/api_url",
+    )
     # 原始配置信息（来自 retrieve_agent_config 的完整字典，含 otel_info 等平台透传字段）
     agent_info: dict | None = Field(None, description="智能体配置信息，agent_info 接口的原始值，仅仅用于数据上报")

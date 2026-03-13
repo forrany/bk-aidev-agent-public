@@ -5,7 +5,11 @@
 - ``version`` 透传到 ``retrieve_agent_config``；
 - 装配规则：``prompt_setting`` → ``model_context_options_data``，``knowledgebase_settings`` + ``intent_recognition`` → ``knowledge_query_options_data``；
 - 完整平台数据端到端验证（collection / user_define 两种 prompt 类型）；
-- ``retrieve_agent_config`` 抛错时统一包裹为 ``ValueError``。
+- ``retrieve_agent_config`` 抛错时统一包裹为 ``ValueError``；
+- ``related_agents`` 从 API 响应顶层字段读取（而非 conversation_settings.commands）；
+- ``related_agents`` 中的 ``description``/``api_url`` 字段被正确映射；
+- ``command_agent_mapping`` 仍从 ``conversation_settings.commands`` 读取；
+- ``related_agents`` 为空列表或缺失时 ``AgentConfig.related_agents`` 为空列表。
 """
 
 from __future__ import annotations
@@ -27,7 +31,22 @@ def _build_raw(**overrides) -> dict:
             "content": [{"role": "system", "content": "Test role prompt"}],
         },
         "related_tools": ["tool1", "tool2"],
-        "conversation_settings": {"opening_remark": "Hello!", "commands": []},
+        "conversation_settings": {
+            "opening_remark": "Hello!",
+            "commands": [
+                {"id": 1, "agent_code": "cmd_child_1", "agent_name": "Cmd Child 1"},
+                {"id": 2, "agent_code": "cmd_child_2", "agent_name": "Cmd Child 2"},
+            ],
+        },
+        "related_agents": [
+            {
+                "agent_code": "ra_child_1",
+                "agent_name": "RA Child 1",
+                "description": "desc1",
+                "api_url": "http://ra1.example.com",
+            },
+            {"agent_code": "ra_child_2", "agent_name": "RA Child 2", "description": "", "api_url": ""},
+        ],
         "intent_recognition": {},
         "knowledgebase_settings": {"knowledgebases": []},
     }
@@ -166,6 +185,75 @@ def test_retrieve_failure_wrapped_as_value_error():
     rm = _StubResourceManager(raise_exc=RuntimeError("boom"))
     with pytest.raises(ValueError, match="Failed to retrieve agent config"):
         rm.get_agent_config("a")
+
+
+# ============== related_agents 数据源测试 (Phase 21) ==============
+
+
+def test_related_agents_from_top_level_field():
+    """related_agents 从 API 响应顶层 related_agents 读取，而非 conversation_settings.commands。"""
+    rm = _StubResourceManager()
+    cfg = rm.get_agent_config("a")
+    # related_agents 应来自顶层 related_agents，不是 commands
+    assert len(cfg.related_agents) == 2
+    assert cfg.related_agents[0]["agent_code"] == "ra_child_1"
+    assert cfg.related_agents[1]["agent_code"] == "ra_child_2"
+
+
+def test_related_agents_description_and_api_url_mapped():
+    """related_agents 中的 description 和 api_url 字段被正确映射。"""
+    rm = _StubResourceManager()
+    cfg = rm.get_agent_config("a")
+    assert cfg.related_agents[0]["description"] == "desc1"
+    assert cfg.related_agents[0]["api_url"] == "http://ra1.example.com"
+    assert cfg.related_agents[1]["description"] == ""
+    assert cfg.related_agents[1]["api_url"] == ""
+
+
+def test_command_agent_mapping_from_conversation_settings_commands():
+    """command_agent_mapping 仍从 conversation_settings.commands 读取。"""
+    rm = _StubResourceManager()
+    cfg = rm.get_agent_config("a")
+    assert cfg.command_agent_mapping == {1: "cmd_child_1", 2: "cmd_child_2"}
+
+
+def test_related_agents_empty_list_when_empty_and_no_commands():
+    """related_agents 和 commands 均为空时 AgentConfig.related_agents 为空列表。"""
+    raw = _build_raw(related_agents=[], conversation_settings={"commands": []})
+    rm = _StubResourceManager(raw_factory=lambda *_: raw)
+    cfg = rm.get_agent_config("a")
+    assert cfg.related_agents == []
+
+
+def test_related_agents_empty_list_when_missing_and_no_commands():
+    """related_agents 缺失且 commands 为空时 AgentConfig.related_agents 为空列表。"""
+    raw = _build_raw(conversation_settings={"commands": []})
+    raw.pop("related_agents", None)
+    rm = _StubResourceManager(raw_factory=lambda *_: raw)
+    cfg = rm.get_agent_config("a")
+    assert cfg.related_agents == []
+
+
+def test_related_agents_empty_when_top_level_empty():
+    """related_agents 顶层字段为空时不再回退到 commands（该行为已废弃）。"""
+    raw = _build_raw(related_agents=[])
+    rm = _StubResourceManager(raw_factory=lambda *_: raw)
+    cfg = rm.get_agent_config("a")
+    assert cfg.related_agents == []
+
+
+def test_related_agents_filters_empty_agent_code():
+    """related_agents 中 agent_code 为空的条目被过滤。"""
+    raw = _build_raw(
+        related_agents=[
+            {"agent_code": "valid_code", "agent_name": "Valid", "description": "", "api_url": ""},
+            {"agent_code": "", "agent_name": "Empty", "description": "", "api_url": ""},
+        ]
+    )
+    rm = _StubResourceManager(raw_factory=lambda *_: raw)
+    cfg = rm.get_agent_config("a")
+    assert len(cfg.related_agents) == 1
+    assert cfg.related_agents[0]["agent_code"] == "valid_code"
 
 
 # ---------------------------------------------------------------------------

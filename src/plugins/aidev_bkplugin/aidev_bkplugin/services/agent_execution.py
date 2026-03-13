@@ -127,6 +127,7 @@ class AgentExecutor:
         current_event_type: str | None = None
         current_content: list[str] = []
         has_error = False
+        generator_failed = False
 
         def _flush_current_content():
             nonlocal current_event_type, current_content
@@ -172,6 +173,9 @@ class AgentExecutor:
                     docs = data.get("documents", [])
                     if isinstance(docs, list) and docs:
                         message_parts.append((StreamEventType.REFERENCE_DOC.value, docs))
+        except Exception:
+            generator_failed = True
+            raise
         finally:
             _flush_current_content()
 
@@ -196,6 +200,9 @@ class AgentExecutor:
                     status=ChatContentStatus.ERROR.value if has_error else ChatContentStatus.SUCCESS.value,
                     turn_id=turn_id,
                 )
+            elif generator_failed:
+                # D-03: 生成器异常且无任何内容时，写入错误状态
+                self.session_manager.save_stream_failure(session_code, "Agent 执行异常，未能生成回复", turn_id=turn_id)
 
     @classmethod
     def format_think_content(cls, content: str) -> str:

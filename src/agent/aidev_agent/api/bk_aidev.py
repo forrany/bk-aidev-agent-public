@@ -70,6 +70,13 @@ class OpenApiGroup(OperationGroup):
         path="/openapi/aidev/resource/v1/chat/session/",
     )
 
+    get_or_create_chat_session = bind_property(
+        Operation,
+        name="get_or_create_chat_session",
+        method="POST",
+        path="/openapi/aidev/resource/v1/chat/session/get_or_create/",
+    )
+
     update_chat_session = bind_property(
         Operation,
         name="update_chat_session",

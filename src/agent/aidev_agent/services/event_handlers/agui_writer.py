@@ -78,10 +78,13 @@ class AGUISessionWriter(BaseSessionWriter):
         """retry/skip：按 content.task_id 定位本轮已有 flow_agent activity"""
         headers = {"X-BKAIDEV-USER": self.username} if self.username else {}
         try:
-            contents = self.client.api.get_chat_session_contents(
-                params={"session_code": self.session_code},
-                headers=headers,
-            ).get("data") or []
+            contents = (
+                self.client.api.get_chat_session_contents(
+                    params={"session_code": self.session_code},
+                    headers=headers,
+                ).get("data")
+                or []
+            )
         except Exception as err:
             logger.exception("bind flow_agent result failed: session=%s task=%s", self.session_code, self.task_id)
             raise RuntimeError(
@@ -112,8 +115,7 @@ class AGUISessionWriter(BaseSessionWriter):
             return
 
         raise RuntimeError(
-            f"resume 回写失败：未找到 task_id={self.task_id} 的 flow_agent activity，"
-            f"session_code={self.session_code}"
+            f"resume 回写失败：未找到 task_id={self.task_id} 的 flow_agent activity，session_code={self.session_code}"
         )
 
     def _do_create_content(self, payload: dict[str, Any], headers: dict[str, str]) -> int | None:

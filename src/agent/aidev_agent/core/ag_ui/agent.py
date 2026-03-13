@@ -805,35 +805,7 @@ class LangGraphAgent:
                 if not self.front_end_display:
                     return
 
-            # 处理 compress_log 事件 - 将压缩日志展示到前端
-            custom_data = event.get("data", {})
-            if isinstance(custom_data, dict) and "compress_log" in custom_data:
-                compress_log_id = str(uuid.uuid4())
-                yield self._dispatch_event(
-                    TextMessageStartEvent(
-                        type=EventType.TEXT_MESSAGE_START,
-                        role="assistant",
-                        message_id=compress_log_id,
-                        raw_event=event,
-                    )
-                )
-                yield self._dispatch_event(
-                    TextMessageContentEvent(
-                        type=EventType.TEXT_MESSAGE_CONTENT,
-                        message_id=compress_log_id,
-                        delta=custom_data["compress_log"],
-                        raw_event=event,
-                    )
-                )
-                yield self._dispatch_event(
-                    TextMessageEndEvent(
-                        type=EventType.TEXT_MESSAGE_END,
-                        message_id=compress_log_id,
-                        raw_event=event,
-                    )
-                )
-
-            elif event["name"] == CustomEventNames.ManuallyEmitMessage:
+            if event["name"] == CustomEventNames.ManuallyEmitMessage:
                 yield self._dispatch_event(
                     TextMessageStartEvent(
                         type=EventType.TEXT_MESSAGE_START,

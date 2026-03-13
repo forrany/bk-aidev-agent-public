@@ -172,3 +172,9 @@ class ModelNodeSettings(BaseModel):
         description="(internal) Extra template pipeline middlewares injected by graph layer.",
         exclude=True,
     )
+
+    extra_tool_middlewares: list[Any] = Field(
+        default_factory=list,
+        description="(internal) Extra tool pipeline middlewares injected by graph layer.",
+        exclude=True,
+    )
