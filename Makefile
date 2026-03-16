@@ -72,6 +72,25 @@ release_ai_blueking:
 	echo "  - template/{{cookiecutter.project_name}}/requirements.txt"; \
 	echo "  - template/{{cookiecutter.project_name}}/pyproject.toml"
 
+.PHONY: release_versions
+release_versions:
+	@if [ -n "$(VERSION)" ]; then \
+		echo "Updating all package versions to $(VERSION)..."; \
+		uv run python scripts/update_versions.py "$(VERSION)"; \
+	elif [ -n "$(aidev_agent_version)" ] && [ -n "$(aidev_bkplugin_version)" ] && [ -n "$(aidev_wxbot_version)" ] && [ -n "$(aidev_template_version)" ]; then \
+		echo "Updating package versions (per-component)..."; \
+		uv run python scripts/update_versions.py \
+			--aidev-agent-version "$(aidev_agent_version)" \
+			--aidev-bkplugin-version "$(aidev_bkplugin_version)" \
+			--aidev-wxbot-version "$(aidev_wxbot_version)" \
+			--aidev-template-version "$(aidev_template_version)" \
+			$(if $(aidev_ai_blueking_version),--aidev-ai-blueking-version $(aidev_ai_blueking_version)); \
+	else \
+		echo "Error: set either VERSION=2.0.0b1 or all of: aidev_agent_version, aidev_bkplugin_version, aidev_wxbot_version, aidev_template_version"; \
+		echo "Example: make release_versions aidev_agent_version=2.0.0b1 aidev_bkplugin_version=2.0.0b2 aidev_wxbot_version=2.0.0b3 aidev_template_version=2.0.0rc4"; \
+		exit 1; \
+	fi
+
 # Catch-all rule to prevent Make from complaining about unknown targets
 %:
 	@:

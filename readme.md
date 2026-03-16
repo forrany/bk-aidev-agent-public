@@ -113,6 +113,20 @@ pnpm prettier
 - ESLint + Prettier
 - Chrome 开发者工具
 
+### 版本更新
+发布前需统一更新仓库内各组件版本，可使用 Makefile 的 `release_versions` 指令：
+
+**方式一：所有组件使用同一版本**
+```bash
+make release_versions VERSION=2.0.0b1
+```
+
+**方式二：按组件分别指定版本**
+```bash
+make release_versions aidev_agent_version=2.0.0b1 aidev_bkplugin_version=2.0.0b2 aidev_wxbot_version=2.0.0b3 aidev_template_version=2.0.0rc4
+```
+可选参数 `aidev_ai_blueking_version` 不指定时默认与 `aidev_agent_version` 一致。
+
 ## 📂 项目结构
 ```
 bk-aidev-agent/
