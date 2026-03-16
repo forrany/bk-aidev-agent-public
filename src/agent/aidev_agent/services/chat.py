@@ -20,6 +20,7 @@ from aidev_agent.core.ag_ui.types import AgentInput
 from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
 from aidev_agent.enums import PromptRole
 from aidev_agent.exceptions import AgentException
+from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.services.common_agent import CommonQAAgent
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
@@ -297,8 +298,9 @@ class ChatCompletionAgent(BaseModel):
         logger.info(f"callbacks: {self.callbacks}")
         return self.agent_cls.get_agent_executor(
             llm=self.chat_model,
-            knowledge_llm=self.chat_model,
-            non_thinking_llm=self.non_thinking_llm,
+            knowledge_llm=self.chat_model
+            if self.non_thinking_llm is None
+            else ChatModel.get_setup_instance(model=self.non_thinking_llm),
             extra_tools=self.tools,
             chat_history=messages[:-1],
             tool_execution_interval=self.TOOL_EXECUTION_INTERVAL,
