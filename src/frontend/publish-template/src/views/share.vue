@@ -3,7 +3,7 @@
     <div class="ai-share-container">
       <div class="ai-share-header">
         <div class="ai-share-header-left">
-          <img src="@/assets/svg/xiaojing.svg" alt="AI助手logo" />
+          <img src="@/assets/svg/ai-logo.svg" alt="AI助手logo" />
           <h1 class="ai-share-header-title">{{ title }}</h1>
         </div>
         <div class="ai-share-header-right" v-if="agentName">

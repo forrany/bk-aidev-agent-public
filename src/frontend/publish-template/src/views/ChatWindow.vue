@@ -535,4 +535,13 @@
   .chat-main .ai-chatbot .chatbot-input .chat-input-container .chat-input {
     max-width: 800px !important;
   }
+
+  /* 覆盖 welcome 图片及相关元素尺寸 */
+  .chat-main .ai-chatbot .chatbot-welcome .welcome-banner {
+    width: 420px;
+  }
+
+  .chat-main .ai-chatbot .chatbot-welcome .welcome-content {
+    padding-top: 110px;
+  }
 </style>
