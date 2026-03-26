@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any, NotRequired, Optional, TypedDict, cast
 
 from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -97,6 +97,7 @@ class BaseKnowledgeNode:
         self,
         llm: BaseChatModel,
         agent_options: AgentOptions,
+        chat_history: list[BaseMessage],
         kb_retriever: BkRetriever | None = None,
     ):
         """初始化知识库检索节点。
@@ -108,6 +109,7 @@ class BaseKnowledgeNode:
         """
         self.llm = llm
         self.agent_options = agent_options
+        self.chat_history = chat_history
         self.kb_retriever = kb_retriever or BkRetriever()
         self.retriever = KnowledgeRag(llm, self.kb_retriever)
 
@@ -166,7 +168,7 @@ class AgentKnowledgeNode(BaseKnowledgeNode):
         )
 
         query = self.get_query(state)
-        ret = self.retriever.retrieve(query, self.agent_options, input=query)
+        ret = self.retriever.retrieve(query, self.agent_options, self.chat_history, input=query)
 
         duration = round(time.time() - t1, 4) * 1000
         result = self.process_result(ret, config, store, duration)
@@ -293,6 +295,7 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
 def make_knowledge_node(
     llm: BaseChatModel,
     agent_options: AgentOptions,
+    chat_history: Optional[list] = None,
 ):
     """构建知识库检索节点。
     Args:
@@ -309,4 +312,5 @@ def make_knowledge_node(
     return AgentKnowledgeNode(
         llm=llm,
         agent_options=agent_options,
+        chat_history=chat_history,
     )

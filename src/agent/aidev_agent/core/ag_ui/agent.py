@@ -108,6 +108,8 @@ class LangGraphAgent:
         self.messages_in_process: MessagesInProgressRecord = {}
         self.active_run: RunMetadata | None = None
         self.constant_schema_keys = ["messages", "tools"]
+        # 控制是否应将 on_chat_model_stream 事件发送到前端
+        self.front_end_display = True
         # 取消检测回调，返回 True 表示应该取消
         self._cancel_checker = cancel_checker
 
@@ -565,6 +567,9 @@ class LangGraphAgent:
     ) -> AsyncGenerator[str, None]:
         event_type = event.get("event")
         if event_type == LangGraphEventTypes.OnChatModelStream:
+            # 当 front_end_display 为 False 时，跳过OnChatModelStream事件
+            if not self.front_end_display:
+                return
             should_emit_messages = event["metadata"].get("emit-messages", True)
             should_emit_tool_calls = event["metadata"].get("emit-tool-calls", True)
 
@@ -793,6 +798,13 @@ class LangGraphAgent:
                 yield resolved
 
         elif event_type == LangGraphEventTypes.OnCustomEvent:
+            # 如果接收到 front_end_display 标识位的信息，则更新 front_end_display
+            custom_data = event.get("data", {})
+            if isinstance(custom_data, dict) and "front_end_display" in custom_data:
+                self.front_end_display = custom_data["front_end_display"]
+                if not self.front_end_display:
+                    return
+
             if event["name"] == CustomEventNames.ManuallyEmitMessage:
                 yield self._dispatch_event(
                     TextMessageStartEvent(

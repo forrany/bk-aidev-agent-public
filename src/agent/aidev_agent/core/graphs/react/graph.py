@@ -450,13 +450,14 @@ class ReActAgentBuilder:
 
         return options
 
-    def _prepare_agent_knowledge_node(self, *, knowledge_llm, agent_options):
+    def _prepare_agent_knowledge_node(self, *, knowledge_llm, agent_options, chat_history):
         knowledge_query_options = agent_options.knowledge_query_options
         has_knowledge = knowledge_query_options.knowledge_bases or knowledge_query_options.knowledge_items
         if has_knowledge:
             return make_knowledge_node(
                 llm=knowledge_llm,
                 agent_options=agent_options,
+                chat_history=chat_history,
             )
         return None
 
@@ -844,6 +845,7 @@ class ReActAgentBuilder:
         knowledge_node = self._prepare_agent_knowledge_node(
             knowledge_llm=self._knowledge_llm,
             agent_options=prepared_agent_options,
+            chat_history=self._chat_history,
         )
 
         # 统一处理 model_node

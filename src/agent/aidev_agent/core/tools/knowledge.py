@@ -44,6 +44,7 @@ class KnowledgeRetrievalInput(BaseModel):
 def make_knowledge_retrieval_tool(
     llm: BaseChatModel,
     agent_options: AgentOptions,
+    chat_history: Optional[list] = None,
 ) -> Optional[StructuredTool]:
     """构建知识库检索工具。
 
@@ -83,7 +84,7 @@ def make_knowledge_retrieval_tool(
         retriever = KnowledgeRag(llm, kb_retriever)
 
         # 执行知识库检索
-        ret = retriever.retrieve(query, agent_options, input=query)
+        ret = retriever.retrieve(query, agent_options, input=query, chat_history=chat_history)
         return ret.get("knowledge_content", [])
 
     return StructuredTool.from_function(
