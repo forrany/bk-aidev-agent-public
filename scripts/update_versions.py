@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import tomllib
 from pathlib import Path
 
 # (relative_path, pattern, component_key for version)
@@ -49,25 +50,37 @@ VERSION_RULES: list[tuple[str, str, str]] = [
     ),
     (
         "template/{{cookiecutter.project_name}}/requirements.txt",
-        r"^aidev-agent==.*$",
+        r'^"?aidev-agent==.*"?$',
         "agent",
     ),
     (
         "template/{{cookiecutter.project_name}}/requirements.txt",
-        r"^aidev-ai-blueking==.*$",
+        r'^"?aidev-ai-blueking==.*"?$',
         "ai_blueking",
     ),
     (
         "template/{{cookiecutter.project_name}}/requirements.txt",
-        r"^aidev-bkplugin==.*$",
+        r'^"?aidev-bkplugin==.*"?$',
         "bkplugin",
     ),
     (
         "template/{{cookiecutter.project_name}}/requirements.txt",
-        r"^aidev-wxbot==.*$",
+        r'^"?aidev-wxbot==.*"?$',
         "wxbot",
     ),
 ]
+
+SOURCE_PACKAGE_VERSION_FILES: dict[str, str] = {
+    "agent": "src/agent/pyproject.toml",
+    "bkplugin": "src/plugins/aidev_bkplugin/pyproject.toml",
+    "wxbot": "src/plugins/aidev_wxbot/pyproject.toml",
+    "ai_blueking": "src/plugins/aidev_ai_blueking/pyproject.toml",
+}
+
+TEMPLATE_VERSION_TARGETS = {
+    Path("template/{{cookiecutter.project_name}}/pyproject.toml"),
+    Path("template/{{cookiecutter.project_name}}/requirements.txt"),
+}
 
 
 def replacement_for(pattern: str, version: str) -> str:
@@ -77,6 +90,14 @@ def replacement_for(pattern: str, version: str) -> str:
         return f'"aidev-agent>={version}"'
     if "aidev-bkplugin>=" in pattern:
         return f'"aidev-bkplugin>={version}"'
+    if pattern.startswith(("^aidev-agent==", '^"?aidev-agent==')):
+        return f"aidev-agent=={version}"
+    if pattern.startswith(("^aidev-ai-blueking==", '^"?aidev-ai-blueking==')):
+        return f"aidev-ai-blueking=={version}"
+    if pattern.startswith(("^aidev-bkplugin==", '^"?aidev-bkplugin==')):
+        return f"aidev-bkplugin=={version}"
+    if pattern.startswith(("^aidev-wxbot==", '^"?aidev-wxbot==')):
+        return f"aidev-wxbot=={version}"
     if "aidev-agent==" in pattern:
         return f'"aidev-agent=={version}"'
     if "aidev-bkplugin==" in pattern:
@@ -85,14 +106,6 @@ def replacement_for(pattern: str, version: str) -> str:
         return f'"aidev-wxbot=={version}"'
     if "aidev-ai-blueking==" in pattern:
         return f'"aidev-ai-blueking=={version}"'
-    if pattern.startswith("^aidev-agent=="):
-        return f"aidev-agent=={version}"
-    if pattern.startswith("^aidev-ai-blueking=="):
-        return f"aidev-ai-blueking=={version}"
-    if pattern.startswith("^aidev-bkplugin=="):
-        return f"aidev-bkplugin=={version}"
-    if pattern.startswith("^aidev-wxbot=="):
-        return f"aidev-wxbot=={version}"
     raise ValueError(f"Cannot build replacement for pattern {pattern!r}")
 
 
@@ -110,16 +123,26 @@ def normalize_versions(versions: str | dict[str, str]) -> dict[str, str]:
     return {component: version for component, version in versions.items() if version}
 
 
-def update_repo_versions(repo_root: Path, versions: str | dict[str, str]) -> list[Path]:
+def build_file_rules(
+    repo_root: Path,
+    versions: str | dict[str, str],
+    allowed_paths: set[Path] | None = None,
+) -> dict[Path, list[tuple[str, str]]]:
     resolved_versions = normalize_versions(versions)
     file_rules: dict[Path, list[tuple[str, str]]] = {}
     for relative_path, pattern, component in VERSION_RULES:
         if component not in resolved_versions:
             continue
+        resolved_path = repo_root / relative_path
+        if allowed_paths is not None and resolved_path not in allowed_paths:
+            continue
         version = resolved_versions[component]
         replacement = replacement_for(pattern, version)
-        file_rules.setdefault(repo_root / relative_path, []).append((pattern, replacement))
+        file_rules.setdefault(resolved_path, []).append((pattern, replacement))
+    return file_rules
 
+
+def apply_file_rules(repo_root: Path, file_rules: dict[Path, list[tuple[str, str]]]) -> list[Path]:
     updated_files: list[Path] = []
     for path, rules in file_rules.items():
         text = path.read_text(encoding="utf-8")
@@ -128,6 +151,35 @@ def update_repo_versions(repo_root: Path, versions: str | dict[str, str]) -> lis
         path.write_text(text, encoding="utf-8")
         updated_files.append(path.relative_to(repo_root))
     return updated_files
+
+
+def update_repo_versions(repo_root: Path, versions: str | dict[str, str]) -> list[Path]:
+    file_rules = build_file_rules(repo_root, versions)
+    return apply_file_rules(repo_root, file_rules)
+
+
+def read_project_version(pyproject_path: Path) -> str:
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    version = pyproject.get("project", {}).get("version")
+    if not version:
+        raise ValueError(f"No [project].version found in {pyproject_path}")
+    return version
+
+
+def get_repo_sdk_versions(repo_root: Path) -> dict[str, str]:
+    return {
+        component: read_project_version(repo_root / relative_path)
+        for component, relative_path in SOURCE_PACKAGE_VERSION_FILES.items()
+    }
+
+
+def sync_template_sdk_versions(repo_root: Path) -> tuple[dict[str, str], list[Path]]:
+    versions = get_repo_sdk_versions(repo_root)
+    file_rules = build_file_rules(
+        repo_root, versions, allowed_paths={repo_root / path for path in TEMPLATE_VERSION_TARGETS}
+    )
+    updated_files = apply_file_rules(repo_root, file_rules)
+    return versions, updated_files
 
 
 def parse_args() -> argparse.Namespace:
@@ -156,13 +208,22 @@ def parse_args() -> argparse.Namespace:
         default=Path(__file__).resolve().parents[1],
         help="Repository root path",
     )
+    parser.add_argument(
+        "--sync-template-sdk-versions",
+        action="store_true",
+        help="Sync template SDK dependency versions from the current source package versions.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.version:
+    if args.sync_template_sdk_versions:
+        resolved_versions, updated_files = sync_template_sdk_versions(args.repo_root)
+    elif args.version:
         versions: str | dict[str, str] = args.version
+        resolved_versions = normalize_versions(versions)
+        updated_files = update_repo_versions(args.repo_root, versions)
     else:
         partial_versions = {
             "agent": args.aidev_agent_version,
@@ -180,8 +241,8 @@ def main() -> int:
             )
             return 1
 
-    updated_files = update_repo_versions(args.repo_root, versions)
-    resolved_versions = normalize_versions(versions)
+        resolved_versions = normalize_versions(versions)
+        updated_files = update_repo_versions(args.repo_root, versions)
     print("Updated versions:")
     for k, v in resolved_versions.items():
         print(f"  {k}: {v}")

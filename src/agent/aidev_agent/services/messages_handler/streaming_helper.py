@@ -325,6 +325,23 @@ class GeneratorStreamingHelper:
         except Exception as e:
             logger.exception(f"Error sending consumer cancelled notification for thread_id={self.thread_id}: {e}")
 
+    def _should_notify_consumer_cancelled_on_complete(self, cancel_event: threading.Event) -> bool:
+        """正常结束时，仅在确实存在 stop/cancel 场景下才发送完成通知。"""
+        if cancel_event.is_set():
+            return True
+
+        try:
+            if self.message_handler.check_cancel_signal(self.thread_id):
+                return True
+        except Exception as e:
+            logger.exception(f"Error checking cancel signal before completion for thread_id={self.thread_id}: {e}")
+
+        try:
+            return self.message_handler.is_stopped(self.thread_id)
+        except Exception as e:
+            logger.exception(f"Error checking stopped state before completion for thread_id={self.thread_id}: {e}")
+            return False
+
     def _resolve_stopped_or_pending_state(self) -> tuple[bool, bool]:
         """解析当前会话状态，返回 (是否消费已停止会话, 是否有待消费消息)。"""
         is_stopped = self.message_handler.is_stopped(self.thread_id)
@@ -436,6 +453,7 @@ class GeneratorStreamingHelper:
                         logger.debug(f"Received heartbeat for thread_id={self.thread_id}")
                         continue
                     if item == EOD_CHUNK:
+                        should_notify_cancelled = self._should_notify_consumer_cancelled_on_complete(cancel_event)
                         if on_complete:
                             try:
                                 on_complete()
@@ -443,9 +461,9 @@ class GeneratorStreamingHelper:
                                 logger.exception(f"on_complete callback error: {e}")
                         self.message_handler.mark_completed(self.thread_id)
                         logger.info(f"Stream completed for thread_id={self.thread_id}")
-                        # 通知 stop 接口：流已结束（正常结束也需要通知，
-                        # 因为 cancel 可能已发出但 Agent 恰好也完成了）
-                        self._notify_consumer_cancelled_safely()
+                        if should_notify_cancelled:
+                            # cancel 可能已发出但 Agent 恰好也完成了，此时仍需通知 stop 接口。
+                            self._notify_consumer_cancelled_safely()
                         return
                     if item == CANCELLED_CHUNK:
                         if hasattr(self.message_handler, "mark_stopped"):

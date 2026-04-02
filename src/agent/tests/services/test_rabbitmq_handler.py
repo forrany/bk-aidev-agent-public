@@ -368,6 +368,30 @@ class TestResourceCleanup:
         assert not self._queue_exists(handler, stopped_queue), "停止状态队列应该被删除"
 
     @pytest.mark.skipif(not os.getenv("RABBITMQ_HOST"), reason="Live test requires RABBITMQ_HOST")
+    def test_post_completion_cleanup_does_not_recreate_signal_queues(self):
+        """正常完成流后，不应残留 consumer/cancelled 信号队列"""
+        handler = RabbitMQMessageHandler()
+        thread_id = f"thread-post-completion-cleanup-{int(time.time() * 1000) % 100000}"
+
+        handler.clear(thread_id)
+
+        async def gen():
+            yield "msg_1"
+
+        consumer_queue = handler._get_consumer_queue_name(thread_id)
+        exit_queue = handler._get_consumer_exit_queue_name(thread_id)
+        cancelled_queue = handler._get_cancelled_queue_name(thread_id)
+
+        helper = GeneratorStreamingHelper(handler, thread_id)
+        business_messages = [msg for msg in helper.stream(async_to_sync_generator(gen())) if not msg.startswith("<")]
+
+        assert business_messages == ["msg_1"]
+
+        assert not self._queue_exists(handler, consumer_queue), "完成后不应重建消费者控制队列"
+        assert not self._queue_exists(handler, exit_queue), "完成后不应重建退出通知队列"
+        assert not self._queue_exists(handler, cancelled_queue), "完成后不应重建取消完成通知队列"
+
+    @pytest.mark.skipif(not os.getenv("RABBITMQ_HOST"), reason="Live test requires RABBITMQ_HOST")
     def test_delete_nonexistent_resources_no_error(self):
         """对不存在的队列/交换机执行删除不会报错"""
         handler = RabbitMQMessageHandler()

@@ -1,10 +1,11 @@
 """测试 stop 接口与 SSE 流的同步机制
 
 核心验证：
-1. Consumer 在三条退出路径（CANCELLED / EOD / drain 超时）都会发送取消通知
-2. stop 接口 cancel → wait → 超时降级 的完整流程
-3. 端到端：cancel 后流正确终止并通知
-4. 完整停止时序：stop → cancel → Agent cancel_checker → RUN_FINISHED →
+1. Consumer 在 cancel/stop 相关退出路径（CANCELLED / cancel 后 EOD / drain 超时）发送取消通知
+2. 普通正常结束不会发送取消通知
+3. stop 接口 cancel → wait → 超时降级 的完整流程
+4. 端到端：cancel 后流正确终止并通知
+5. 完整停止时序：stop → cancel → Agent cancel_checker → RUN_FINISHED →
    EOD → Consumer notify → stop wait → 调用平台 API
 """
 
@@ -22,7 +23,7 @@ from aidev_agent.services.messages_handler.constants import TimeoutConfig
 
 
 class TestConsumerNotifyOnCancel:
-    """验证 Consumer 在取消场景下发送 notify_consumer_cancelled"""
+    """验证 Consumer 仅在 cancel/stop 相关场景下发送 notify_consumer_cancelled"""
 
     @pytest.fixture
     def handler(self):
@@ -71,8 +72,8 @@ class TestConsumerNotifyOnCancel:
         assert len(collected) < 20, "应只收到部分 chunk"
         assert not t.is_alive()
 
-    def test_normal_finish_triggers_notify(self, handler):
-        """正常结束（EOD_CHUNK）时也应触发 notify"""
+    def test_normal_finish_does_not_trigger_notify(self, handler):
+        """普通正常结束（无 cancel/stop）时不应触发 notify"""
         tid = "test_sync_eod_notify"
 
         def short_gen():
@@ -83,8 +84,8 @@ class TestConsumerNotifyOnCancel:
         result = list(helper.stream(short_gen()))
 
         assert result == ["chunk_0", "chunk_1"]
-        # 正常结束后 notify 应已发出，wait 应立即返回
-        assert handler.wait_for_consumer_cancelled(tid, timeout=1.0)
+        # 普通完成不属于 stop/cancel 流程，不应发取消通知
+        assert not handler.wait_for_consumer_cancelled(tid, timeout=0.2)
 
     def test_drain_timeout_triggers_notify(self, handler, monkeypatch):
         """Consumer drain 超时时也应触发 notify

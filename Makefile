@@ -91,6 +91,11 @@ release_versions:
 		exit 1; \
 	fi
 
+.PHONY: sync_template_sdk_versions
+sync_template_sdk_versions:
+	@echo "Syncing template SDK versions from repository packages..."
+	@uv run python scripts/update_versions.py --sync-template-sdk-versions
+
 # Catch-all rule to prevent Make from complaining about unknown targets
 %:
 	@:

@@ -258,6 +258,14 @@ class MultiProcessMixin:
 
         with self._with_connection() as connection:
             channel = connection.channel()
+            consumer_queue = self._get_consumer_queue_name(thread_id)
+
+            try:
+                channel.queue_declare(queue=consumer_queue, passive=True)
+            except Exception:
+                logger.debug(f"Skip release for missing consumer queue, thread_id={thread_id}")
+                return
+
             consumer_queue, exit_queue = self._ensure_consumer_queues(channel, thread_id)
 
             # peek 控制队列
