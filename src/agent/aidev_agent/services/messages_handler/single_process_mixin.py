@@ -131,3 +131,8 @@ class SingleProcessMixin:
                 # 无论恢复消息是否成功，都要通知新消费者可以开始消费
                 if event:
                     event.set()
+
+    def has_active_consumer(self, thread_id: str) -> bool:
+        """检查指定 thread_id 是否仍有活跃消费者。"""
+        with self._consumer_lock:
+            return thread_id in self._active_consumers

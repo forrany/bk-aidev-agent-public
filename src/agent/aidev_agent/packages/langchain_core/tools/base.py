@@ -39,7 +39,7 @@ from typing_extensions import Annotated
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
 from aidev_agent.services.pydantic_models import AgentOptions
-from aidev_agent.utils.loop import get_event_loop
+from aidev_agent.utils.loop import run_coro_sync
 
 from .enums import FieldType, FuncType
 from .exceptions import ToolValidationError
@@ -588,8 +588,6 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
             _server_config["headers"] = {"X-Bkapi-Authorization": json.dumps(auth_info)}
             _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
 
-    _loop = get_event_loop()
-
     # 重试2次；返回 (tools, failure | None)，失败时返回 McpToolFetchFailure
     async def _load_tool(server_name, selected_tools_map) -> tuple[list[StructuredTool], McpToolFetchFailure | None]:
         for _i in range(2):
@@ -628,7 +626,11 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
                 )
 
     coros = [_load_tool(server_name, selected_tools_map) for server_name in new_server_config]
-    coro_results = _loop.run_until_complete(asyncio.gather(*coros))
+
+    async def _load_all_tools():
+        return await asyncio.gather(*coros)
+
+    coro_results = run_coro_sync(_load_all_tools())
     tools_list: List[StructuredTool] = []
     failures: List[McpToolFetchFailure] = []
     for tlist, fail in coro_results:

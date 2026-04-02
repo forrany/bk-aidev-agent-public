@@ -64,6 +64,9 @@ class GeneratorStreamingHelper:
     # 生产者结束后延迟清理会话资源的等待时间（秒）
     # 需足够长以允许活跃消费者处理 EOD_CHUNK，又不至于长时间占用资源
     _PRODUCER_CLEANUP_DELAY = 30.0
+    # 当业务流已经发出 [DONE] 且消费者断开时，给一个很短的重连宽限后立即清理
+    _DONE_ORPHAN_CLEANUP_GRACE = 0.5
+    _ORPHAN_CLEANUP_POLL_INTERVAL = 0.1
 
     @staticmethod
     def _should_filter_on_resume(item: Any) -> bool:
@@ -226,6 +229,11 @@ class GeneratorStreamingHelper:
         """取消注册取消事件"""
         with self._cancel_lock:
             self._cancel_events.pop(self.thread_id, None)
+
+    @staticmethod
+    def _is_done_event_chunk(chunk: Any) -> bool:
+        """判断 chunk 是否为 SSE 的业务完成标记。"""
+        return isinstance(chunk, str) and chunk.strip() == "data: [DONE]"
 
     def _is_cancelled(self, cancel_event: threading.Event) -> bool:
         """检查是否被取消（同时检查进程内事件和跨进程信号）
@@ -532,7 +540,7 @@ class GeneratorStreamingHelper:
                 except Exception as e:
                     logger.exception(f"Error joining producer thread for thread_id={self.thread_id}: {e}")
 
-    def _schedule_session_cleanup(self) -> None:
+    def _schedule_session_cleanup(self, done_event_seen: bool = False) -> None:
         """生产者完成后延迟清理孤立的会话资源。
 
         用户断开连接后，如果未在延迟窗口内重连消费数据，队列数据会一直保留到 TTL 过期。
@@ -542,15 +550,39 @@ class GeneratorStreamingHelper:
         thread_id = self.thread_id
         handler = self.message_handler
         delay = self._PRODUCER_CLEANUP_DELAY
+        grace = self._DONE_ORPHAN_CLEANUP_GRACE
+        poll_interval = self._ORPHAN_CLEANUP_POLL_INTERVAL
 
         def _do_cleanup() -> None:
-            time.sleep(delay)
             try:
-                if handler.has_pending_messages(thread_id):
-                    handler.mark_completed(thread_id)
-                    logger.info(f"Cleaned up orphaned session data for thread_id={thread_id}")
-                else:
-                    logger.debug(f"Session already consumed for thread_id={thread_id}, skipping cleanup")
+                start_time = time.time()
+                fast_cleanup_at = start_time + grace if done_event_seen else None
+                deadline = start_time + delay
+
+                while True:
+                    if not handler.has_pending_messages(thread_id):
+                        logger.debug(f"Session already consumed for thread_id={thread_id}, skipping cleanup")
+                        return
+
+                    has_active_consumer = handler.has_active_consumer(thread_id)
+                    now = time.time()
+                    should_cleanup_now = False
+
+                    if (
+                        done_event_seen
+                        and not has_active_consumer
+                        and fast_cleanup_at is not None
+                        and now >= fast_cleanup_at
+                        or now >= deadline
+                    ):
+                        should_cleanup_now = True
+
+                    if should_cleanup_now:
+                        handler.mark_completed(thread_id)
+                        logger.info(f"Cleaned up orphaned session data for thread_id={thread_id}")
+                        return
+
+                    time.sleep(min(poll_interval, max(deadline - now, 0.0)))
             except Exception:
                 logger.exception(f"Error in delayed session cleanup for thread_id={thread_id}")
 
@@ -578,6 +610,7 @@ class GeneratorStreamingHelper:
         # 标记是否进入取消 drain 模式（检测到取消后继续读取 generator，等待 RUN_FINISHED）
         draining = False
         drain_start_time = 0.0
+        done_event_seen = False
 
         def _heartbeat_worker() -> None:
             """独立心跳线程：即使 generator 阻塞也保持心跳。"""
@@ -598,6 +631,8 @@ class GeneratorStreamingHelper:
 
             for chunk in generator:
                 chunk_count += 1
+                if self._is_done_event_chunk(chunk):
+                    done_event_seen = True
 
                 if not draining:
                     # 检查是否被取消（进程内快速检查）
@@ -667,4 +702,4 @@ class GeneratorStreamingHelper:
 
             # 延迟清理：如果消费者已断开且未重连，主动释放队列资源
             # 不能立即清理，否则会与正在读取 EOD_CHUNK 的活跃消费者竞争
-            self._schedule_session_cleanup()
+            self._schedule_session_cleanup(done_event_seen=done_event_seen)

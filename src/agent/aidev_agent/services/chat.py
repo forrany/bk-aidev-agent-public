@@ -26,7 +26,7 @@ from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
 from aidev_agent.utils.async_utils import async_to_sync_generator
-from aidev_agent.utils.loop import get_event_loop
+from aidev_agent.utils.loop import run_coro_sync
 
 logger = getLogger(__name__)
 
@@ -203,18 +203,19 @@ class ChatCompletionAgent(BaseModel):
                 return self._stream(agent_e, cfg, messages, execute_kwargs)
 
         else:
-            loop = get_event_loop()
-            result = loop.run_until_complete(
-                agent_e.ainvoke({"messages": messages, "execute_kwargs": execute_kwargs}, cfg)
-            )
-            result_output = result.get("messages")[-1]
-            return_data = {
-                "choices": [{"delta": {"role": "assistant", "content": result_output.content}}],
-                "model": self.model_name,
-                "id": result_output.id,
-                "reference_doc": result.get("reference_doc", []),
-            }
-            return return_data
+            try:
+                result = run_coro_sync(agent_e.ainvoke({"messages": messages, "execute_kwargs": execute_kwargs}, cfg))
+                result_output = result.get("messages")[-1]
+                return_data = {
+                    "choices": [{"delta": {"role": "assistant", "content": result_output.content}}],
+                    "model": self.model_name,
+                    "id": result_output.id,
+                    "reference_doc": result.get("reference_doc", []),
+                }
+                return return_data
+            except Exception as e:
+                logger.exception(f"Error executing agent: {e}")
+                raise AgentException(message=f"Error executing agent: {e}")
 
     def _stream_with_legacy(
         self, agent_e: Runnable, cfg: RunnableConfig, messages: list[BaseMessage]

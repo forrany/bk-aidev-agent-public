@@ -40,8 +40,7 @@ from aidev_bkplugin.services.agent import (
     get_agent_config_info,
     get_agent_version,
 )
-from aidev_bkplugin.utils import bkaidev_api_client, get_flow_agent_client, set_user_access_token
-from aidev_bkplugin.utils import bkaidev_api_client, is_local_dev, set_user_access_token
+from aidev_bkplugin.utils import bkaidev_api_client, get_flow_agent_client, is_local_dev, set_user_access_token
 
 
 class IgnoreClientContentNegotiation(DefaultContentNegotiation):
@@ -308,7 +307,6 @@ class ChatCompletionViewSet(PluginViewSet):
         execute_kwargs = build_execute_kwargs(request.data.get("execute_kwargs", {}), username)
         session_code = request.data.get("session_code", "")
         execute_kwargs.session_code = request.data.get("session_code", "")
-
         _input = request.data.get("input", "")
         event_handler = None  # 用于断点续传
 
@@ -508,9 +506,7 @@ class ChatCompletionViewSet(PluginViewSet):
         logger.info(f"[FLOW_AGENT] Streaming started: session_code={session_code}, task_id={task_id}")
         return self.streaming_response(generator)
 
-    def _wrap_streaming_with_status(
-        self, generator, event_handler, session_code: str = "", username: str = ""
-    ):
+    def _wrap_streaming_with_status(self, generator, event_handler, session_code: str = "", username: str = ""):
         """包装流式生成器，在结束时更新会话状态为 finished
 
         如果消费者被新消费者抢占（断点续传场景），不更新 status，
@@ -526,10 +522,7 @@ class ChatCompletionViewSet(PluginViewSet):
                 yield chunk
         except GeneratorExit:
             _client_disconnected = True
-            logger.info(
-                f"[WRAP_STATUS] Client disconnected (GeneratorExit): "
-                f"session_code={session_code}"
-            )
+            logger.info(f"[WRAP_STATUS] Client disconnected (GeneratorExit): session_code={session_code}")
             return
         except ConsumerPreemptedError:
             _preempted = True

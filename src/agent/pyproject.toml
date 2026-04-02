@@ -29,7 +29,7 @@ dependencies = [
     "json-repair>=0.58.6",
 ]
 name = "aidev-agent"
-version = "2.0.0b7"
+version = "2.0.0rc1"
 description = "bkaidev agent builder"
 
 [dependency-groups]

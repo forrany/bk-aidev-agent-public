@@ -367,6 +367,30 @@ class TestInMemoryQueueMessageHandler:
         assert callback_called
         assert handler.is_empty(thread_id)
 
+    def test_orphaned_cleanup_after_done_does_not_wait_full_delay_without_consumer(self, handler, monkeypatch):
+        """生产者已发出 done 后若无活跃消费者，应尽快清理而不是始终等满延迟窗口。"""
+        thread_id = "test_stream_orphan_cleanup_fast"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+        cleanup_called = threading.Event()
+
+        handler.put(thread_id, "chunk_0")
+
+        original_mark_completed = handler.mark_completed
+
+        def mark_completed_and_signal(tid):
+            original_mark_completed(tid)
+            if tid == thread_id:
+                cleanup_called.set()
+
+        monkeypatch.setattr(helper, "_PRODUCER_CLEANUP_DELAY", 1.0)
+        monkeypatch.setattr(helper, "_DONE_ORPHAN_CLEANUP_GRACE", 0.05)
+        monkeypatch.setattr(handler, "mark_completed", mark_completed_and_signal)
+
+        helper._schedule_session_cleanup(done_event_seen=True)
+
+        assert cleanup_called.wait(timeout=0.3), "done orphaned cleanup should happen promptly without active consumer"
+        assert handler.is_empty(thread_id)
+
     def test_stream_keeps_alive_when_generator_blocked(self, handler, monkeypatch):
         """generator 长时间无产出时，独立心跳应维持连接且不超时。"""
         thread_id = "test_stream_heartbeat_keepalive"

@@ -572,7 +572,9 @@ def test_make_mcp_tools_multiple_servers(mock_mcp_client_class, mock_agent_optio
     assert result.fetch_failures[0].server_name == "server2"
     assert "skip loading tools for server" in caplog.text
     assert "server2" in caplog.text
-    assert [record.levelname for record in caplog.records] == ["WARNING"]
+    # 成功拉取 server1 会打 INFO；失败 server2 打 WARNING
+    assert [r.levelname for r in caplog.records if r.levelname == "WARNING"] == ["WARNING"]
+    assert any(r.levelname == "INFO" and "server1" in r.getMessage() for r in caplog.records)
 
 
 # ================== wrap_mcp_exception 测试 ==================
