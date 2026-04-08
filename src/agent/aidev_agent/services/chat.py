@@ -127,7 +127,6 @@ class ChatCompletionAgent(BaseModel):
     def _convert_contents(self, contents: list[ChatPrompt]) -> list[ChatPrompt]:
         """将无需送到大模型处理的content去掉"""
         new_contents = []
-        hunyuan_system_content: list[str] = []
         for each in contents:
             each.role = each.role.replace("hidden-", "")
             if each.role in self.SKIP_PROMPT_ROLE:
@@ -150,19 +149,10 @@ class ChatCompletionAgent(BaseModel):
                 else:
                     # 匹配不中,抛出异常
                     raise AgentException(message="图片md格式非法")
-            if each.role == PromptRole.USER.value and hunyuan_system_content:
-                new_content = "\n".join((hunyuan_system_content.pop(), each.content))
-                each.content = new_content
-
             # 对于deepseek-r1 系列的需要把system去掉
             if each.role == PromptRole.SYSTEM.value and "deepseek-r1" in self.model_name:
                 each.role = PromptRole.USER.value
-
-            # 对于hunyuan需要兼容多`system`的case
-            if each.role == PromptRole.SYSTEM.value and "hunyuan" in self.model_name:
-                hunyuan_system_content.append(each.content)
-            else:
-                new_contents.append(each)
+            new_contents.append(each)
 
         return new_contents
 
