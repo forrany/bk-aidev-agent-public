@@ -6,7 +6,7 @@ import uuid
 from logging import getLogger
 
 from aidev_agent.config import settings as agent_settings
-from aidev_agent.enums import PromptRole
+from aidev_agent.enums import AgentType, PromptRole
 from aidev_agent.services.chat import ChatPrompt
 from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
 from aidev_agent.services.flow_agent import FlowAgentCompletionAgent
@@ -36,9 +36,11 @@ from aidev_bkplugin.services.agent import (
     build_chat_completion_agent_by_session_code,
     build_chat_completion_agent_by_thread_id_with_chat_history,
     build_execute_kwargs,
+    build_session_detail_url,
     execute_agent_with_save,
     get_agent_config_info,
     get_agent_version,
+    get_or_create_session_by_thread_id,
 )
 from aidev_bkplugin.utils import bkaidev_api_client, get_flow_agent_client, is_local_dev, set_user_access_token
 
@@ -85,6 +87,25 @@ class PluginViewSet(ViewSetMixin, APIView):
         if request.user:
             setattr(request, "_user", request.user)
         return super().initialize_request(request, *args, **kwargs)
+
+    def get_username(self) -> str:
+        """
+        获取用户名
+        用户名获取逻辑（按优先级）：
+        - 用户态接口：优先使用 request.user.username（来自 apigw jwt，经 inject_user_token 注入）
+        - 应用态接口：降级到 request.META.get("HTTP_X_BKAIDEV_USER") 获取
+        """
+        username = self.request.user.username if hasattr(self.request, "user") else ""
+        if not username:
+            username = self.request.META.get("HTTP_X_BKAIDEV_USER", "")
+        if not username:
+            logger.warning(
+                "[PluginViewSet] 无法获取用户名: request.user=%r, meta=%r",
+                getattr(self.request.user, "username", None),
+                self.request.META.get("HTTP_X_BKAIDEV_USER"),
+            )
+            raise ValueError("无法获取用户名，请确保请求已正确鉴权或提供 X-BKAIDEV-USER header")
+        return username
 
     @staticmethod
     def get_bkapi_authorization_info(request: Request) -> str:
@@ -300,10 +321,7 @@ class ChatCompletionViewSet(PluginViewSet):
 
     def create(self, request):
         # 调用Agent 的时候需要传入的相关参数
-        username = request.user.username
-        # 兜底：如果认证未生效（如本地开发），从请求体或 header 中获取 username
-        if not username:
-            username = request.data.get("username", "") or request.META.get("HTTP_X_BKAIDEV_USER", "")
+        username = self.get_username()
         execute_kwargs = build_execute_kwargs(request.data.get("execute_kwargs", {}), username)
         session_code = request.data.get("session_code", "")
         execute_kwargs.session_code = request.data.get("session_code", "")
@@ -314,9 +332,25 @@ class ChatCompletionViewSet(PluginViewSet):
             agent_info = get_agent_config_info(username)
             agent_type = request.data.get("agent_type", "") or agent_info.get("agent_type", "")
             logger.debug(f"agent_info.agent_type={agent_info.get('agent_type')}, resolved agent_type={agent_type}")
-            if agent_type == "flow":
-                return self._handle_flow_agent(request, session_code, username)
+
+            # flow agent 的 thread_id → session_code 转换：
+            # 仅在调用方传了 thread_id 但未传 session_code 时触发，对 flow agent 尤为关键，
+            # 因为 _handle_flow_agent 只接受 session_code。
             thread_id = execute_kwargs.thread_id
+            if thread_id and not session_code and agent_type == AgentType.FLOW.value:
+                try:
+                    session_code = get_or_create_session_by_thread_id(username, thread_id)
+                    execute_kwargs.session_code = session_code
+                    logger.info(
+                        "[FLOW_AGENT] Resolved session_code from thread_id: thread_id=%s, session_code=%s",
+                        thread_id,
+                        session_code,
+                    )
+                except Exception:
+                    logger.exception("[FLOW_AGENT] Failed to resolve session_code from thread_id=%s", thread_id)
+
+            if agent_type == AgentType.FLOW.value:
+                return self._handle_flow_agent(request, session_code, username)
             if not thread_id and not session_code:
                 thread_id = str(uuid.uuid4())
             if thread_id:
@@ -382,7 +416,7 @@ class ChatCompletionViewSet(PluginViewSet):
                         session_code=session_code,
                         username=username,
                     )
-                return self.streaming_response(generator)
+                return self.streaming_response(generator, session_code=session_code)
             else:
                 result = agent_instance.execute(execute_kwargs)
                 return Response(result)
@@ -423,7 +457,7 @@ class ChatCompletionViewSet(PluginViewSet):
         execute_kwargs.session_code = session_code
         result = execute_agent_with_save(agent_instance, execute_kwargs, session_code, username)
         if execute_kwargs.stream:
-            return self.streaming_response(result)
+            return self.streaming_response(result, session_code=session_code)
         return Response(result)
 
     def _handle_flow_agent(self, request, session_code: str, username: str):
@@ -504,7 +538,7 @@ class ChatCompletionViewSet(PluginViewSet):
             raise ClientBlueException(message=message)
 
         logger.info(f"[FLOW_AGENT] Streaming started: session_code={session_code}, task_id={task_id}")
-        return self.streaming_response(generator)
+        return self.streaming_response(generator, session_code=session_code)
 
     def _wrap_streaming_with_status(self, generator, event_handler, session_code: str = "", username: str = ""):
         """包装流式生成器，在结束时更新会话状态为 finished
@@ -545,12 +579,21 @@ class ChatCompletionViewSet(PluginViewSet):
                 logger.info(f"[WRAP_STATUS] 流正常结束, 调用 set_streaming_finished: session_code={session_code}")
                 event_handler.set_streaming_finished()
 
-    def streaming_response(self, generator):
+    def streaming_response(self, generator, session_code: str = ""):
         sr = StreamingHttpResponse(generator)
         sr.headers["Cache-Control"] = "no-cache"
         sr.headers["X-Accel-Buffering"] = "no"
         sr.headers["content-type"] = "text/event-stream"
         sr.headers["Otel-Trace-Id"] = getattr(self.request._request, "otel_trace_id", "") or ""
+        # 注入 session 相关响应标头，便于客户端获取会话信息和跳转链接
+        if session_code:
+            sr.headers["x-bkaidev-agent-session-code"] = session_code
+            session_url = build_session_detail_url(session_code)
+            if session_url:
+                sr.headers["x-bkaidev-agent-session-url"] = session_url
+                logger.debug(f"[streaming_response] 注入响应标头: session_code={session_code}, url={session_url}")
+            else:
+                logger.warning(f"[streaming_response] 无法构建 session_url: session_code={session_code}")
         return sr
 
 

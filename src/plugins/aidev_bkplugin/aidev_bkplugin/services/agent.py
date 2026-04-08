@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import uuid
+from urllib.parse import urlparse
 
 import pkg_resources
 from aidev_agent.api.bk_aidev import BKAidevApi
@@ -20,6 +21,7 @@ from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from .factory import agent_config_factory, agent_factory
+from ..constants import AGUI_PROTOCOL_VERSION
 from ..utils import bkaidev_api_client
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,27 @@ def get_agent_config_info(username: str | None = None):
             agent_info["otel_info"] = json.loads(base64.b64decode(otel_env_info).decode())
         cache.set(agent_info_key, agent_info, settings.DEFAULT_CACHE_TIMEOUT)
     return agent_info
+
+
+def build_session_detail_url(session_code: str, username: str | None = None) -> str:
+    """
+    从 agent 配置的 saas_url 拼接小鲸会话详情页 URL。
+    """
+    if not session_code:
+        return ""
+    try:
+        agent_info = get_agent_config_info(username)
+        saas_url = agent_info.get("saas_url", "")
+        if not saas_url:
+            logger.debug(f"[build_session_detail_url] agent 配置中无 saas_url, username={username}")
+            return ""
+        # 从 saas_url 提取域名：https://xxx.bkapps.woa.com/bk_plugin/... → https://xxx.bkapps.woa.com
+        parsed = urlparse(saas_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        return f"{base_url}/page/?session={session_code}"
+    except Exception as e:
+        logger.warning(f"[build_session_detail_url] 构建会话详情 URL 失败: session_code={session_code}, error={e}")
+        return ""
 
 
 def get_agent_role_info() -> list[ChatPrompt]:
@@ -226,6 +249,7 @@ def get_or_create_session_by_thread_id(username: str, thread_id: str, agent_code
                 json={
                     "session_code": session_code,
                     "session_name": f"Thread-{thread_id[:8]}",  # 使用 thread_id 前8位作为名称
+                    "protocol_version": AGUI_PROTOCOL_VERSION,
                 },
                 headers={"X-BKAIDEV-USER": username},
             )

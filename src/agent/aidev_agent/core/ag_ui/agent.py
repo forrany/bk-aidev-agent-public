@@ -556,10 +556,21 @@ class LangGraphAgent:
                     predict_tool.get("tool") == tool_call_data["name"] for predict_tool in predict_state_metadata
                 )
 
+            # 判断是否为并行工具调用切换：当前 chunk 带有 name+id（新工具起始），
+            # 且 current_stream 中已有另一个工具在进行中（tool_call_id 不同）
+            is_parallel_tool_switch = (
+                tool_call_data
+                and tool_call_data.get("name")
+                and tool_call_data.get("id")
+                and has_current_stream
+                and current_stream.get("tool_call_id")
+                and current_stream["tool_call_id"] != tool_call_data["id"]
+            )
+
             is_tool_call_start_event = (
                 tool_call_data
                 and tool_call_data.get("name")
-                and (not has_current_stream or not current_stream.get("tool_call_id"))
+                and (not has_current_stream or not current_stream.get("tool_call_id") or is_parallel_tool_switch)
             )
             is_tool_call_args_event = (
                 has_current_stream
@@ -642,6 +653,15 @@ class LangGraphAgent:
                         TextMessageEndEvent(
                             type=EventType.TEXT_MESSAGE_END,
                             message_id=current_stream["id"],
+                            raw_event=event,
+                        )
+                    )
+                elif is_parallel_tool_switch:
+                    # 并行工具调用切换：先结束上一个工具调用
+                    yield self._dispatch_event(
+                        ToolCallEndEvent(
+                            type=EventType.TOOL_CALL_END,
+                            tool_call_id=current_stream["tool_call_id"],
                             raw_event=event,
                         )
                     )

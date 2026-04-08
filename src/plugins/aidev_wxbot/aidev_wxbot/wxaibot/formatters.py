@@ -12,6 +12,7 @@ from logging import getLogger
 from typing import TYPE_CHECKING
 
 from aidev_agent.core.ag_ui.types import CustomMessageType
+from aidev_bkplugin.services.agent import build_session_detail_url, get_agent_config_info
 
 from .context import LlmChunkMsg
 
@@ -67,7 +68,7 @@ _NODE_STATE_ICONS: dict[str, str] = {
 def _node_display(state: str) -> tuple[str, str]:
     """将节点原始状态转换为 (中文标签, 图标)。"""
     label = _NODE_STATE_LABELS.get(state, "待执行")
-    icon = _NODE_STATE_ICONS.get(label, "⏸")
+    icon = _NODE_STATE_ICONS.get(label, "⚪")
     return label, icon
 
 
@@ -81,13 +82,14 @@ def handle_flow_custom_event(
     chunk_json: dict,
     llm_chunk: LlmChunkMsg,
     rabbitmq_client: RabbitMQClient,
+    session_code: str = "",
 ) -> None:
     """
     分发 Flow Agent 的 CUSTOM 事件到具体处理函数。
     事件分发：
     - flow_agent_start  → think_content（任务启动信息）
     - flow_agent_result → think_content（轮询中间状态，追加节点进度）
-    - flow_agent_end    → content（最终执行结果）
+    - flow_agent_end    → content（最终执行结果 + 小鲸跳转链接）
     """
     value = chunk_json.get("value") or {}
 
@@ -96,7 +98,7 @@ def handle_flow_custom_event(
     elif event_name == CustomMessageType.FLOW_AGENT_RESULT.value:
         _on_flow_result(value, llm_chunk, rabbitmq_client)
     elif event_name == CustomMessageType.FLOW_AGENT_END.value:
-        _on_flow_end(value, llm_chunk, rabbitmq_client)
+        _on_flow_end(value, llm_chunk, rabbitmq_client, session_code=session_code)
     else:
         logger.debug(f"stream_id:{llm_chunk.stream_id} 未处理的 flow custom event: {event_name}")
 
@@ -127,7 +129,7 @@ def _on_flow_result(value: dict, llm_chunk: LlmChunkMsg, rabbitmq_client: Rabbit
     running_count = state_counts.get("RUNNING", 0)
     if running_count:
         summary_parts.append(f"执行中: {running_count}")
-    pending_count = total - finished_count - running_count - state_counts.get("FAILED", 0)
+    pending_count = max(0, total - finished_count - running_count - state_counts.get("FAILED", 0))
     if pending_count > 0:
         summary_parts.append(f"待执行: {pending_count}")
     failed_count = state_counts.get("FAILED", 0) + state_counts.get("REVOKED", 0)
@@ -161,8 +163,13 @@ def _on_flow_result(value: dict, llm_chunk: LlmChunkMsg, rabbitmq_client: Rabbit
     logger.debug(f"stream_id:{llm_chunk.stream_id} flow_agent_result: state={task_state}")
 
 
-def _on_flow_end(value: dict, llm_chunk: LlmChunkMsg, rabbitmq_client: RabbitMQClient) -> None:
-    """最终结果写入正式内容（content），思考内容追加结束标记。"""
+def _on_flow_end(
+    value: dict,
+    llm_chunk: LlmChunkMsg,
+    rabbitmq_client: RabbitMQClient,
+    session_code: str = "",
+) -> None:
+    """最终结果写入正式内容，思考内容追加结束标记，附带小鲸跳转链接。"""
     task_id = value.get("task_id", "")
     is_error = value.get("error", False)
     task_state = value.get("state", "")
@@ -180,6 +187,12 @@ def _on_flow_end(value: dict, llm_chunk: LlmChunkMsg, rabbitmq_client: RabbitMQC
         llm_chunk.content = f"流程任务执行完成\n任务ID: {task_id}"
         if outputs_text:
             llm_chunk.content += f"\n\n执行结果:\n{outputs_text}"
+
+    # 拼接小鲸跳转链接
+    if session_code:
+        detail_url = build_session_detail_url(session_code)
+        if detail_url:
+            llm_chunk.content += f"\n\n[查看详情]({detail_url})"
 
     llm_chunk.is_finish = True
     llm_chunk.append_to_cache(rabbitmq_client)

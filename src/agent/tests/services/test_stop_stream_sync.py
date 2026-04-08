@@ -15,11 +15,11 @@ import time
 import aidev_agent.services.messages_handler.streaming_helper as streaming_helper_module
 import pytest
 from aidev_agent.services.messages_handler import (
-    STOPPED_CHUNK,
     GeneratorStreamingHelper,
     InMemoryQueueMessageHandler,
 )
 from aidev_agent.services.messages_handler.constants import TimeoutConfig
+from aidev_agent.utils.event import RunId, emit_run_finished_event
 
 
 class TestConsumerNotifyOnCancel:
@@ -238,7 +238,9 @@ class TestEndToEndStopAndResume:
 
         assert "chunk_0" in collected
         assert "chunk_1" in collected
-        assert STOPPED_CHUNK in collected
+        # _consume_stopped_session 耗尽消息后 yield RUN_FINISHED SSE，而非 STOPPED_CHUNK
+        expected_run_finished = emit_run_finished_event(thread_id=tid, run_id=RunId.STOPPED)
+        assert expected_run_finished in collected
         assert not handler.is_stopped(tid), "恢复后 stopped 标记应清除"
 
     def test_stop_no_cache_restarts_generator(self, handler):
@@ -391,7 +393,9 @@ class TestFullStopSequence:
         )
 
         assert finished
-        assert STOPPED_CHUNK in collected
+        # Consumer drain 超时后 yield RUN_FINISHED SSE（runId=cancelled），而非 STOPPED_CHUNK
+        expected_run_finished = emit_run_finished_event(thread_id=tid, run_id=RunId.CANCELLED)
+        assert expected_run_finished in collected
 
     def test_stop_timeout_degradation_no_consumer(self, handler):
         """无 Consumer 场景：stop wait 超时 → 降级 mark_stopped → 调 API"""

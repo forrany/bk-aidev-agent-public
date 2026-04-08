@@ -31,7 +31,7 @@ from aidev_bkplugin.services.agent import (
 )
 from aidev_bkplugin.utils import bkaidev_api_client
 
-from .auth import WxFlowAgentClient, resolve_channel_admin_rtx
+from .auth import WxFlowAgentClient
 from .context import LlmChunkMsg
 from .stream import consume_chat_stream, consume_flow_stream
 
@@ -118,7 +118,7 @@ class FlowAgentStrategy:
     """Flow Agent 策略 —— 启动 bkflow 任务，轮询状态并推送结构化进度。
 
     编排流程：
-    1. 解析管理员 RTX
+    1. 确定用户 RTX
     2. 获取/创建 session
     3. 保存用户输入
     4. 构建 FlowAgentCompletionAgent
@@ -137,8 +137,9 @@ class FlowAgentStrategy:
     ) -> None:
         start_time = time.time()
 
-        # 1. 解析管理员 RTX
-        rtx_username = resolve_channel_admin_rtx(username)
+        # 1. username 由 ContextGenerator 通过 convert_to_rtx 转换而来
+        rtx_username = username
+        logger.info(f"[FlowAgentStrategy] 使用 RTX: {rtx_username}")
 
         # 2. 获取/创建 session
         session_code = get_or_create_session_by_thread_id(rtx_username, thread_id)
@@ -163,7 +164,7 @@ class FlowAgentStrategy:
         # 5. 执行并消费 SSE 流
         generator = agent_instance.execute()
         logger.info(f"stream_id:{stream_id} flow agent started, session_code={session_code}")
-        consume_flow_stream(generator, stream_id, start_time, rabbitmq_client)
+        consume_flow_stream(generator, stream_id, start_time, rabbitmq_client, session_code=session_code)
 
 
 # ---------------------------------------------------------------------------

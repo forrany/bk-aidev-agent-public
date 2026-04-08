@@ -7,6 +7,8 @@ from typing import Any, Callable, Generator
 from ag_ui.core import EventType, RunErrorEvent
 from ag_ui.encoder import EventEncoder
 
+from aidev_agent.utils.event import RunId, emit_run_finished_event
+
 from .base import BaseMessageQueueHandler, ConsumerPreemptedError
 from .constants import (
     CANCELLED_CHUNK,
@@ -14,7 +16,6 @@ from .constants import (
     HEARTBEAT_CHUNK,
     HEARTBEAT_INTERVAL,
     HEARTBEAT_TIMEOUT,
-    STOPPED_CHUNK,
     TimeoutConfig,
 )
 from .factory import message_handler_factory
@@ -277,8 +278,9 @@ class GeneratorStreamingHelper:
                 if not messages:
                     empty_rounds += 1
                     if empty_rounds >= max_empty_rounds:
-                        # 没有更多消息了，发送 STOPPED_CHUNK 并结束
-                        yield STOPPED_CHUNK
+                        # 没有更多消息了，发送 RUN_FINISHED 事件并结束
+                        # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                        yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.STOPPED)
                         # 清理队列（因为已经展示完了）
                         self.message_handler.mark_completed(self.thread_id)
                         # 清除停止标记
@@ -301,7 +303,8 @@ class GeneratorStreamingHelper:
             except TimeoutError:
                 empty_rounds += 1
                 if empty_rounds >= max_empty_rounds:
-                    yield STOPPED_CHUNK
+                    # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                    yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.STOPPED)
                     self.message_handler.mark_completed(self.thread_id)
                     self.message_handler.clear_stopped(self.thread_id)
                     return
@@ -439,7 +442,8 @@ class GeneratorStreamingHelper:
                         self.message_handler.mark_stopped(self.thread_id)
                     # 通知 stop 接口：流已结束，可以继续后续操作
                     self._notify_consumer_cancelled_safely()
-                    yield STOPPED_CHUNK
+                    # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                    yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.CANCELLED)
                     return
 
                 self.message_handler.check_consumer(self.thread_id, consumer_id)
@@ -471,7 +475,8 @@ class GeneratorStreamingHelper:
                         logger.info(f"Stream cancelled for thread_id={self.thread_id}, DLQ content preserved")
                         # 通知 stop 接口：流已结束，可以继续后续操作
                         self._notify_consumer_cancelled_safely()
-                        yield STOPPED_CHUNK
+                        # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                        yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.CANCELLED)
                         return
                     if is_resuming and self._should_filter_on_resume(item):
                         logger.debug(f"Filtered thinking event in resume mode for thread_id={self.thread_id}")

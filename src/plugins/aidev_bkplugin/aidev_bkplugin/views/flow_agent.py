@@ -31,23 +31,13 @@ class FlowAgentViewSet(PluginViewSet):
     content_negotiation_class = IgnoreClientContentNegotiation
 
     @staticmethod
-    def _get_username(request: Request) -> str:
-        """从请求中提取 username，兜底从请求体或 header 获取"""
-        username = request.user.username
-        if not username:
-            username = request.data.get("username", "") or request.META.get("HTTP_X_BKAIDEV_USER", "")
-        return username
-
-    @staticmethod
     def _handle_api_error(action_name: str, err: Exception) -> None:
         """统一的 API 异常处理：记录日志并抛出 ClientBlueException"""
         logger.exception("FlowAgentViewSet %s error: %s", action_name, err)
         message = getattr(err, "message", str(err))
         raise ClientBlueException(message=message)
 
-    def _session_code_action(
-        self, request: Request, action_name: str, client_method_name: str
-    ) -> Response:
+    def _session_code_action(self, request: Request, action_name: str, client_method_name: str) -> Response:
         """stop / pause / resume 三个操作的通用执行逻辑
 
         Args:
@@ -56,7 +46,7 @@ class FlowAgentViewSet(PluginViewSet):
             client_method_name: flow agent client 上要调用的方法名
                 （如 "stop_flow_agent_task"、"pause_flow_agent_task"）
         """
-        username = self._get_username(request)
+        username = self.get_username()
         session_code = request.data.get("session_code", "")
 
         try:
@@ -91,7 +81,7 @@ class FlowAgentViewSet(PluginViewSet):
             "task_id": 789012
         }
         """
-        username = self._get_username(request)
+        username = self.get_username()
         session_code = request.data.get("session_code", "")
         context = request.data.get("context", [])
         execute_kwargs_data = request.data.get("execute_kwargs", {})
@@ -139,7 +129,7 @@ class FlowAgentViewSet(PluginViewSet):
         }
         """
         task_id = pk
-        username = self._get_username(request)
+        username = self.get_username()
 
         try:
             result = bkaidev_api_client.get_flow_agent_task_info(
@@ -171,7 +161,7 @@ class FlowAgentViewSet(PluginViewSet):
         }
         """
         task_id = pk
-        username = self._get_username(request)
+        username = self.get_username()
 
         try:
             result = bkaidev_api_client.get_flow_agent_task_node_info(

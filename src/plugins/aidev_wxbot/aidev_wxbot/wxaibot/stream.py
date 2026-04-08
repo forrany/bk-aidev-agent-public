@@ -165,6 +165,7 @@ def consume_flow_stream(
     stream_id: str,
     start_time: float,
     rabbitmq_client: RabbitMQClient,
+    session_code: str = "",
 ) -> None:
     """消费 Flow Agent SSE 流并桥接到企微 RabbitMQ 队列。
 
@@ -185,7 +186,10 @@ def consume_flow_stream(
             event_type = chunk_json.get("type", "")
 
             if event_type == EventType.CUSTOM:
-                handle_flow_custom_event(chunk_json.get("name", ""), chunk_json, llm_chunk, rabbitmq_client)
+                handle_flow_custom_event(
+                    chunk_json.get("name", ""), chunk_json, llm_chunk, rabbitmq_client,
+                    session_code=session_code,
+                )
 
             elif event_type == EventType.RUN_ERROR:
                 LlmChunkMsg(

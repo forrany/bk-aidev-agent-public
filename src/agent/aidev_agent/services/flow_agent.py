@@ -20,15 +20,16 @@ import uuid
 from logging import getLogger
 from typing import Any, Callable, Generator
 
-from ag_ui.core import BaseEvent, CustomEvent, EventType, RunErrorEvent, RunFinishedEvent, RunStartedEvent
+from ag_ui.core import BaseEvent, CustomEvent, EventType, RunErrorEvent, RunStartedEvent
 from ag_ui.encoder import EventEncoder
 from pydantic import BaseModel, Field
 
 from aidev_agent.api import BKAidevApi
-from aidev_agent.core.ag_ui.types import CustomMessageType
 from aidev_agent.config import settings as agent_settings
+from aidev_agent.core.ag_ui.types import CustomMessageType
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper, StreamCancelledError
 from aidev_agent.services.protocols import FlowAgentClient, FlowAgentPollClient
+from aidev_agent.utils.event import emit_run_finished_event
 
 logger = getLogger(__name__)
 
@@ -61,6 +62,12 @@ class FlowAgentCompletionAgent(BaseModel):
 
     # 资源管理器（用于调用 flow agent start API）
     resource_manager: FlowAgentClient | None = None
+
+    # 轮询客户端（用于轮询 task_info）
+    poll_client: FlowAgentPollClient | None = None
+
+    # 用户名（用于认证）
+    username: str | None = None
 
     # 轮询配置
     poll_interval: float = Field(
@@ -294,15 +301,16 @@ class FlowAgentCompletionAgent(BaseModel):
         return BKAidevApi.get_client()
 
     def _get_poll_client(self) -> FlowAgentPollClient:
-        """获取轮询专用客户端 —— 直接使用 SDK client 调平台 API Gateway
+        """获取轮询专用客户端
 
-        轮询 task_info 不需要经过 plugin 层中转，直接走 API Gateway 即可。
+        优先使用外部传入的 poll_client，否则使用默认的 BKAidevApi.get_client()。
+        轮询 task_info 需要传递用户认证信息（X-BKAIDEV-USER header）。
         """
+        if self.poll_client is not None:
+            return self.poll_client
         return BKAidevApi.get_client()
 
-    def _emit_error_and_finish(
-        self, encoder: EventEncoder, run_id: str, message: str
-    ) -> Generator[str, None, None]:
+    def _emit_error_and_finish(self, encoder: EventEncoder, run_id: str, message: str) -> Generator[str, None, None]:
         """发送 RUN_ERROR + RUN_FINISHED 事件对
 
         在超时、连续失败、未捕获异常等场景下使用，确保前端收到完整的
@@ -321,13 +329,18 @@ class FlowAgentCompletionAgent(BaseModel):
     def _emit_finish(self, encoder: EventEncoder, run_id: str) -> Generator[str, None, None]:
         """发送 RUN_FINISHED 事件
 
+        使用通用的事件发送函数，确保统一的事件格式和编码。
+
         Args:
-            encoder: SSE 编码器
+            encoder: SSE 编码器（此参数保留以兼容现有调用，但不再使用）
             run_id: 当前 run 的唯一标识
         """
-        finished_event = RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=self.thread_id, run_id=run_id)
-        self._dispatch_event(finished_event)
-        yield encoder.encode(finished_event)
+        # 使用通用的事件发送函数，并传入事件处理器
+        yield emit_run_finished_event(
+            thread_id=self.thread_id,
+            run_id=run_id,
+            event_handler=self._dispatch_event,
+        )
 
     @staticmethod
     def _make_custom_event(name: str, value: Any) -> CustomEvent:

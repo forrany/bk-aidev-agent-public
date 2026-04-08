@@ -225,7 +225,7 @@ class TestWriteFileToolGenerator:
             tmppath = Path(tmpdir)
             (tmppath / "test.txt").write_text("old content")
 
-            backend = FilesystemBackend(root_dir=tmpdir)
+            backend = FilesystemBackend(root_dir=tmpdir, virtual_mode=True)
             tool = _write_file_tool_generator(backend)
 
             result = tool.invoke({"file_path": "/test.txt", "content": "new content"})

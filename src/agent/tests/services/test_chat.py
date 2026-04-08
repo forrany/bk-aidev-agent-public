@@ -153,6 +153,80 @@ class TestCommonAgentChatStreaming:
             f"工具结果应该包含天气信息，实际: {tool_result_text[:100]}"
         )
 
+    def test_parallel_tool_calls(self):
+        """case 2b: 并行工具调用
+
+        测试当 LLM 返回多个并行工具调用时，agent 正确处理：
+        1. 两个工具同时被调用
+        2. 两个工具的结果都被收集
+        3. 最终汇总两个工具的结果
+        """
+        llm = MockChatModel(
+            mock_responses=[
+                # 第一个响应：返回两个并行工具调用（不同 index 表示并行）
+                MockResponse(
+                    content="",
+                    tool_calls=[
+                        {"name": "get_weather", "args": {"location": "广州"}, "id": "call_1", "index": 0},
+                        {"name": "get_weather", "args": {"location": "深圳"}, "id": "call_2", "index": 1},
+                    ],
+                ),
+                # 第二个响应：返回工具结果的总结
+                MockResponse(content="根据查询结果，广州今天多云25度，深圳晴朗28度。"),
+            ],
+            stream_chunk_size=2,
+            loop=False,
+        )
+        agent = ChatCompletionAgent(
+            chat_model=llm,
+            chat_history=[
+                ChatPrompt(id="1", role="user", content="今天广州和深圳的天气怎么样？"),
+            ],
+            tools=[get_weather],
+        )
+
+        results = []
+        for each in agent.execute(ExecuteKwargs(stream=True)):
+            _each = json.loads(each[6:])
+            results.append(_each)
+
+        # 验证1：有两个工具调用开始事件
+        tool_call_start_events = [r for r in results if r.get("type") == EventType.TOOL_CALL_START]
+        assert len(tool_call_start_events) == 2, f"应该有两个工具调用开始事件，实际: {len(tool_call_start_events)}"
+
+        # 验证2：两个工具都被调用
+        tool_names = [e.get("toolCallName") for e in tool_call_start_events]
+        assert tool_names.count("get_weather") == 2, f"应该调用了两次 get_weather 工具，实际: {tool_names}"
+
+        # 验证3：验证两个工具调用的参数
+        tool_call_args_events = [r for r in results if r.get("type") == EventType.TOOL_CALL_ARGS]
+        assert len(tool_call_args_events) == 2, f"应该有两个工具调用参数事件，实际: {len(tool_call_args_events)}"
+
+        # 验证参数内容
+        args_list = [json.loads(e.get("delta", "{}")) for e in tool_call_args_events]
+        locations = [args.get("location", "") for args in args_list]
+        assert "广州" in locations, f"应该包含广州，实际: {locations}"
+        assert "深圳" in locations, f"应该包含深圳，实际: {locations}"
+
+        # 验证4：有两个工具调用结束事件
+        tool_call_end_events = [r for r in results if r.get("type") == EventType.TOOL_CALL_END]
+        assert len(tool_call_end_events) == 2, f"应该有两个工具调用结束事件，实际: {len(tool_call_end_events)}"
+
+        # 验证5：有两个工具执行结果事件
+        tool_result_events = [r for r in results if r.get("type") == EventType.TOOL_CALL_RESULT]
+        assert len(tool_result_events) == 2, f"应该有两个工具执行结果事件，实际: {len(tool_result_events)}"
+
+        # 验证6：工具结果内容包含两个城市的天气信息
+        tool_results = [e.get("content", "") for e in tool_result_events]
+        tool_result_text = "".join(tool_results)
+        assert "广州" in tool_result_text, f"工具结果应该包含广州，实际: {tool_result_text}"
+        assert "深圳" in tool_result_text, f"工具结果应该包含深圳，实际: {tool_result_text}"
+
+        # 验证7：最终文本响应包含汇总结果
+        assert_content_type_equal(
+            results, EventType.TEXT_MESSAGE_CONTENT, "根据查询结果，广州今天多云25度，深圳晴朗28度。"
+        )
+
     def test_tool_call_after_reasoning_emits_model_stream_events(self):
         llm = MockChatModel(
             mock_responses=[
