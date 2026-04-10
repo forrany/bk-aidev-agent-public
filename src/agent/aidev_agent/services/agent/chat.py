@@ -266,6 +266,9 @@ class ChatCompletionAgent(BaseModel):
             knowledge_llm=self.chat_model
             if self.non_thinking_llm is None
             else ChatModel.get_setup_instance(model=self.non_thinking_llm),
+            non_thinking_llm=self.chat_model
+            if self.non_thinking_llm is None
+            else ChatModel.get_setup_instance(model=self.non_thinking_llm),
             extra_tools=self.tools,
             chat_history=messages[:-1],
             tool_execution_interval=self.TOOL_EXECUTION_INTERVAL,

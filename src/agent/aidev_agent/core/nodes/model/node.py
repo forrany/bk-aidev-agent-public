@@ -36,6 +36,7 @@ from .basic_middleware import (
     BaseVariablesMiddleware,
     DeepSeekR1VariablesMiddleware,
     SpecialVariablesMiddleware,
+    SpecialVariablesPostMiddleware,
 )
 from .context_assembly import ContextAssembly
 from .prompt_middleware import (
@@ -337,6 +338,11 @@ def build_model_node(
             token_limit=node_options.token_limit,
             token_margin=node_options.token_margin,
         ),
+    )
+    # 工具压缩后重新渲染agent_scratchpad
+    context_assembly.add_middleware(
+        "variable", 
+        SpecialVariablesPostMiddleware(use_structured_response=use_structured_response),
     )
     context_assembly.add_middleware(
         "variable",

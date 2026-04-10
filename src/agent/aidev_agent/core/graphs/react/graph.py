@@ -503,7 +503,16 @@ class ReActAgentBuilder:
             else default_node_options.role_prompt
         )
         use_general_knowledge_on_miss = knowledge_query_options.is_response_when_no_knowledgebase_match
-
+        token_limit = (
+            knowledge_query_options.llm_token_limit
+            if knowledge_query_options.llm_token_limit is not None
+            else default_node_options.token_limit
+        )
+        token_margin = (
+            knowledge_query_options.token_limit_margin
+            if knowledge_query_options.token_limit_margin is not None
+            else default_node_options.token_margin
+        )
         node_options = ModelNodeSettings(
             use_structured_response=use_structured_response,
             enable_query_clarification=enable_query_clarification,
@@ -511,6 +520,8 @@ class ReActAgentBuilder:
             role_prompt=role_prompt,
             use_general_knowledge_on_miss=use_general_knowledge_on_miss,
             tool_output_compress_thrd=agent_options.intent_recognition_options.tool_output_compress_thrd,
+            token_limit=token_limit,
+            token_margin=token_margin,
         )
 
         if self._enable_skills and self._skill_registry is not None:
