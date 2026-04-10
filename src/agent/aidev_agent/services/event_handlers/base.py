@@ -471,11 +471,10 @@ class BaseSessionWriter(ABC):
                 self._flow_result_content_id = content_id
 
     def handle_flow_agent_end(self, event) -> None:
-        """处理 Flow Agent 结束事件，仅更新 session 的 flow_agent 状态
+        """处理 Flow Agent 结束事件，回写 assistant 消息并更新 session 元数据
 
-        flow_agent_end 事件不再创建额外的 assistant 消息记录，
-        流程结果已在 flow_agent_result 的 activity 消息中完整保存。
-        此处仅负责断点续传：更新 session 元数据中的 flow_agent 状态。
+        1. 回写 role=assistant 消息（task_outputs 作为 AI 回复内容）
+        2. 断点续传：更新 session 中的 task_id
 
         Args:
             event: 包含 flow_agent_end 数据的事件（CustomEvent 或 RawEvent）
@@ -485,8 +484,33 @@ class BaseSessionWriter(ABC):
         else:
             event_data = event.event.get("data", {})
 
-        # 断点续传：任务结束，更新 session 中的 task_id（确保最终状态已持久化）
         task_id = event_data.get("task_id", "")
+        task_outputs = event_data.get("task_outputs")
+
+        # 1. 回写 assistant 消息（task_outputs 作为 AI 回复内容）
+        if task_outputs:
+            # task_outputs 可能格式：[{"key": "output", "value": "..."}] 或直接是字符串
+            if isinstance(task_outputs, list):
+                # 尝试从列表中提取 value 字段
+                content_parts = []
+                for item in task_outputs:
+                    if isinstance(item, dict):
+                        content_parts.append(str(item.get("value", "")))
+                    else:
+                        content_parts.append(str(item))
+                content = "\n".join(content_parts)
+            else:
+                content = str(task_outputs)
+
+            if content and content.strip():
+                message_id = f"flow_assistant_{uuid.uuid4().hex[:12]}"
+                self._write_assistant_message(
+                    message_id=message_id,
+                    content=content,
+                    tool_calls=[],
+                )
+
+        # 2. 断点续传：任务结束，更新 session 中的 task_id（确保最终状态已持久化）
         if task_id:
             self.update_flow_agent_info(task_id=task_id)
 
