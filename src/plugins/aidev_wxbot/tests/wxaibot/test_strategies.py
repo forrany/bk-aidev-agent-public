@@ -236,20 +236,21 @@ class TestConsumeFlowStream:
 
 
 class TestHandleFlowCustomEvent:
-    """验证三阶段展示策略：start→think, result→think(含节点), end→content"""
+    """验证三阶段展示策略：start→缓存task_id, result→think(节点名称列表)+缓存nodes, end→content(最终状态)"""
 
-    def test_start_to_think_content(self, mock_rabbitmq):
-        """flow_agent_start: task_id 写入 think_content，content 为空"""
+    def test_start_saves_task_id(self, mock_rabbitmq):
+        """flow_agent_start: 缓存 task_id，不写 think_content，content 为空"""
         chunk = LlmChunkMsg(stream_id="s_1_1000")
         handle_flow_custom_event("flow_agent_start", {"value": {"task_id": "42"}}, chunk, mock_rabbitmq)
 
-        assert "42" in chunk.think_content
-        assert "已启动" in chunk.think_content
+        assert chunk._flow_task_id == "42"
+        assert chunk._flow_nodes_initialized is False
+        assert chunk.think_content == ""
         assert chunk.content == ""
         assert not chunk.is_finish
 
-    def test_result_shows_node_detail_with_icons(self, mock_rabbitmq):
-        """flow_agent_result: dict nodes → 图标 + 名称 + 状态 + 耗时 + 统计"""
+    def test_result_shows_node_names_and_caches_data(self, mock_rabbitmq):
+        """flow_agent_result: 首次展示节点名称列表（无状态），缓存 nodes 和 task_state"""
         chunk = LlmChunkMsg(stream_id="s_1_1000")
         handle_flow_custom_event("flow_agent_result", {"value": {
             "task_state": "RUNNING",
@@ -261,31 +262,50 @@ class TestHandleFlowCustomEvent:
             "statistics": {"total": 3, "state_counts": {"FINISHED": 1, "RUNNING": 1, "PENDING": 1}},
         }}, chunk, mock_rabbitmq)
 
-        # 验证每个节点的图标、名称、中文状态
-        assert "🟢 数据清洗: 成功 (耗时 90s)" in chunk.think_content
-        assert "⏳ 模型训练: 执行中 (耗时 30s)" in chunk.think_content
-        assert "⚪ 汇总: 待执行" in chunk.think_content
-        # 验证统计摘要（中文）
-        assert "成功: 1" in chunk.think_content
-        assert "执行中: 1" in chunk.think_content
+        # 验证节点名称列表（无图标/状态/耗时）
+        # 提取节点名称列表（按行分割，提取 "- 名称" 格式）
+        think_lines = chunk.think_content.split("\n")
+        node_names = [line.strip()[2:] for line in think_lines if line.strip().startswith("- ")]
+        assert "数据清洗" in node_names
+        assert "模型训练" in node_names
+        assert "汇总" in node_names
+        assert "共包含3个节点" in chunk.think_content
+        # 验证缓存了 nodes 和 task_state
+        assert chunk._flow_nodes_cache == {
+            "n1": {"name": "数据清洗", "state": "FINISHED", "elapsed_time": 90},
+            "n2": {"name": "模型训练", "state": "RUNNING", "elapsed_time": 30},
+            "n3": {"name": "汇总", "state": "PENDING", "elapsed_time": 0},
+        }
+        assert chunk._flow_last_task_state == "RUNNING"
         # content 仍为空（中间状态）
         assert chunk.content == ""
 
-    def test_end_success_to_content(self, mock_rabbitmq):
-        """flow_agent_end 成功: content 含结果，think_content 含结束标记，is_finish=True"""
+    def test_end_success_uses_cached_state(self, mock_rabbitmq):
+        """flow_agent_end 成功: 使用缓存的 nodes 展示最终状态，content 含结果"""
         chunk = LlmChunkMsg(stream_id="s_1_1000")
+        # 模拟轮询过程已缓存了 nodes 和 task_state
+        chunk._flow_task_id = "1"
+        chunk._flow_nodes_cache = {
+            "n1": {"name": "数据清洗", "state": "FINISHED", "elapsed_time": 90},
+        }
+        chunk._flow_last_task_state = "FINISHED"
+        # flow_agent_end 事件不携带 nodes 和 state（仅失败时有 state）
         handle_flow_custom_event("flow_agent_end", {"value": {
-            "task_id": "1", "state": "FINISHED", "task_outputs": [{"key": "result", "value": "done"}],
+            "task_id": "1", "task_outputs": [{"key": "result", "value": "done"}],
         }}, chunk, mock_rabbitmq)
 
         assert "完成" in chunk.content
         assert "result: done" in chunk.content
+        # think_content 使用缓存的 nodes 展示最终状态（有图标）
         assert "成功" in chunk.think_content
+        assert "数据清洗" in chunk.think_content
         assert chunk.is_finish
 
     def test_end_error_to_content(self, mock_rabbitmq):
-        """flow_agent_end 失败: content 含中文失败状态"""
+        """flow_agent_end 失败: content 含中文失败状态，state 从 event 获取"""
         chunk = LlmChunkMsg(stream_id="s_1_1000")
+        chunk._flow_task_id = "2"
+        # 失败时 flow_agent_end 会携带 error=True 和 state
         handle_flow_custom_event("flow_agent_end", {"value": {
             "task_id": "2", "error": True, "state": "FAILED",
         }}, chunk, mock_rabbitmq)
@@ -298,7 +318,7 @@ class TestHandleFlowCustomEvent:
         """value 为 None 时不崩溃（防御性边界）"""
         chunk = LlmChunkMsg(stream_id="s_1_1000")
         handle_flow_custom_event("flow_agent_start", {"value": None}, chunk, mock_rabbitmq)
-        assert "未知" in chunk.think_content
+        assert chunk._flow_task_id == "未知"
 
 
 # ---------------------------------------------------------------------------

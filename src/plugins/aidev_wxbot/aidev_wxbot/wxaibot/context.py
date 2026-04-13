@@ -20,7 +20,7 @@ import uuid
 from typing import Any
 
 from django.conf import settings
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aidev_wxbot.api.bkaidev import BkAiDevApi
 from aidev_wxbot.context import Context, Message
@@ -57,6 +57,13 @@ class LlmChunkMsg(BaseModel):
     content: str = Field(default_factory=str)
     stream_id: str = Field(default_factory=str)
     think_content: str = Field(default_factory=str)
+    # Pydantic 私有属性，不参与序列化
+    _cached_think_content: str = PrivateAttr(default="")
+    _flow_task_id: str = PrivateAttr(default="")
+    _flow_nodes_initialized: bool = PrivateAttr(default=False)
+    # wxbot formatters 缓存：轮询过程中的最新节点快照和任务状态，供 _on_flow_end 使用
+    _flow_nodes_cache: dict = PrivateAttr(default_factory=dict)
+    _flow_last_task_state: str = PrivateAttr(default="")
 
     @property
     def docs_content(self):
@@ -78,21 +85,23 @@ class LlmChunkMsg(BaseModel):
         try:
             queue_name = self.stream_id
 
-            # 准备消息数据
+            # 缓存 think_content 用于企微轮询保持显示
+            if self.think_content:
+                self._cached_think_content = self.think_content
+
+            # 准备消息数据，包含 cached_think_content 以支持跨实例读取
             message_data = {
                 "content": self.content,
                 "think_content": self.think_content,
+                "cached_think_content": self._cached_think_content,
                 "is_finish": self.is_finish,
                 "docs": self.docs,
                 "timestamp": time.time(),
             }
-
             # 使用独立的连接发送消息，避免并发冲突
             rabbitmq_client.declare_queue(queue_name, durable=False, auto_delete=False)
             success = rabbitmq_client.publish_message("", queue_name, message_data)
-            if success:
-                logger.debug(f"消息已发送到队列 {queue_name}, is_finish: {self.is_finish}")
-            else:
+            if not success:
                 logger.error(f"发送消息到队列 {queue_name} 失败")
 
         except Exception as e:
@@ -121,6 +130,7 @@ class LlmChunkMsg(BaseModel):
                 return stream_msg(THINKING_MSG, self.is_finish, self.stream_id)
 
             latest_message_data = None
+            cached_think = ""
 
             # 批量读取当前积压的消息，但只返回最新快照，避免重复拼接历史内容
             for batch_index in range(MAX_BATCH_CONSUME_COUNT):
@@ -133,6 +143,8 @@ class LlmChunkMsg(BaseModel):
                         continue
 
                     latest_message_data = message_info["body"]
+                    # 从消息体中恢复缓存，解决跨实例缓存丢失问题
+                    cached_think = latest_message_data.get("cached_think_content", "") or cached_think
                     if latest_message_data.get("is_finish", False):
                         break
                     if self._is_think_only_chunk(latest_message_data) and (
@@ -144,6 +156,9 @@ class LlmChunkMsg(BaseModel):
                     return stream_msg("读取消息失败，请重试", True, self.stream_id)
 
             if not latest_message_data:
+                # 队列为空时使用缓存的 think_content 避免内容闪烁
+                if cached_think:
+                    return stream_msg(f"<think>{cached_think}</think>", self.is_finish, self.stream_id)
                 return stream_msg(THINKING_MSG, self.is_finish, self.stream_id)
 
             self.is_finish = latest_message_data.get("is_finish", False)
