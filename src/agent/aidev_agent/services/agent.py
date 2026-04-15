@@ -388,6 +388,11 @@ class AgentInstanceFactory:
         logger.info(f"AgentInstanceFactory: tool_codes->[{tool_codes}]")
         return [self.resource_manager.construct_tool(tool_code) for tool_code in tool_codes] + mcp_result.tools
 
+    def build_skills(self, agent_code: str) -> list | None:
+        """构建关联技能"""
+        config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
+        return config.related_skills
+
     def get_role_prompt(self, agent_code: str) -> str | None:
         """获取角色提示词"""
         config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
@@ -402,6 +407,22 @@ class AgentInstanceFactory:
         """构建Agent提示词"""
         config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
         return config.agent_prompt
+
+    def build_executor_info(self) -> dict:
+        """构建执行用户信息"""
+        info = {"executor": self.username}
+
+        if self.username:
+            try:
+                from bkoauth import get_access_token_by_user
+
+                access_token = get_access_token_by_user(self.username).access_token
+                if access_token:
+                    info["access_token"] = access_token
+            except Exception as e:
+                logger.error(f"Failed to get access token: {e}")
+
+        return info
 
     def build_checkpointer(self) -> BaseCheckpointSaver:
         """获取 Checkpointer，必须注入，否则抛出异常"""
@@ -672,6 +693,7 @@ class AgentInstanceFactory:
         chat_agent_args = {
             "chat_model": factory.build_chat_model(agent_code),
             "non_thinking_llm": factory.build_non_thinking_llm(agent_code),
+            "skills": factory.build_skills(agent_code),
             "tools": tools,
             "mcp_fetch_failures": mcp_fetch_failures,
             "knowledge_bases": factory.build_knowledge_bases(agent_code),
@@ -679,6 +701,7 @@ class AgentInstanceFactory:
             "chat_history": factory.build_chat_history(session_context_data, agent_code),
             "agent_options": factory.build_agent_options(agent_code),
             "agent_prompt": factory.build_agent_prompt(agent_code),
+            "executor_info": factory.build_executor_info(),
             "checkpointer": factory.build_checkpointer(),
             "role_prompt": factory.get_role_prompt(agent_code),
         }

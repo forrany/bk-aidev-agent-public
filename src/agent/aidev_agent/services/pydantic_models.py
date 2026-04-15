@@ -360,3 +360,9 @@ class AgentExecutorKwargs(BaseModel):
 
     # Checkpoint（对话状态持久化）
     checkpointer: Optional[Any] = Field(default=None, description="对话状态检查点保存器（BaseCheckpointSaver）")
+
+    # 关联技能配置
+    skills: Optional[list] = Field(default=None, description="关联技能配置")
+
+    # 执行用户信息
+    executor_info: Optional[dict] = Field(default=None, description="执行用户信息")

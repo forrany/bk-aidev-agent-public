@@ -21,6 +21,7 @@ class AgentConfig(BaseModel):
     opening_mark: str | None = Field(None, description="智能体开场白")
     generating_keyword: str | None = Field(description="生成关键词", default="生成中")
     mcp_server_config: dict | None = Field(None, description="MCP服务器配置")
+    related_skills: list | None = Field(None, description="关联技能配置")
     agent_options: AgentOptions = Field(..., description="智能体选项")
     command_agent_mapping: dict = Field(default_factory=dict, description="智能体映射关联")
     agent_prompt: str | None = Field(None, description="智能体提示词(内嵌)")
@@ -107,6 +108,7 @@ class AgentConfigManager:
             tool_codes=res["related_tools"],
             opening_mark=res["conversation_settings"]["opening_remark"] or None,
             mcp_server_config=res.get("mcp_server_config", {}).get("mcpServers", {}),
+            related_skills=res.get("related_skills"),
             agent_options=AgentOptions(
                 intent_recognition_options=IntentRecognition.model_validate(intent_recognition_data),
                 knowledge_query_options=KnowledgebaseSettings.model_validate(knowledgebase_settings_data),

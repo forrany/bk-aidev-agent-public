@@ -40,6 +40,8 @@ class ChatCompletionAgent(BaseModel):
     chat_history: list[ChatPrompt] | None = None
     files: list[dict] = Field(default_factory=list)
     tools: Optional[list[StructuredTool]] = None
+    skills: Optional[list] = None
+    executor_info: Optional[dict] = None
     knowledge_bases: Optional[list[dict]] = None
     knowledges: Optional[list[dict]] = None
     support_vision: bool = False  # 是否支持图片
@@ -307,6 +309,8 @@ class ChatCompletionAgent(BaseModel):
             agent_prompt=self.agent_prompt,
             callbacks=self.callbacks,
             agent_options=self.agent_options,
+            skills=self.skills,
+            executor_info=self.executor_info,
             execute_kwargs=execute_kwargs,
             checkpointer=self.checkpointer if self.checkpointer else MemorySaver(),
         )

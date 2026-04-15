@@ -10,12 +10,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 
 import pytest
-from aidev_agent.core.tools.filesystem.backend import (
-    EditResult,
-    ExecuteResult,
-    FilesystemBackend,
-    WriteResult,
-)
+from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
+from aidev_agent.core.tools.runtime_tools.types import EditResult, ExecuteResult, WriteResult
 
 
 class TestFilesystemBackendInitialization:
@@ -496,6 +492,41 @@ class TestFilesystemBackendAexecute:
             assert isinstance(result, ExecuteResult)
             assert "hello" in result.output
             assert result.exit_code == 0
+
+
+class TestFilesystemBackendEnvs:
+    """Test envs parameter in __init__."""
+
+    def test_envs_with_skill_dir_scripts_exists(self):
+        """envs with SKILL_DIR should set cwd to scripts/ when it exists."""
+        with TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "my-skill"
+            skill_dir.mkdir()
+            scripts_dir = skill_dir / "scripts"
+            scripts_dir.mkdir()
+            (scripts_dir / "run.sh").write_text("echo hello\n")
+
+            backend = FilesystemBackend(envs={"SKILL_DIR": str(skill_dir), "SKILL_NAME": "my-skill"})
+            assert backend.cwd == scripts_dir.resolve()
+
+    def test_envs_with_skill_dir_no_scripts(self):
+        """envs with SKILL_DIR should set cwd to skill_dir when scripts/ doesn't exist."""
+        with TemporaryDirectory() as tmpdir:
+            skill_dir = Path(tmpdir) / "my-skill"
+            skill_dir.mkdir()
+
+            backend = FilesystemBackend(envs={"SKILL_DIR": str(skill_dir), "SKILL_NAME": "my-skill"})
+            assert backend.cwd == skill_dir.resolve()
+
+    def test_envs_without_skill_dir(self):
+        """envs without SKILL_DIR should not affect cwd."""
+        backend = FilesystemBackend(envs={"OTHER": "value"})
+        assert backend.cwd == Path.cwd()
+
+    def test_no_envs(self):
+        """No envs should use default cwd."""
+        backend = FilesystemBackend()
+        assert backend.cwd == Path.cwd()
 
 
 class TestDataClasses:
