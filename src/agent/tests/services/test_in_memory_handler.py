@@ -9,7 +9,6 @@ import pytest
 from aidev_agent.enums import MessageHandlerType
 from aidev_agent.services.messages_handler import (
     CANCELLED_CHUNK,
-    STOPPED_CHUNK,
     GeneratorStreamingHelper,
     InMemoryQueueMessageHandler,
     message_handler_factory,
@@ -17,6 +16,12 @@ from aidev_agent.services.messages_handler import (
 from aidev_agent.services.messages_handler.config import MessageHandlerConfig
 from aidev_agent.services.messages_handler.constants import EnvVarNames
 from aidev_agent.services.messages_handler.factory import _create_handler
+from aidev_agent.utils.event import RunId, emit_run_finished_event
+
+
+def _make_run_finished_chunk(thread_id: str, run_id: str) -> str:
+    """生成 RUN_FINISHED SSE 字符串，用于测试期望值对比。"""
+    return emit_run_finished_event(thread_id=thread_id, run_id=run_id)
 
 
 class TestInMemoryQueueMessageHandler:
@@ -303,7 +308,7 @@ class TestInMemoryQueueMessageHandler:
         assert handler.is_empty(thread_id)
 
     def test_stream_stopped_session_with_pending_messages(self, handler, monkeypatch):
-        """已停止且有缓存内容时，只回放内容并返回 STOPPED_CHUNK。"""
+        """已停止且有缓存内容时，只回放内容并在末尾发送 RUN_FINISHED 事件。"""
         thread_id = "test_stream_stopped_pending"
         helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
         clear_stopped_called = []
@@ -315,7 +320,8 @@ class TestInMemoryQueueMessageHandler:
 
         result = list(helper.stream(iter(())))
 
-        assert result == ["chunk_0", "chunk_1", STOPPED_CHUNK]
+        expected_run_finished = emit_run_finished_event(thread_id=thread_id, run_id=RunId.STOPPED)
+        assert result == ["chunk_0", "chunk_1", expected_run_finished]
         assert clear_stopped_called
         assert handler.is_empty(thread_id)
 
@@ -336,20 +342,25 @@ class TestInMemoryQueueMessageHandler:
         assert clear_stopped_called
 
     @pytest.mark.parametrize(
-        ("gen_items", "expected"),
+        "gen_items",
         [
-            ([CANCELLED_CHUNK], [STOPPED_CHUNK]),
-            (["chunk_0"], ["chunk_0"]),
+            [CANCELLED_CHUNK],
+            ["chunk_0"],
         ],
     )
-    def test_stream_handles_control_and_data_messages(self, handler, gen_items, expected):
+    def test_stream_handles_control_and_data_messages(self, handler, gen_items):
         """验证 CANCELLED_CHUNK 与普通数据在消费侧的处理行为。"""
-        thread_id = f"test_stream_control_{len(gen_items)}_{expected[0]}"
+        thread_id = f"test_stream_control_{len(gen_items)}_{gen_items[0]}"
         helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
 
         result = list(helper.stream(iter(gen_items)))
 
-        assert result == expected
+        if gen_items == [CANCELLED_CHUNK]:
+            # CANCELLED_CHUNK 被消费后，消费者 yield RUN_FINISHED SSE 字符串
+            expected = [_make_run_finished_chunk(thread_id=thread_id, run_id=RunId.CANCELLED)]
+            assert result == expected
+        else:
+            assert result == gen_items
 
     def test_stream_on_complete_exception_is_swallowed(self, handler):
         """on_complete 抛异常时不影响流返回和队列清理。"""
@@ -365,6 +376,30 @@ class TestInMemoryQueueMessageHandler:
 
         assert result == ["chunk_0"]
         assert callback_called
+        assert handler.is_empty(thread_id)
+
+    def test_orphaned_cleanup_after_done_does_not_wait_full_delay_without_consumer(self, handler, monkeypatch):
+        """生产者已发出 done 后若无活跃消费者，应尽快清理而不是始终等满延迟窗口。"""
+        thread_id = "test_stream_orphan_cleanup_fast"
+        helper = GeneratorStreamingHelper(handler, thread_id=thread_id)
+        cleanup_called = threading.Event()
+
+        handler.put(thread_id, "chunk_0")
+
+        original_mark_completed = handler.mark_completed
+
+        def mark_completed_and_signal(tid):
+            original_mark_completed(tid)
+            if tid == thread_id:
+                cleanup_called.set()
+
+        monkeypatch.setattr(helper, "_PRODUCER_CLEANUP_DELAY", 1.0)
+        monkeypatch.setattr(helper, "_DONE_ORPHAN_CLEANUP_GRACE", 0.05)
+        monkeypatch.setattr(handler, "mark_completed", mark_completed_and_signal)
+
+        helper._schedule_session_cleanup(done_event_seen=True)
+
+        assert cleanup_called.wait(timeout=0.3), "done orphaned cleanup should happen promptly without active consumer"
         assert handler.is_empty(thread_id)
 
     def test_stream_keeps_alive_when_generator_blocked(self, handler, monkeypatch):

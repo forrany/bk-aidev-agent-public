@@ -16,6 +16,8 @@ from aidev_agent.packages.langchain_core.tools import make_mcp_tools
 from aidev_agent.services.chat import ChatCompletionAgent
 from aidev_agent.services.common_agent import CommonQAAgent
 from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
+from aidev_agent.services.flow_agent import FlowAgentCompletionAgent
+from aidev_agent.services.protocols import CompletionAgentProtocol
 from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt
 
 logger = logging.getLogger("aidev-agent")
@@ -26,8 +28,8 @@ class AgentInstanceFactory:
     Agent实例工厂 - 支持构建多种类型的Agent
     """
 
-    # Agent类型映射表
-    _agent_classes: Dict[AgentType, Type] = {}
+    # Agent类型映射表 —— 所有注册的 Agent 类应满足 CompletionAgentProtocol
+    _agent_classes: Dict[AgentType, Type[CompletionAgentProtocol]] = {}
     # Agent构建器注册表
     _agent_builders: Dict[AgentType, Callable] = {}
 
@@ -174,6 +176,9 @@ class AgentInstanceFactory:
                 f"Unsupported agent_type: {self.agent_type}. Supported types: {list(self._agent_builders.keys())}"
             )
 
+    # 不需要通用参数（agent_cls, callbacks, run_by_agent）的 Agent 类型
+    _SKIP_COMMON_ARGS_TYPES: frozenset = frozenset({AgentType.FLOW})
+
     def _build_agent_args(self, base_args: dict) -> dict:
         """
         构建Agent特定参数
@@ -181,6 +186,10 @@ class AgentInstanceFactory:
         """
         builder = self._agent_builders[self.agent_type]
         agent_specific_args = builder(self, **base_args)
+
+        # FlowAgent 等类型不需要通用参数（agent_cls, callbacks, run_by_agent）
+        if self.agent_type in self._SKIP_COMMON_ARGS_TYPES:
+            return agent_specific_args
 
         # 合并通用参数
         final_args = {
@@ -379,6 +388,11 @@ class AgentInstanceFactory:
         logger.info(f"AgentInstanceFactory: tool_codes->[{tool_codes}]")
         return [self.resource_manager.construct_tool(tool_code) for tool_code in tool_codes] + mcp_result.tools
 
+    def build_skills(self, agent_code: str) -> list | None:
+        """构建关联技能"""
+        config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
+        return config.related_skills
+
     def get_role_prompt(self, agent_code: str) -> str | None:
         """获取角色提示词"""
         config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
@@ -393,6 +407,22 @@ class AgentInstanceFactory:
         """构建Agent提示词"""
         config = self.config_manager_class.get_config(agent_code=agent_code, resource_manager=self.resource_manager)
         return config.agent_prompt
+
+    def build_executor_info(self) -> dict:
+        """构建执行用户信息"""
+        info = {"executor": self.username}
+
+        if self.username:
+            try:
+                from bkoauth import get_access_token_by_user
+
+                access_token = get_access_token_by_user(self.username).access_token
+                if access_token:
+                    info["access_token"] = access_token
+            except Exception as e:
+                logger.error(f"Failed to get access token: {e}")
+
+        return info
 
     def build_checkpointer(self) -> BaseCheckpointSaver:
         """获取 Checkpointer，必须注入，否则抛出异常"""
@@ -621,11 +651,18 @@ class AgentInstanceFactory:
     def register_agent_type(
         cls,
         agent_type: AgentType,
-        agent_class: Type,
+        agent_class: Type[CompletionAgentProtocol],
         builder_func: Callable,
         override=False,
     ):
-        """注册新的Agent类型"""
+        """注册新的Agent类型
+
+        Args:
+            agent_type: Agent 类型枚举
+            agent_class: Agent 类，必须满足 CompletionAgentProtocol
+            builder_func: 构建器函数
+            override: 是否允许覆盖已有注册
+        """
         if not override and agent_type in cls._agent_classes:
             raise ValueError(f"Agent type '{agent_type}' already exists")
         cls._agent_classes[agent_type] = agent_class
@@ -656,6 +693,7 @@ class AgentInstanceFactory:
         chat_agent_args = {
             "chat_model": factory.build_chat_model(agent_code),
             "non_thinking_llm": factory.build_non_thinking_llm(agent_code),
+            "skills": factory.build_skills(agent_code),
             "tools": tools,
             "mcp_fetch_failures": mcp_fetch_failures,
             "knowledge_bases": factory.build_knowledge_bases(agent_code),
@@ -663,6 +701,7 @@ class AgentInstanceFactory:
             "chat_history": factory.build_chat_history(session_context_data, agent_code),
             "agent_options": factory.build_agent_options(agent_code),
             "agent_prompt": factory.build_agent_prompt(agent_code),
+            "executor_info": factory.build_executor_info(),
             "checkpointer": factory.build_checkpointer(),
             "role_prompt": factory.get_role_prompt(agent_code),
         }
@@ -692,12 +731,40 @@ class AgentInstanceFactory:
             # 可能不需要knowledge_bases等
         }
 
+    @staticmethod
+    def build_flow_agent_args(
+        factory: "AgentInstanceFactory",
+        agent_code: str,
+        session_context_data: List[dict],
+        switch_agent: bool,
+        config_manager_class: type[AgentConfigManager] | None = None,
+    ):
+        """构建
+        FlowAgentCompletionAgent 参数
+        FlowAgent 不需要 chat_model / tools / knowledge 等资源，
+        只需要 resource_manager和轮询配置。
+        flow_start_params 由外部调用方在创建后设置。
+        """
+        return {
+            "resource_manager": factory.resource_manager,
+            "session_code": factory.session_code,
+            "poll_interval": settings.FLOW_AGENT_POLL_INTERVAL,
+            "poll_timeout": settings.FLOW_AGENT_POLL_TIMEOUT,
+        }
+
 
 # 注册默认的Agent类型
 AgentInstanceFactory.register_agent_type(
     agent_type=AgentType.CHAT,
     agent_class=ChatCompletionAgent,
     builder_func=AgentInstanceFactory.build_chat_agent_args,
+)
+
+# 注册 Flow Agent 类型
+AgentInstanceFactory.register_agent_type(
+    agent_type=AgentType.FLOW,
+    agent_class=FlowAgentCompletionAgent,
+    builder_func=AgentInstanceFactory.build_flow_agent_args,
 )
 
 

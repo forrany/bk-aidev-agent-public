@@ -4,6 +4,11 @@ import uuid
 from logging import getLogger
 from typing import Any, Callable, Generator
 
+from ag_ui.core import EventType, RunErrorEvent
+from ag_ui.encoder import EventEncoder
+
+from aidev_agent.utils.event import RunId, emit_run_finished_event
+
 from .base import BaseMessageQueueHandler, ConsumerPreemptedError
 from .constants import (
     CANCELLED_CHUNK,
@@ -11,7 +16,6 @@ from .constants import (
     HEARTBEAT_CHUNK,
     HEARTBEAT_INTERVAL,
     HEARTBEAT_TIMEOUT,
-    STOPPED_CHUNK,
     TimeoutConfig,
 )
 from .factory import message_handler_factory
@@ -19,7 +23,8 @@ from .factory import message_handler_factory
 logger = getLogger(__name__)
 
 # 断点续传时需要过滤的事件类型
-_RESUME_FILTER_EVENT_TYPES: frozenset[str] = frozenset()
+# flow_agent_start 事件在续聊时不应该重复发送，避免前端重新渲染
+_RESUME_FILTER_EVENT_TYPES: frozenset[str] = frozenset({"flow_agent_start"})
 
 
 class GeneratorStreamingHelper:
@@ -60,21 +65,32 @@ class GeneratorStreamingHelper:
     # 生产者结束后延迟清理会话资源的等待时间（秒）
     # 需足够长以允许活跃消费者处理 EOD_CHUNK，又不至于长时间占用资源
     _PRODUCER_CLEANUP_DELAY = 30.0
+    # 当业务流已经发出 [DONE] 且消费者断开时，给一个很短的重连宽限后立即清理
+    _DONE_ORPHAN_CLEANUP_GRACE = 0.5
+    _ORPHAN_CLEANUP_POLL_INTERVAL = 0.1
 
     @staticmethod
-    def _should_filter_on_resume(item: Any) -> bool:  # noqa: ARG004
+    def _should_filter_on_resume(item: Any) -> bool:
         """判断断点续传时是否应该过滤该消息
 
-        注意：目前不过滤任何事件，包括 THINKING_* 事件，
-        因为前端需要通过 SSE 流恢复思考内容。
+        在断点续传（续聊）场景下，某些事件不应该重复发送给前端：
+        - flow_agent_start: 前端收到此事件会重新初始化/渲染，续聊时不需要
 
         Args:
             item: 队列中的消息（SSE 编码字符串或其他格式）
 
         Returns:
-            始终返回 False，表示不过滤任何消息
+            True 表示应该过滤（不发送给前端），False 表示正常发送
         """
-        # 目前不过滤任何事件类型
+        if not isinstance(item, str):
+            return False
+
+        # 检查是否是需要过滤的事件类型
+        # SSE 格式: data: {"type":"CUSTOM","name":"flow_agent_start",...}
+        for event_type in _RESUME_FILTER_EVENT_TYPES:
+            if f'"name":"{event_type}"' in item:
+                logger.info(f"Filtering event on resume: {event_type}")
+                return True
         return False
 
     def __init__(self, message_handler: BaseMessageQueueHandler | None = None, thread_id: str | None = None) -> None:
@@ -215,6 +231,11 @@ class GeneratorStreamingHelper:
         with self._cancel_lock:
             self._cancel_events.pop(self.thread_id, None)
 
+    @staticmethod
+    def _is_done_event_chunk(chunk: Any) -> bool:
+        """判断 chunk 是否为 SSE 的业务完成标记。"""
+        return isinstance(chunk, str) and chunk.strip() == "data: [DONE]"
+
     def _is_cancelled(self, cancel_event: threading.Event) -> bool:
         """检查是否被取消（同时检查进程内事件和跨进程信号）
 
@@ -257,8 +278,9 @@ class GeneratorStreamingHelper:
                 if not messages:
                     empty_rounds += 1
                     if empty_rounds >= max_empty_rounds:
-                        # 没有更多消息了，发送 STOPPED_CHUNK 并结束
-                        yield STOPPED_CHUNK
+                        # 没有更多消息了，发送 RUN_FINISHED 事件并结束
+                        # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                        yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.STOPPED)
                         # 清理队列（因为已经展示完了）
                         self.message_handler.mark_completed(self.thread_id)
                         # 清除停止标记
@@ -281,7 +303,8 @@ class GeneratorStreamingHelper:
             except TimeoutError:
                 empty_rounds += 1
                 if empty_rounds >= max_empty_rounds:
-                    yield STOPPED_CHUNK
+                    # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                    yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.STOPPED)
                     self.message_handler.mark_completed(self.thread_id)
                     self.message_handler.clear_stopped(self.thread_id)
                     return
@@ -304,6 +327,23 @@ class GeneratorStreamingHelper:
                 self.message_handler.notify_consumer_cancelled(self.thread_id)
         except Exception as e:
             logger.exception(f"Error sending consumer cancelled notification for thread_id={self.thread_id}: {e}")
+
+    def _should_notify_consumer_cancelled_on_complete(self, cancel_event: threading.Event) -> bool:
+        """正常结束时，仅在确实存在 stop/cancel 场景下才发送完成通知。"""
+        if cancel_event.is_set():
+            return True
+
+        try:
+            if self.message_handler.check_cancel_signal(self.thread_id):
+                return True
+        except Exception as e:
+            logger.exception(f"Error checking cancel signal before completion for thread_id={self.thread_id}: {e}")
+
+        try:
+            return self.message_handler.is_stopped(self.thread_id)
+        except Exception as e:
+            logger.exception(f"Error checking stopped state before completion for thread_id={self.thread_id}: {e}")
+            return False
 
     def _resolve_stopped_or_pending_state(self) -> tuple[bool, bool]:
         """解析当前会话状态，返回 (是否消费已停止会话, 是否有待消费消息)。"""
@@ -402,7 +442,8 @@ class GeneratorStreamingHelper:
                         self.message_handler.mark_stopped(self.thread_id)
                     # 通知 stop 接口：流已结束，可以继续后续操作
                     self._notify_consumer_cancelled_safely()
-                    yield STOPPED_CHUNK
+                    # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                    yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.CANCELLED)
                     return
 
                 self.message_handler.check_consumer(self.thread_id, consumer_id)
@@ -416,6 +457,7 @@ class GeneratorStreamingHelper:
                         logger.debug(f"Received heartbeat for thread_id={self.thread_id}")
                         continue
                     if item == EOD_CHUNK:
+                        should_notify_cancelled = self._should_notify_consumer_cancelled_on_complete(cancel_event)
                         if on_complete:
                             try:
                                 on_complete()
@@ -423,9 +465,9 @@ class GeneratorStreamingHelper:
                                 logger.exception(f"on_complete callback error: {e}")
                         self.message_handler.mark_completed(self.thread_id)
                         logger.info(f"Stream completed for thread_id={self.thread_id}")
-                        # 通知 stop 接口：流已结束（正常结束也需要通知，
-                        # 因为 cancel 可能已发出但 Agent 恰好也完成了）
-                        self._notify_consumer_cancelled_safely()
+                        if should_notify_cancelled:
+                            # cancel 可能已发出但 Agent 恰好也完成了，此时仍需通知 stop 接口。
+                            self._notify_consumer_cancelled_safely()
                         return
                     if item == CANCELLED_CHUNK:
                         if hasattr(self.message_handler, "mark_stopped"):
@@ -433,7 +475,8 @@ class GeneratorStreamingHelper:
                         logger.info(f"Stream cancelled for thread_id={self.thread_id}, DLQ content preserved")
                         # 通知 stop 接口：流已结束，可以继续后续操作
                         self._notify_consumer_cancelled_safely()
-                        yield STOPPED_CHUNK
+                        # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
+                        yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.CANCELLED)
                         return
                     if is_resuming and self._should_filter_on_resume(item):
                         logger.debug(f"Filtered thinking event in resume mode for thread_id={self.thread_id}")
@@ -520,7 +563,7 @@ class GeneratorStreamingHelper:
                 except Exception as e:
                     logger.exception(f"Error joining producer thread for thread_id={self.thread_id}: {e}")
 
-    def _schedule_session_cleanup(self) -> None:
+    def _schedule_session_cleanup(self, done_event_seen: bool = False) -> None:
         """生产者完成后延迟清理孤立的会话资源。
 
         用户断开连接后，如果未在延迟窗口内重连消费数据，队列数据会一直保留到 TTL 过期。
@@ -530,15 +573,39 @@ class GeneratorStreamingHelper:
         thread_id = self.thread_id
         handler = self.message_handler
         delay = self._PRODUCER_CLEANUP_DELAY
+        grace = self._DONE_ORPHAN_CLEANUP_GRACE
+        poll_interval = self._ORPHAN_CLEANUP_POLL_INTERVAL
 
         def _do_cleanup() -> None:
-            time.sleep(delay)
             try:
-                if handler.has_pending_messages(thread_id):
-                    handler.mark_completed(thread_id)
-                    logger.info(f"Cleaned up orphaned session data for thread_id={thread_id}")
-                else:
-                    logger.debug(f"Session already consumed for thread_id={thread_id}, skipping cleanup")
+                start_time = time.time()
+                fast_cleanup_at = start_time + grace if done_event_seen else None
+                deadline = start_time + delay
+
+                while True:
+                    if not handler.has_pending_messages(thread_id):
+                        logger.debug(f"Session already consumed for thread_id={thread_id}, skipping cleanup")
+                        return
+
+                    has_active_consumer = handler.has_active_consumer(thread_id)
+                    now = time.time()
+                    should_cleanup_now = False
+
+                    if (
+                        done_event_seen
+                        and not has_active_consumer
+                        and fast_cleanup_at is not None
+                        and now >= fast_cleanup_at
+                        or now >= deadline
+                    ):
+                        should_cleanup_now = True
+
+                    if should_cleanup_now:
+                        handler.mark_completed(thread_id)
+                        logger.info(f"Cleaned up orphaned session data for thread_id={thread_id}")
+                        return
+
+                    time.sleep(min(poll_interval, max(deadline - now, 0.0)))
             except Exception:
                 logger.exception(f"Error in delayed session cleanup for thread_id={thread_id}")
 
@@ -566,6 +633,7 @@ class GeneratorStreamingHelper:
         # 标记是否进入取消 drain 模式（检测到取消后继续读取 generator，等待 RUN_FINISHED）
         draining = False
         drain_start_time = 0.0
+        done_event_seen = False
 
         def _heartbeat_worker() -> None:
             """独立心跳线程：即使 generator 阻塞也保持心跳。"""
@@ -586,6 +654,8 @@ class GeneratorStreamingHelper:
 
             for chunk in generator:
                 chunk_count += 1
+                if self._is_done_event_chunk(chunk):
+                    done_event_seen = True
 
                 if not draining:
                     # 检查是否被取消（进程内快速检查）
@@ -632,7 +702,14 @@ class GeneratorStreamingHelper:
         except GeneratorExit:
             logger.info(f"Generator closed for thread_id={self.thread_id}")
         except Exception as e:
-            logger.debug(f"Sent error chunk for thread_id={self.thread_id}: {e}")
+            logger.exception(f"Producer error for thread_id={self.thread_id}: {e}")
+            # 将错误信息作为 SSE error event 推送到队列，让消费者能感知并传播给前端
+            try:
+                encoder = EventEncoder()
+                error_event = RunErrorEvent(type=EventType.RUN_ERROR, message=f"Producer error: {e}")
+                self.message_handler.put(self.thread_id, encoder.encode(error_event))
+            except Exception as encode_err:
+                logger.exception(f"Failed to encode/send error event for thread_id={self.thread_id}: {encode_err}")
         finally:
             heartbeat_stop_event.set()
             if heartbeat_thread is not None:
@@ -648,4 +725,4 @@ class GeneratorStreamingHelper:
 
             # 延迟清理：如果消费者已断开且未重连，主动释放队列资源
             # 不能立即清理，否则会与正在读取 EOD_CHUNK 的活跃消费者竞争
-            self._schedule_session_cleanup()
+            self._schedule_session_cleanup(done_event_seen=done_event_seen)

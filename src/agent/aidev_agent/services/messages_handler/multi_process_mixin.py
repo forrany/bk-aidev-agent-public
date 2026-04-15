@@ -258,6 +258,14 @@ class MultiProcessMixin:
 
         with self._with_connection() as connection:
             channel = connection.channel()
+            consumer_queue = self._get_consumer_queue_name(thread_id)
+
+            try:
+                channel.queue_declare(queue=consumer_queue, passive=True)
+            except Exception:
+                logger.debug(f"Skip release for missing consumer queue, thread_id={thread_id}")
+                return
+
             consumer_queue, exit_queue = self._ensure_consumer_queues(channel, thread_id)
 
             # peek 控制队列
@@ -290,6 +298,34 @@ class MultiProcessMixin:
             finally:
                 # 无论恢复消息是否成功，都要向退出通知队列发送信号，避免新消费者无限等待
                 self._send_exit_signal(thread_id, consumer_id)
+
+    def has_active_consumer(self, thread_id: str) -> bool:
+        """检查指定 thread_id 是否仍有活跃消费者。"""
+        try:
+            with self._with_connection() as connection:
+                channel = connection.channel()
+                consumer_queue = self._get_consumer_queue_name(thread_id)
+
+                try:
+                    channel.queue_declare(queue=consumer_queue, passive=True)
+                except Exception:
+                    return False
+
+                method_frame, _, body = channel.basic_get(queue=consumer_queue, auto_ack=False)
+                if not method_frame:
+                    return False
+
+                channel.basic_reject(delivery_tag=method_frame.delivery_tag, requeue=True)
+
+                try:
+                    data = json.loads(body)
+                except (json.JSONDecodeError, KeyError):
+                    return False
+
+                return bool(data.get("consumer_id"))
+        except Exception as e:
+            logger.warning(f"Error checking active consumer for thread_id={thread_id}: {e}")
+            return False
 
     def _send_exit_signal(self, thread_id: str, consumer_id: str) -> None:
         """向退出通知队列发送信号"""

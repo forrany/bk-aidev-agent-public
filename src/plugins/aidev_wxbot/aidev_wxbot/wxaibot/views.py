@@ -9,6 +9,9 @@ import uuid
 from logging import getLogger
 
 from ag_ui.core.events import EventType
+from aidev_agent.api.bk_aidev import BKAidevApi
+from aidev_agent.services.config_manager import AgentConfigManager
+from aidev_agent.services.messages_handler import ConsumerPreemptedError
 from aidev_bkplugin.services.agent import build_execute_kwargs, run_chat_completion_with_thread_id
 from django.conf import settings
 from django.http import HttpResponse
@@ -19,10 +22,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
-from .context import CHUNK_FLUSH_THRESHOLD, ContextGenerator, LlmChunkMsg, stream_msg
+from .constants import EMPTY_INPUT_PROMPT, NEW_CONVERSATION_CMDS, WRONG_MENTION_PROMPT, GROUP_CHAT_TYPE
+from .context import ContextGenerator, LlmChunkMsg, WxWorkAiBotContext, stream_msg, CHUNK_FLUSH_THRESHOLD, text_msg
 from .decryption import WXBizJsonMsgCrypt
 from .models import AgentSession
+from .strategies import resolve_strategy
 from ..api.bkaidev import BkAiDevApi
+from ..context.message import MsgType
 from ..utils.rabbitmq import rabbitmq_client
 
 logger = getLogger(__name__)
@@ -90,6 +96,14 @@ class WxAiBotViewSet(ViewSet):
 
     def _reply_event(self, payload: dict) -> dict:
         """处理事件消息"""
+        try:
+            context = ContextGenerator(payload).generate()
+            if context.message.event == MsgType.EnterChat.value:
+                agent_config = AgentConfigManager.get_config(settings.BKPAAS_APP_CODE, BKAidevApi.get_client())
+                if agent_config.opening_mark:
+                    return text_msg(agent_config.opening_mark)
+        except Exception as e:
+            logger.exception(f"处理事件消息失败: {e}")
         return stream_msg("", True, uuid.uuid4().hex)
 
     def _get_or_create_thread_id(self, group_id: str) -> str:
@@ -126,32 +140,150 @@ class WxAiBotViewSet(ViewSet):
             logger.info(f"group_id:{group_id} 创建新会话 thread_id:{new_thread_id}")
             return new_thread_id
 
+
+
     def _reply_text(self, payload: dict) -> dict:
-        """处理文本消息"""
-        content = payload["text"]["content"]
-        rtx_name = settings.WAXIBOT_NAME
-        quote_content = payload.get("quote", {}).get("text", {}).get("content", None)
-        if content.startswith(f"@{rtx_name}"):
-            content = content[len(f"@{rtx_name}") :].strip()
-        current_context = ContextGenerator(payload).generate()
-        stream_id = current_context.msg_id + "_" + str(int(time.time()))
-        if content.strip() in ["会话", "新会话"]:
-            return self._new_conversation(current_context.group_id, stream_id)
+        """
+        处理文本消息，启动异步 AI 请求线程并立即返回流式占位响应。
+        """
+        stream_id = "" 
+        try:
+            # 提取并验证必要字段
+            text_data = payload.get("text", {})
+            content = text_data.get("content", "")
+            chat_type = payload.get("chattype", "single")
+            # 生成上下文和 stream_id
+            current_context = ContextGenerator(payload).generate()
+            stream_id = f"{current_context.msg_id}_{int(time.time())}"
+            logger.debug(
+                f"[WxAiBot] 收到消息 | chat_type={chat_type}, "
+                f"sender={current_context.sender_id}, stream_id={stream_id}"
+            )
+            # 根据聊天类型分发处理，获取处理后的内容或立即返回的响应
+            if chat_type == GROUP_CHAT_TYPE:
+                result, content = self._handle_group_chat(content, stream_id, current_context)
+            else:
+                result, content = self._handle_single_chat(content, stream_id, current_context)
+            # 如果需要立即返回（如提示信息）
+            if result is not None:
+                return result
+            # 处理引用消息
+            content = self._process_quote(payload, content)
+            # 启动异步处理
+            self._start_async_processing(content, stream_id, current_context)
+            return stream_msg("正在思考中...", False, stream_id)
+            
+        except (KeyError, AttributeError) as e:
+            logger.error(f"[WxAiBot] 消息格式错误: {e}")
+            return stream_msg("消息格式错误", True, stream_id)
+        except Exception as e:
+            logger.exception(f"[WxAiBot] 处理异常: {e}")
+            return stream_msg("服务暂时不可用", True, stream_id)
 
-        quote_content = payload.get("quote", {}).get("text", {}).get("content", None)
-        if quote_content:
-            content = self._build_quoted_input(quote_content, content)
+    def _handle_single_chat(
+        self, content: str, stream_id: str, context: WxWorkAiBotContext
+    ) -> tuple[dict | None, str]:
+        """
+        处理单聊场景。
+        """
+        stripped = content.strip()
+        if not stripped:
+            return stream_msg(EMPTY_INPUT_PROMPT, True, stream_id), ""
+        if stripped in NEW_CONVERSATION_CMDS:
+            return self._new_conversation(context.group_id, stream_id), ""
+        return None, content
 
-        logger.info(f"reply_text: current_context=>{current_context}")
+    def _handle_group_chat(
+        self, content: str, stream_id: str, context: WxWorkAiBotContext
+    ) -> tuple[dict | None, str]:
+        """
+        处理群聊场景。必须@本机器人才会响应。
+        """
+        rtx_name = getattr(settings, "WAXIBOT_NAME", "")
+        if not content.startswith("@"):
+            return stream_msg("", True, stream_id), ""
+        # 精确匹配@本机器人
+        if rtx_name and content.startswith(f"@{rtx_name}"):
+            return self._process_mention(content, len(f"@{rtx_name}"), stream_id, context)
+        # 配置了机器人名但@的是其他人
+        if rtx_name:
+            return stream_msg(WRONG_MENTION_PROMPT, True, stream_id), ""
+        # 未配置机器人名，智能解析
+        return self._process_mention_fallback(content, stream_id, context)
 
+    def _process_mention(
+        self, content: str, prefix_len: int, stream_id: str, context: WxWorkAiBotContext
+    ) -> tuple[dict | None, str]:
+        """
+        处理@机器人的内容提取。
+        """
+        user_input = content[prefix_len:].strip()
+        if not user_input:
+            return stream_msg(EMPTY_INPUT_PROMPT, True, stream_id), ""
+        if user_input in NEW_CONVERSATION_CMDS:
+            return self._new_conversation(context.group_id, stream_id), ""
+        return None, user_input
+
+    def _process_mention_fallback(
+        self, content: str, stream_id: str, context: WxWorkAiBotContext
+    ) -> tuple[dict | None, str]:
+        """
+        兜底处理：未配置 WAXIBOT_NAME 时，智能解析@内容。
+        """
+        # 去掉@，按第一个空格分割
+        at_content = content[1:]
+        parts = at_content.split(" ", 1)
+        if len(parts) < 2:
+            # 只有@机器人名，没有用户输入
+            return stream_msg(EMPTY_INPUT_PROMPT, True, stream_id), ""
+        user_input = parts[1].strip()
+        if not user_input:
+            return stream_msg(EMPTY_INPUT_PROMPT, True, stream_id), ""
+        return None, user_input
+
+    def _process_quote(self, payload: dict, content: str) -> str:
+        """
+        处理引用消息，将引用内容与用户输入合并。
+        
+        Args:
+            payload: 消息 payload
+            content: 当前用户输入内容
+            
+        Returns:
+            合并后的内容
+        """
+        quote_data = payload.get("quote", {}).get("text", {})
+        quote_content = quote_data.get("content")
+        
+        if not quote_content:
+            return content
+        
+        merged = self._build_quoted_input(quote_content, content)
+        logger.debug(f"[WxAiBot] 合并引用消息 | original_len={len(content)}, merged_len={len(merged)}")
+        return merged
+
+    def _start_async_processing(
+        self, content: str, stream_id: str, context: WxWorkAiBotContext
+    ) -> None:
+        """
+        启动异步线程处理 AI 请求。
+        
+        Args:
+            content: 处理后的用户输入
+            stream_id: 流式响应 ID
+            context: 消息上下文
+        """
+        logger.debug(
+            f"[WxAiBot] 启动异步处理 | stream_id={stream_id}, "
+            f"content_len={len(content)}, sender={context.sender_id}"
+        )
+        
         thread = threading.Thread(
             target=self._process_ai_request_async,
-            args=(content, stream_id, current_context.sender_id, current_context.group_id),
+            args=(content, stream_id, context.sender_id, context.group_id),
             daemon=True,
         )
         thread.start()
-
-        return stream_msg("正在思考中...", False, stream_id)
 
     @staticmethod
     def _build_quoted_input(quote_content: str, user_content: str) -> str:
@@ -187,154 +319,36 @@ class WxAiBotViewSet(ViewSet):
         return stream_msg("已创建新会话，请输入咨询内容", True, stream_id)
 
     def _process_ai_request_async(self, content: str, stream_id: str, username: str, group_id: str):
-        """异步处理AI请求：直连共享 service，流式结果桥接到 wx 队列协议。"""
+        """异步处理 AI 请求：根据 agent_type 选择策略，执行并桥接到 RabbitMQ。
+
+        使用策略模式将 Chat Agent / Flow Agent 的处理逻辑解耦，
+        views 层只负责会话管理和线程调度，不关心具体 Agent 实现。
+        """
         try:
-            start_time = time.time()
+            logger.debug(f"[WxAiBot] 发送至Agent | stream_id:{stream_id}, content_len={len(content)}")
             thread_id = self._get_or_create_thread_id(group_id)
-            execute_kwargs = build_execute_kwargs(
-                {"stream": True, "thread_id": thread_id, "executor": username, "group_id": group_id},
-                username,
-            )
-            result, session_code = run_chat_completion_with_thread_id(
-                thread_id=thread_id,
-                input_text=content,
-                username=username,
-                execute_kwargs=execute_kwargs,
-                save_content=True,
-            )
-            logger.info(f"stream_id:{stream_id} run_chat_completion_with_thread_id ok, session_code={session_code}")
-            if execute_kwargs.stream:
-                self._consume_agent_stream(result, stream_id, start_time)
-                return
-
-            final_content = ""
-            if isinstance(result, dict):
-                choices = result.get("choices") or [{}]
-                final_content = (choices[0].get("delta") or {}).get("content", "") or ""
-            llm_chunk = LlmChunkMsg(
-                content=final_content or "未获取到回答内容",
-                is_finish=True,
+            strategy = resolve_strategy(username)
+            strategy.execute(
+                content=content,
                 stream_id=stream_id,
+                username=username,
+                thread_id=thread_id,
+                group_id=group_id,
+                rabbitmq_client=rabbitmq_client,
             )
-            llm_chunk.append_to_cache(rabbitmq_client)
-
+        except ConsumerPreemptedError:
+            # 消费者被抢占是框架正常行为，静默处理，不返回错误给用户
+            logger.debug(f"stream_id:{stream_id} consumer 被新请求抢占，当前请求终止")
         except Exception as e:
             logger.exception(f"stream_id:{stream_id} 异步处理AI请求失败: {e}")
-            error_chunk = LlmChunkMsg(content=f"请求处理失败: {str(e)}", is_finish=True, stream_id=stream_id)
             try:
-                error_chunk.append_to_cache(rabbitmq_client)
-            except Exception as cache_e:
-                logger.error(f"stream_id:{stream_id} 写入错误信息到缓存失败: {cache_e}")
-
-    def _consume_agent_stream(self, stream_generator, stream_id: str, start_time: float):
-        """
-        消费 ChatCompletionAgent 流式输出并桥接到 wx 协议（RabbitMQ + LlmChunkMsg）。
-        事件映射：think/text/reference_doc/error -> think_content/content/docs；任何异常或 error 事件均写入 finish=True 终止。
-        """
-        docs = []
-        buffer = ""
-        first_response_time = None
-        llm_chunk = LlmChunkMsg(content="", is_finish=False, stream_id=stream_id)
-        added_content = ""
-        think_content = ""
-        has_error = False
-
-        def _process_line(line: str):
-            nonlocal first_response_time, added_content, think_content, has_error
-            line = line.strip()
-            if not line or line == "data: [DONE]" or not line.startswith("data: "):
-                return
-            data_content = line[6:]
-            if not data_content:
-                return
-            try:
-                chunk_json = json.loads(data_content)
-            except json.JSONDecodeError:
-                return
-            if first_response_time is None:
-                first_response_time = time.time()
-                logger.info(
-                    f"stream_id:{stream_id} 从请求开始到第一次收到流式响应耗时: {first_response_time - start_time:.3f} 秒"
-                )
-
-            # agui 格式
-            logger.debug(f"stream_id:{stream_id} 处理流式响应: {chunk_json}")
-            event_type = chunk_json.get("type", "")
-            if event_type == EventType.TEXT_MESSAGE_CONTENT:
-                text_content = chunk_json.get("delta", "")
-                if text_content == "正在思考...":
-                    return
-                added_content += text_content
-                if think_content:
-                    llm_chunk.think_content = llm_chunk.think_content + think_content
-                    llm_chunk.append_to_cache(rabbitmq_client)
-                    think_content = ""
-                if len(added_content) > CHUNK_FLUSH_THRESHOLD:
-                    llm_chunk.content = llm_chunk.content + added_content
-                    llm_chunk.append_to_cache(rabbitmq_client)
-                    added_content = ""
-                return
-            elif event_type == EventType.CUSTOM:
-                # handle custom event
-                for doc_info in chunk_json.get("documents", []):
-                    if isinstance(doc_info, dict) and "metadata" in doc_info:
-                        docs.append(doc_info["metadata"])
-                return
-            elif event_type == EventType.THINKING_TEXT_MESSAGE_CONTENT:
-                think_text = chunk_json.get("delta", "")
-                if think_text == "正在思考...":
-                    return
-                if not think_content:
-                    empty_llm_chunk = LlmChunkMsg(stream_id=stream_id)
-                    empty_llm_chunk.append_to_cache(rabbitmq_client)
-                think_content += think_text
-                if len(think_content) > CHUNK_FLUSH_THRESHOLD:
-                    llm_chunk.think_content = llm_chunk.think_content + think_content
-                    llm_chunk.append_to_cache(rabbitmq_client)
-                    think_content = ""
-                return
-            elif event_type == EventType.RUN_ERROR:
-                has_error = True
-                err_chunk = LlmChunkMsg(
-                    content=f"处理请求时发生错误: {chunk_json.get('message', chunk_json)}",
+                LlmChunkMsg(
+                    content=f"请求处理失败: {str(e)}",
                     is_finish=True,
                     stream_id=stream_id,
-                )
-                err_chunk.append_to_cache(rabbitmq_client)
-                return
-            elif event_type in [EventType.RAW]:
-                return
-            logger.info(f"stream_id:{stream_id} 未知的事件类型: {event_type}")
-
-        for chunk in stream_generator:
-            if has_error:
-                return
-            try:
-                chunk_str = chunk.decode("utf-8", errors="ignore") if isinstance(chunk, bytes) else str(chunk)
-                buffer += chunk_str
-                lines = buffer.split("\n")
-                buffer = lines[-1]
-                for line in lines[:-1]:
-                    _process_line(line)
-            except Exception as e:
-                logger.error(f"stream_id:{stream_id} 处理 chunk 时发生错误: {e}")
-                err_chunk = LlmChunkMsg(content=f"处理请求时发生错误: {str(e)}", is_finish=True, stream_id=stream_id)
-                err_chunk.append_to_cache(rabbitmq_client)
-                return
-
-        if has_error:
-            return
-        if buffer.strip():
-            _process_line(buffer)
-        if has_error:
-            return
-        if think_content:
-            llm_chunk.think_content = llm_chunk.think_content + think_content
-        if added_content:
-            llm_chunk.content = llm_chunk.content + added_content
-        llm_chunk.is_finish = True
-        llm_chunk.docs = docs
-        llm_chunk.append_to_cache(rabbitmq_client)
+                ).append_to_cache(rabbitmq_client)
+            except Exception as cache_e:
+                logger.error(f"stream_id:{stream_id} 写入错误信息到缓存失败: {cache_e}")
 
     @action(detail=False, methods=["get", "post"], url_path="callback")
     def callback(self, request: Request) -> HttpResponse:

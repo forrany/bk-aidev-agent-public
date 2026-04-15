@@ -603,10 +603,6 @@ class BkAiStreamingProtocol:
                     )
                 else:
                     return
-                # print("*"*50)
-                # print(chunk)
-                # print(ret)
-                # print("-"*50)
                 self.final_result += ret["content"]
                 self.has_tool_call = True
             elif self.force_think_content:

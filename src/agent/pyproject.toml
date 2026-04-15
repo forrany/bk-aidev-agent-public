@@ -27,9 +27,12 @@ dependencies = [
     "langchain-classic>=1.0.1",
     "wrapt>1,<2",
     "json-repair>=0.58.6",
+    "bashlex>=0.18,<1.0.0",
+    "e2b>=2.20.0",
+    "e2b-code-interpreter>=2.6.0",
 ]
 name = "aidev-agent"
-version = "2.0.0b7"
+version = "2.0.0rc6"
 description = "bkaidev agent builder"
 
 [dependency-groups]

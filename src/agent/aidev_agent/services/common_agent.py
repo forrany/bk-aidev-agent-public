@@ -37,6 +37,6 @@ class CommonQAAgent:
             (compiled_graph, runnable_config)
         """
         options = AgentExecutorKwargs.model_validate(kwargs)
-        builder = ReActAgentBuilder().set_bkai_options(options)
+        builder = ReActAgentBuilder().set_bkai_options(options).enable_security_runtime(False)
         agent, cfg = builder.build()
         return agent, cfg

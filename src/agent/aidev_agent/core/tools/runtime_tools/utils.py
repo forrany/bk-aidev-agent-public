@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""
+"""aidev_agent.core.tools.runtime_tools.utils
+
 TencentBlueKing is pleased to support the open source community by making
 蓝鲸智云 - AIDev (BlueKing - AIDev) available.
 Copyright (C) 2025 THL A29 Limited,
@@ -14,12 +15,22 @@ either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
+
+运行时后端共享工具函数。
+
+该模块包含可被不同 runtime 后端复用的函数与类型：
+- 虚拟路径校验与规范化（validate_path）
+- 读写/编辑内容辅助（check_empty_content / perform_string_replacement）
+- 输出格式化（format_content_with_line_numbers / truncate_if_too_long / format_grep_matches）
+- LangGraph 文件系统状态类型（FileData / FilesystemState）
 """
 
 from __future__ import annotations
 
+import io
 import os
 import re
+import zipfile
 from typing import Annotated, NotRequired, Sequence
 
 from typing_extensions import TypedDict
@@ -31,7 +42,6 @@ EMPTY_CONTENT_WARNING = "系统提示: 文件存在但内容为空"
 
 LINE_NUMBER_WIDTH = 6
 """行号显示宽度"""
-
 
 # ========== 异常类 ==========
 
@@ -158,7 +168,7 @@ def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -
         raise PathValidationError(msg)
 
     normalized = os.path.normpath(path)
-    normalized = normalized.replace("\\", "/")
+    normalized = normalized.replace("\\\\", "/")
 
     if not normalized.startswith("/"):
         normalized = f"/{normalized}"
@@ -378,6 +388,59 @@ def format_grep_matches(
         return "\n".join(paths)
 
 
+# ========== Skill 打包工具 ==========
+
+# 打包时排除的目录名（模块级常量，作为默认值参考）
+_DEFAULT_EXCLUDE_DIRS: set[str] = {"__pycache__", ".git", "node_modules", ".venv"}
+
+# 打包时排除的文件扩展名（模块级常量，作为默认值参考）
+_DEFAULT_EXCLUDE_EXTENSIONS: tuple[str, ...] = (".pyc", ".pyo")
+
+# 为向后兼容保留的导出常量
+EXCLUDE_DIRS: set[str] = _DEFAULT_EXCLUDE_DIRS
+EXCLUDE_EXTENSIONS: tuple[str, ...] = _DEFAULT_EXCLUDE_EXTENSIONS
+
+
+def package_dir(
+    skill_dir: str,
+    exclude_dirs: set[str] | None = None,
+    exclude_extensions: tuple[str, ...] | None = None,
+) -> bytes:
+    """将 skill 目录打包为 zip 字节流。
+
+    遍历 *skill_dir* 下的所有文件，排除临时目录和编译产物，
+    使用 ``ZIP_DEFLATED`` 压缩后返回完整的 zip 文件字节流。
+
+    Args:
+        skill_dir: skill 根目录的本地路径（应包含 SKILL.md、scripts/ 等）。
+        exclude_dirs: 打包时排除的目录名集合。默认为 None，使用内置默认值
+            {"__pycache__", ".git", "node_modules", ".venv"}。
+        exclude_extensions: 打包时排除的文件扩展名元组。默认为 None，使用内置默认值
+            (".pyc", ".pyo")。
+
+    Returns:
+        zip 文件的 bytes 内容。
+    """
+    # 使用提供的参数或落回到默认值
+    if exclude_dirs is None:
+        exclude_dirs = _DEFAULT_EXCLUDE_DIRS
+    if exclude_extensions is None:
+        exclude_extensions = _DEFAULT_EXCLUDE_EXTENSIONS
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(skill_dir):
+            # 就地修改 dirs 以跳过排除目录
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            for f in files:
+                if f.endswith(exclude_extensions):
+                    continue
+                filepath = os.path.join(root, f)
+                arcname = os.path.relpath(filepath, skill_dir)
+                zf.write(filepath, arcname)
+    return buffer.getvalue()
+
+
 # ========== 导出 ==========
 
 __all__ = [
@@ -385,6 +448,8 @@ __all__ = [
     "EMPTY_CONTENT_WARNING",
     "LINE_NUMBER_WIDTH",
     "MAX_OUTPUT_LENGTH",
+    "EXCLUDE_DIRS",
+    "EXCLUDE_EXTENSIONS",
     # 异常类
     "PathValidationError",
     # 类型定义
@@ -398,4 +463,5 @@ __all__ = [
     "perform_string_replacement",
     "truncate_if_too_long",
     "format_grep_matches",
+    "package_dir",
 ]

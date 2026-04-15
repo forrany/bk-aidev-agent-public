@@ -23,6 +23,6 @@ class ToolNodeSettings(BaseModel):
     """ToolNode wrappers settings."""
 
     use_timer: bool = True
-    use_result_limit: bool = False
-    result_limit_thrd: int = Field(default=1000, ge=1, description="结果长度限制阈值")
+    use_result_limit: bool = True
+    result_limit_thrd: int = Field(default=10000, ge=1, description="结果长度限制阈值")
     use_json_repair_on_error: bool = True

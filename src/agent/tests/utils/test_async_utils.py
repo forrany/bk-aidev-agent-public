@@ -16,6 +16,7 @@ to the current version of the project delivered to anyone in the future.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from aidev_agent.utils import (
@@ -23,6 +24,7 @@ from aidev_agent.utils import (
 )
 from aidev_agent.utils.async_utils import async_generator_with_timeout, async_to_sync_generator
 from aidev_agent.utils.local import request_local
+from aidev_agent.utils.loop import _thread_local
 
 
 async def gen(interval: int = 0.2):
@@ -53,3 +55,17 @@ async def test_async_gen_with_timeout():
     # 迭代器超时没有返回则需要返回超时异常
     with pytest.raises(TimeoutError):
         result = [each async for each in async_generator_with_timeout(gen(100), timeout=0.1, max_wait_rounds=3)]
+
+
+def test_async_to_sync_generator_closes_worker_thread_loop():
+    def _consume():
+        request_local.run_id = "worker"
+        result = list(async_to_sync_generator(async_generator_with_timeout(gen(), timeout=10)))
+        has_loop = hasattr(_thread_local, "loop") and _thread_local.loop is not None
+        return result, has_loop
+
+    with ThreadPoolExecutor(1) as pool:
+        result, has_loop = pool.submit(_consume).result()
+
+    assert result == ["worker-0", "worker-1", "worker-2"]
+    assert has_loop is False

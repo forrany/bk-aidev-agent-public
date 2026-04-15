@@ -783,6 +783,9 @@ class ToolOutputLengthCompressionMiddleware(BaseToolOutputCompressionMiddleware)
 
         tool_messages = self._get_tool_messages(ctx)
         if tool_messages and self._tool_output_len(tool_messages) > self.tool_output_compress_thrd:
+            logger.debug(
+                f"ToolOutputLengthCompressionMiddleware, {self._tool_output_len(tool_messages)}, {self.tool_output_compress_thrd}"
+            )
             tool_msg_positions = self._collect_tool_msg_positions(tool_messages)
             if tool_msg_positions:
                 state = _ensure_compression_state(ctx)

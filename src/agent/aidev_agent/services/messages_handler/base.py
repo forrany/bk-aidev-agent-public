@@ -227,6 +227,13 @@ class BaseMessageQueueHandler(ABC):
             consumer_id: 消费者 ID
         """
 
+    def has_active_consumer(self, thread_id: str) -> bool:
+        """检查指定 thread_id 当前是否仍有活跃消费者。
+
+        默认返回 False，具体消息处理器可按其消费者管理机制覆盖。
+        """
+        return False
+
     @abstractmethod
     def get_dlq_messages(self, thread_id: str) -> list[Any]:
         """获取死信队列中的所有消息（不移除）

@@ -39,7 +39,7 @@ from typing_extensions import Annotated
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
 from aidev_agent.services.pydantic_models import AgentOptions
-from aidev_agent.utils.loop import get_event_loop
+from aidev_agent.utils.loop import run_coro_sync
 
 from .enums import FieldType, FuncType
 from .exceptions import ToolValidationError
@@ -560,6 +560,15 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
         get_access_token_by_user = None
 
     new_server_config = deepcopy(server_config)
+
+    # 提取每个 MCP Server 的 selected_tools 配置
+    selected_tools_map: dict[str, list[str]] = {}
+    for server_name, _server_config in new_server_config.items():
+        selected_tools = _server_config.pop("selected_tools", None)
+
+        if selected_tools:
+            selected_tools_map[server_name] = selected_tools
+
     for _server_config in new_server_config.values():
         if "mcp_type" in _server_config:
             _server_config.pop("mcp_type")
@@ -579,14 +588,19 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
             _server_config["headers"] = {"X-Bkapi-Authorization": json.dumps(auth_info)}
             _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
 
-    _loop = get_event_loop()
-
     # 重试2次；返回 (tools, failure | None)，失败时返回 McpToolFetchFailure
-    async def _load_tool(server_name) -> tuple[list[StructuredTool], McpToolFetchFailure | None]:
+    async def _load_tool(server_name, selected_tools_map) -> tuple[list[StructuredTool], McpToolFetchFailure | None]:
         for _i in range(2):
             client = MultiServerMCPClient(new_server_config)
             try:
                 tools: list[StructuredTool] = await client.get_tools(server_name=server_name)
+                total_count = len(tools)
+                if selected_tools_map.get(server_name):
+                    tools = [each for each in tools if each.name in selected_tools_map[server_name]]
+                _logger.info(
+                    f"[MCP] server={server_name}: fetched={total_count}, "
+                    f"after_filter={len(tools)}, names={[t.name for t in tools]}"
+                )
                 for each in tools:
                     each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
                     if not each.metadata:
@@ -611,8 +625,12 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
                     ),
                 )
 
-    coros = [_load_tool(server_name) for server_name in new_server_config]
-    coro_results = _loop.run_until_complete(asyncio.gather(*coros))
+    coros = [_load_tool(server_name, selected_tools_map) for server_name in new_server_config]
+
+    async def _load_all_tools():
+        return await asyncio.gather(*coros)
+
+    coro_results = run_coro_sync(_load_all_tools())
     tools_list: List[StructuredTool] = []
     failures: List[McpToolFetchFailure] = []
     for tlist, fail in coro_results:

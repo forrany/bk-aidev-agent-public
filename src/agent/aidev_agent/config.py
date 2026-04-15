@@ -129,6 +129,13 @@ BK_APIGW_MCP_TIMEOUT = env.str("BK_APIGW_MCP_TIMEOUT", "300")
 TOOL_CALL_TIMEOUT = env.int("TOOL_CALL_TIMEOUT", 60)
 MAX_TOKENS = env.int("MAX_TOKENS", None)
 
+# Flow Agent 轮询配置
+FLOW_AGENT_POLL_INTERVAL = env.float("FLOW_AGENT_POLL_INTERVAL", 0.5)  # 轮询间隔（秒）
+FLOW_AGENT_POLL_TIMEOUT = env.float("FLOW_AGENT_POLL_TIMEOUT", 600.0)  # 轮询超时时间（秒）
+
+# Sandbox 相关配置
+SANDBOX_BP_API_HOST = env.str("SANDBOX_BP_API_HOST", "")
+
 # SSM相关配置
 BK_SSM_ENDPOINT = env.str("BK_SSM_ENDPOINT", "https://bkssm.service.consul")  # noqa
 # end: 配置

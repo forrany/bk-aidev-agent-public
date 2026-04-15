@@ -28,124 +28,23 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import NotRequired
 
-from typing_extensions import TypedDict
-
-from aidev_agent.core.tools.filesystem.utils import (
+from .types import (
+    EditResult,
+    ExecuteResult,
+    FileDownloadResponse,
+    FileInfo,
+    FileUploadResponse,
+    GrepMatch,
+    WriteResult,
+)
+from .utils import (
     check_empty_content,
     format_content_with_line_numbers,
     perform_string_replacement,
 )
-
-# ========== 数据结构定义 ==========
-
-
-class FileInfo(TypedDict):
-    """文件信息结构。
-
-    用于 ls_info 和 glob_info 方法返回的文件元数据。
-    只有 path 是必需的，其他字段根据后端能力可选提供。
-    """
-
-    path: str
-    """文件或目录的路径"""
-
-    is_dir: NotRequired[bool]
-    """是否为目录"""
-
-    size: NotRequired[int]
-    """文件大小（字节）"""
-
-    modified_at: NotRequired[str]
-    """最后修改时间（ISO 8601 格式）"""
-
-
-class GrepMatch(TypedDict):
-    """grep 搜索匹配结果结构。"""
-
-    path: str
-    """匹配的文件路径"""
-
-    line: int
-    """匹配的行号"""
-
-    text: str
-    """匹配的行内容"""
-
-
-@dataclass
-class WriteResult:
-    """写操作结果。
-
-    Attributes:
-        error: 失败时的错误信息，成功时为 None
-        path: 写入的文件路径，失败时为 None
-        files_update: 文件更新信息，外部存储时为 None
-    """
-
-    error: str | None = None
-    path: str | None = None
-    files_update: dict | None = None
-
-
-@dataclass
-class EditResult:
-    """编辑操作结果。
-
-    Attributes:
-        error: 失败时的错误信息，成功时为 None
-        path: 编辑的文件路径，失败时为 None
-        occurrences: 替换的匹配数量，失败时为 None
-        files_update: 文件更新信息，外部存储时为 None
-    """
-
-    error: str | None = None
-    path: str | None = None
-    occurrences: int | None = None
-    files_update: dict | None = None
-
-
-@dataclass
-class ExecuteResult:
-    """命令执行结果。
-
-    Attributes:
-        output: 命令的标准输出和标准错误的合并输出
-        exit_code: 命令退出码，None 表示执行过程中发生错误
-        truncated: 输出是否因大小限制被截断
-    """
-
-    output: str
-    exit_code: int | None = None
-    truncated: bool = False
-
-
-class FileUploadResponse(TypedDict):
-    """文件上传响应结构。"""
-
-    path: str
-    """上传的文件路径"""
-
-    error: str | None
-    """错误信息，成功时为 None"""
-
-
-class FileDownloadResponse(TypedDict):
-    """文件下载响应结构。"""
-
-    path: str
-    """下载的文件路径"""
-
-    content: bytes | None
-    """文件内容，失败时为 None"""
-
-    error: str | None
-    """错误信息，成功时为 None"""
-
 
 # ========== FilesystemBackend 实现 ==========
 
@@ -211,6 +110,7 @@ class FilesystemBackend:
         root_dir: str | Path | None = None,
         virtual_mode: bool = False,
         max_file_size_mb: int = 10,
+        envs: dict[str, str] | None = None,
     ) -> None:
         """初始化文件系统后端。
 
@@ -232,10 +132,19 @@ class FilesystemBackend:
                 而非进程隔离。
             max_file_size_mb: grep 搜索时的最大文件大小限制（MB）。
                 超过此限制的文件在搜索时会被跳过。默认为 10 MB。
+            envs: 环境变量字典
         """
         self.cwd = Path(root_dir).resolve() if root_dir else Path.cwd()
         self.virtual_mode = virtual_mode
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
+        self.envs = envs
+        # 若 envs 中包含 skill 信息，自动切换 cwd 到 skill 目录
+        if envs:
+            skill_dir = envs.get("SKILL_DIR")
+            if skill_dir:
+                scripts_dir = os.path.join(skill_dir, "scripts")
+                target = scripts_dir if os.path.isdir(scripts_dir) else skill_dir
+                self.cwd = Path(target).resolve()
 
     def _resolve_path(self, key: str) -> Path:
         """解析文件路径并进行安全检查。

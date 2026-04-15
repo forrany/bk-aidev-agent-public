@@ -20,7 +20,7 @@ import uuid
 from typing import Any
 
 from django.conf import settings
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aidev_wxbot.api.bkaidev import BkAiDevApi
 from aidev_wxbot.context import Context, Message
@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 # 流式桥接：chunk 合并阈值（think/content 累积超过此长度再写队列）；首包「正在思考中...」由 views 返回，此处不处理
 CHUNK_FLUSH_THRESHOLD = 50
+MAX_BATCH_CONSUME_COUNT = 30
+MAX_THINK_ONLY_BATCH_CONSUME_COUNT = 10
+THINKING_MSG = "正在思考中...."
 
 
 def stream_msg(content, is_finish, stream_id):
@@ -43,6 +46,10 @@ def stream_msg(content, is_finish, stream_id):
     }
 
 
+def text_msg(content):
+    return {"msgtype": "text", "text": {"content": content}}
+
+
 class LlmChunkMsg(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     is_finish: bool = Field(default=False)
@@ -50,6 +57,13 @@ class LlmChunkMsg(BaseModel):
     content: str = Field(default_factory=str)
     stream_id: str = Field(default_factory=str)
     think_content: str = Field(default_factory=str)
+    # Pydantic 私有属性，不参与序列化
+    _cached_think_content: str = PrivateAttr(default="")
+    _flow_task_id: str = PrivateAttr(default="")
+    _flow_nodes_initialized: bool = PrivateAttr(default=False)
+    # wxbot formatters 缓存：轮询过程中的最新节点快照和任务状态，供 _on_flow_end 使用
+    _flow_nodes_cache: dict = PrivateAttr(default_factory=dict)
+    _flow_last_task_state: str = PrivateAttr(default="")
 
     @property
     def docs_content(self):
@@ -63,26 +77,31 @@ class LlmChunkMsg(BaseModel):
         else:
             return ""
 
+    def _is_think_only_chunk(self, message_data: dict) -> bool:
+        return bool(message_data.get("think_content")) and not message_data.get("content")
+
     def append_to_cache(self, rabbitmq_client):
         """将消息内容发送到RabbitMQ队列"""
         try:
             queue_name = self.stream_id
 
-            # 准备消息数据
+            # 缓存 think_content 用于企微轮询保持显示
+            if self.think_content:
+                self._cached_think_content = self.think_content
+
+            # 准备消息数据，包含 cached_think_content 以支持跨实例读取
             message_data = {
                 "content": self.content,
                 "think_content": self.think_content,
+                "cached_think_content": self._cached_think_content,
                 "is_finish": self.is_finish,
                 "docs": self.docs,
                 "timestamp": time.time(),
             }
-
             # 使用独立的连接发送消息，避免并发冲突
             rabbitmq_client.declare_queue(queue_name, durable=False, auto_delete=False)
             success = rabbitmq_client.publish_message("", queue_name, message_data)
-            if success:
-                logger.debug(f"消息已发送到队列 {queue_name}, is_finish: {self.is_finish}")
-            else:
+            if not success:
                 logger.error(f"发送消息到队列 {queue_name} 失败")
 
         except Exception as e:
@@ -93,7 +112,6 @@ class LlmChunkMsg(BaseModel):
         """从RabbitMQ队列读取消息内容"""
         try:
             queue_name = self.stream_id
-            is_finish = False
             stream_time = int(self.stream_id.split("_")[1])
 
             # 检查消息是否超时
@@ -109,33 +127,55 @@ class LlmChunkMsg(BaseModel):
                     logger.info(f"stream_id:{self.stream_id} 消息还未有第一次回复...")
                     time.sleep(1)
             else:
-                return stream_msg("正在思考中....", is_finish, self.stream_id)
+                return stream_msg(THINKING_MSG, self.is_finish, self.stream_id)
 
-            # 读取消息
-            for i in range(30):  # 最多尝试30次
+            latest_message_data = None
+            cached_think = ""
+
+            # 批量读取当前积压的消息，但只返回最新快照，避免重复拼接历史内容
+            for batch_index in range(MAX_BATCH_CONSUME_COUNT):
                 try:
                     message_info = rabbitmq_client.get_message(queue_name, auto_ack=True)
-                    if message_info:
-                        message_data = message_info["body"]
-                        content = message_data.get("content", "")
-                        thinking_content = message_data.get("think_content", "")
-                        if thinking_content:
-                            content = f"<think>{thinking_content}</think>{content}"
-                        if message_data.get("is_finish", False):
-                            try:
-                                rabbitmq_client.delete_queue(queue_name)
-                                logger.debug(f"stream_id:{self.stream_id} 队列 {queue_name} 已删除")
-                                self.docs = message_data.get("docs", [])
-                                content += self.docs_content
-                            except Exception as e:
-                                logger.error(f"stream_id:{self.stream_id} 删除队列 {queue_name} 失败: {e}")
-                        logger.info(f"stream_id:{self.stream_id} 回复的内容: {content}")
-                        return stream_msg(content, message_data.get("is_finish", False), self.stream_id)
-                    else:
+                    if not message_info:
+                        if latest_message_data:
+                            break
                         time.sleep(0.3)
+                        continue
+
+                    latest_message_data = message_info["body"]
+                    # 从消息体中恢复缓存，解决跨实例缓存丢失问题
+                    cached_think = latest_message_data.get("cached_think_content", "") or cached_think
+                    if latest_message_data.get("is_finish", False):
+                        break
+                    if self._is_think_only_chunk(latest_message_data) and (
+                        batch_index + 1 >= MAX_THINK_ONLY_BATCH_CONSUME_COUNT
+                    ):
+                        break
                 except Exception as e:
                     logger.error(f"stream_id:{self.stream_id} 读取队列消息出错: {e}")
                     return stream_msg("读取消息失败，请重试", True, self.stream_id)
+
+            if not latest_message_data:
+                # 队列为空时使用缓存的 think_content 避免内容闪烁
+                if cached_think:
+                    return stream_msg(f"<think>{cached_think}</think>", self.is_finish, self.stream_id)
+                return stream_msg(THINKING_MSG, self.is_finish, self.stream_id)
+
+            self.is_finish = latest_message_data.get("is_finish", False)
+            content = latest_message_data.get("content", "")
+            thinking_content = latest_message_data.get("think_content", "")
+            if thinking_content:
+                content = f"<think>{thinking_content}</think>{content}"
+            if self.is_finish:
+                try:
+                    rabbitmq_client.delete_queue(queue_name)
+                    logger.debug(f"stream_id:{self.stream_id} 队列 {queue_name} 已删除")
+                    self.docs = latest_message_data.get("docs", [])
+                    content += self.docs_content
+                except Exception as e:
+                    logger.error(f"stream_id:{self.stream_id} 删除队列 {queue_name} 失败: {e}")
+            logger.info(f"stream_id:{self.stream_id} 回复的内容: {content}")
+            return stream_msg(content, self.is_finish, self.stream_id)
         except Exception as e:
             logger.error(f"stream_id:{self.stream_id} wxaibot_msg_json_from_cache 出错: {e}")
             return stream_msg("读取消息失败，请重试", True, self.stream_id)
@@ -192,8 +232,8 @@ class ContextGenerator:
 
     def _event_create(self, message: Message, payload: dict):
         message.msg_type = MsgType.Event.value
-        message.event = payload.get("event").get("eventtype")
-        message.event_key = payload.get("event").get("template_card_event").get("event_key")
+        message.event = payload.get("event", {}).get("eventtype")
+        message.event_key = payload.get("event", {}).get("template_card_event", {}).get("event_key")
         message.text = ""
         message.wxaibot_template_card_event = payload.get("event", {}).get("template_card_event")
         return message

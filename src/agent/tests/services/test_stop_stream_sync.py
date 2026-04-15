@@ -1,10 +1,11 @@
 """测试 stop 接口与 SSE 流的同步机制
 
 核心验证：
-1. Consumer 在三条退出路径（CANCELLED / EOD / drain 超时）都会发送取消通知
-2. stop 接口 cancel → wait → 超时降级 的完整流程
-3. 端到端：cancel 后流正确终止并通知
-4. 完整停止时序：stop → cancel → Agent cancel_checker → RUN_FINISHED →
+1. Consumer 在 cancel/stop 相关退出路径（CANCELLED / cancel 后 EOD / drain 超时）发送取消通知
+2. 普通正常结束不会发送取消通知
+3. stop 接口 cancel → wait → 超时降级 的完整流程
+4. 端到端：cancel 后流正确终止并通知
+5. 完整停止时序：stop → cancel → Agent cancel_checker → RUN_FINISHED →
    EOD → Consumer notify → stop wait → 调用平台 API
 """
 
@@ -14,15 +15,15 @@ import time
 import aidev_agent.services.messages_handler.streaming_helper as streaming_helper_module
 import pytest
 from aidev_agent.services.messages_handler import (
-    STOPPED_CHUNK,
     GeneratorStreamingHelper,
     InMemoryQueueMessageHandler,
 )
 from aidev_agent.services.messages_handler.constants import TimeoutConfig
+from aidev_agent.utils.event import RunId, emit_run_finished_event
 
 
 class TestConsumerNotifyOnCancel:
-    """验证 Consumer 在取消场景下发送 notify_consumer_cancelled"""
+    """验证 Consumer 仅在 cancel/stop 相关场景下发送 notify_consumer_cancelled"""
 
     @pytest.fixture
     def handler(self):
@@ -71,8 +72,8 @@ class TestConsumerNotifyOnCancel:
         assert len(collected) < 20, "应只收到部分 chunk"
         assert not t.is_alive()
 
-    def test_normal_finish_triggers_notify(self, handler):
-        """正常结束（EOD_CHUNK）时也应触发 notify"""
+    def test_normal_finish_does_not_trigger_notify(self, handler):
+        """普通正常结束（无 cancel/stop）时不应触发 notify"""
         tid = "test_sync_eod_notify"
 
         def short_gen():
@@ -83,8 +84,8 @@ class TestConsumerNotifyOnCancel:
         result = list(helper.stream(short_gen()))
 
         assert result == ["chunk_0", "chunk_1"]
-        # 正常结束后 notify 应已发出，wait 应立即返回
-        assert handler.wait_for_consumer_cancelled(tid, timeout=1.0)
+        # 普通完成不属于 stop/cancel 流程，不应发取消通知
+        assert not handler.wait_for_consumer_cancelled(tid, timeout=0.2)
 
     def test_drain_timeout_triggers_notify(self, handler, monkeypatch):
         """Consumer drain 超时时也应触发 notify
@@ -237,7 +238,9 @@ class TestEndToEndStopAndResume:
 
         assert "chunk_0" in collected
         assert "chunk_1" in collected
-        assert STOPPED_CHUNK in collected
+        # _consume_stopped_session 耗尽消息后 yield RUN_FINISHED SSE，而非 STOPPED_CHUNK
+        expected_run_finished = emit_run_finished_event(thread_id=tid, run_id=RunId.STOPPED)
+        assert expected_run_finished in collected
         assert not handler.is_stopped(tid), "恢复后 stopped 标记应清除"
 
     def test_stop_no_cache_restarts_generator(self, handler):
@@ -390,7 +393,9 @@ class TestFullStopSequence:
         )
 
         assert finished
-        assert STOPPED_CHUNK in collected
+        # Consumer drain 超时后 yield RUN_FINISHED SSE（runId=cancelled），而非 STOPPED_CHUNK
+        expected_run_finished = emit_run_finished_event(thread_id=tid, run_id=RunId.CANCELLED)
+        assert expected_run_finished in collected
 
     def test_stop_timeout_degradation_no_consumer(self, handler):
         """无 Consumer 场景：stop wait 超时 → 降级 mark_stopped → 调 API"""

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 # Add the src directory to the path so we can import the module
-from aidev_agent.utils.loop import get_event_loop
+from aidev_agent.utils.loop import get_event_loop, run_coro_sync
 
 
 def test_get_event_loop():
@@ -118,3 +118,18 @@ async def test_async_context():
     # Run a task
     result = await sample_async_task(7)
     assert result == 14
+
+
+def test_run_coro_sync_closes_worker_thread_loop():
+    from aidev_agent.utils.loop import _thread_local
+
+    def _f():
+        result = run_coro_sync(sample_async_task(5))
+        has_loop = hasattr(_thread_local, "loop") and _thread_local.loop is not None
+        return result, has_loop
+
+    with ThreadPoolExecutor(1) as pool:
+        result, has_loop = pool.submit(_f).result()
+
+    assert result == 10
+    assert has_loop is False

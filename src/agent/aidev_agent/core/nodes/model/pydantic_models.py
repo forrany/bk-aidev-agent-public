@@ -94,6 +94,9 @@ class ModelNodeSettings(BaseModel):
 
     This model centralizes configuration for building the model node and its
     related ContextAssembly.
+
+    Note: this model may contain internal-only extension points (excluded from
+    serialization) for graph-layer composition.
     """
 
     use_structured_response: bool = Field(
@@ -148,4 +151,14 @@ class ModelNodeSettings(BaseModel):
     token_margin: int = Field(
         default=100,
         description="检查 token 溢出时预留的 token 余量",
+    )
+
+    # ---------------------------------------------------------------------
+    # Extension points (internal)
+    # ---------------------------------------------------------------------
+
+    extra_template_middlewares: list[Any] = Field(
+        default_factory=list,
+        description="(internal) Extra template pipeline middlewares injected by graph layer.",
+        exclude=True,
     )
