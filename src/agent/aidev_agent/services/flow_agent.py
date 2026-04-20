@@ -15,6 +15,7 @@ SSE 事件格式：
 任务会继续运行到完成。用户点击「停止」→ revoke bkflow 任务（不可恢复）。
 """
 
+import copy
 import time
 import uuid
 from logging import getLogger
@@ -36,8 +37,12 @@ logger = getLogger(__name__)
 # 网络连续失败上限：超过此次数认为服务不可用，停止轮询
 MAX_CONSECUTIVE_FAILURES = 10
 # Flow Agent 任务终态
-FLOW_TASK_FINISHED_STATES = frozenset({"FINISHED"})
-FLOW_TASK_FAILED_STATES = frozenset({"FAILED", "REVOKED"})
+FLOW_TASK_FINISHED_STATE = "FINISHED"
+FLOW_TASK_REVOKED_STATE = "REVOKED"
+FLOW_TASK_FAILED_STATE = "FAILED"
+FLOW_TASK_RUNNING_STATE = "RUNNING"
+FLOW_TASK_FINISHED_STATES = frozenset({FLOW_TASK_FINISHED_STATE})
+FLOW_TASK_FAILED_STATES = frozenset({FLOW_TASK_FAILED_STATE, FLOW_TASK_REVOKED_STATE})
 FLOW_TASK_END_STATES = FLOW_TASK_FINISHED_STATES | FLOW_TASK_FAILED_STATES
 
 
@@ -200,6 +205,8 @@ class FlowAgentCompletionAgent(BaseModel):
         start_time = time.time()
         stream_thread_id = self.session_code or self.thread_id
         consecutive_failures = 0
+        # 保存最后一次成功轮询的 task_info，用于取消时构造 revoke 事件
+        last_task_info: dict | None = None
         logger.info(
             "[FLOW_AGENT] Polling started: task_id=%s, session_code=%s, "
             "poll_interval=%ss, poll_timeout=%ss",
@@ -213,9 +220,11 @@ class FlowAgentCompletionAgent(BaseModel):
                 logger.info("[FLOW_AGENT] Task cancelled: task_id=%s, poll_count=%d", task_id, _poll_count)
 
                 # 根据任务是否已启动决定事件类型：
-                # - 已启动（flow_agent_start 已发送）：发 RUN_FINISHED，正常暂停
+                # - 已启动（flow_agent_start 已发送）：再轮询一次拿 revoke 状态，发 flow_agent_result + RUN_FINISHED
                 # - 未启动（任务还没真正开始）：发 RUN_ERROR，触发暂停补写逻辑
                 if self._task_started:
+                    # 发送 revoke 状态的 flow_agent_result 事件
+                    yield from self._emit_cancel_result(encoder, task_id, last_task_info)
                     logger.info("[FLOW_AGENT] Task already started, sending RUN_FINISHED: task_id=%s", task_id)
                     yield emit_run_finished_event(
                         thread_id=self.thread_id,
@@ -262,6 +271,9 @@ class FlowAgentCompletionAgent(BaseModel):
                 # 网络异常时不直接退出，等下一次轮询重试
                 self._interruptible_sleep(self.poll_interval, stream_thread_id)
                 continue
+
+            # 保存最后一次成功轮询结果，用于取消时构造 revoke 事件
+            last_task_info = task_info
 
             # 发送 flow_agent_result 事件（完整数据包）
             result_event = self._make_custom_event(
@@ -382,6 +394,65 @@ class FlowAgentCompletionAgent(BaseModel):
     def _make_custom_event(name: str, value: Any) -> CustomEvent:
         """构造 AG-UI CUSTOM 事件"""
         return CustomEvent(type=EventType.CUSTOM, name=name, value=value)
+
+    def _emit_cancel_result(
+        self, encoder: EventEncoder, task_id: str, last_task_info: dict | None
+    ) -> Generator[str, None, None]:
+        """发送取消后的 flow_agent_result 事件
+
+        基于最后一次轮询数据手动构造 revoke 状态的事件：
+        - task_state 改为 REVOKED
+        - nodes 中 RUNNING 状态的节点改为 REVOKED
+        - FINISHED 和 PENDING 等其他状态的节点保持不变
+        - statistics 中的 state_counts 同步更新
+
+        不通过 API 再轮询，因为用户点停止时 bkflow revoke 是在 cancel 信号之后才执行的，
+        此时 API 返回的数据可能仍是 RUNNING 状态。
+
+        Args:
+            encoder: SSE 编码器
+            task_id: 任务 ID
+            last_task_info: 最后一次成功轮询的 task_info，可能为 None
+        """
+        if last_task_info is None:
+            revoke_info = {
+                "task_id": task_id,
+                "task_state": FLOW_TASK_REVOKED_STATE,
+                "nodes": {},
+                "statistics": {"total": 0, "state_counts": {}},
+            }
+        else:
+            revoke_info = copy.deepcopy(last_task_info)
+            revoke_info["task_state"] = FLOW_TASK_REVOKED_STATE
+
+            # 更新 nodes 中 RUNNING 状态的节点为 REVOKED
+            nodes = revoke_info.get("nodes", {})
+            state_counts: dict[str, int] = {}
+            for node_id, node_info in nodes.items():
+                if isinstance(node_info, dict):
+                    node_state = node_info.get("state", "")
+                    if node_state == FLOW_TASK_RUNNING_STATE:
+                        node_info["state"] = FLOW_TASK_REVOKED_STATE
+                        node_state = FLOW_TASK_REVOKED_STATE
+                    # 重新统计各状态的节点数
+                    state_counts[node_state] = state_counts.get(node_state, 0) + 1
+
+            # 更新 statistics
+            revoke_info["statistics"] = {
+                "total": last_task_info.get("statistics", {}).get("total", len(nodes)),
+                "state_counts": state_counts,
+            }
+
+        revoke_event = self._make_custom_event(
+            name=CustomMessageType.FLOW_AGENT_RESULT.value,
+            value=revoke_info,
+        )
+        self._dispatch_event(revoke_event)
+        yield encoder.encode(revoke_event)
+        logger.info(
+            "[FLOW_AGENT] Emitted cancel result event: task_id=%s, task_state=REVOKED, nodes_count=%d",
+            task_id, len(revoke_info.get("nodes", {})),
+        )
 
     def _dispatch_event(self, event: BaseEvent) -> None:
         """分发事件到外部处理器（如 BaseSessionWriter）"""

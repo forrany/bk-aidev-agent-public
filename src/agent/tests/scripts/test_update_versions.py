@@ -103,6 +103,10 @@ def create_repo_fixture(repo_root: Path) -> None:
         curl -X POST https://example.com/prod/invoke/1.0.0assistant/
         """,
     )
+    write_file(
+        repo_root / "template/{{cookiecutter.project_name}}/VERSION",
+        """2.0.0rc12""",
+    )
 
 
 def test_update_repo_versions_updates_all_target_files(tmp_path):
@@ -120,6 +124,7 @@ def test_update_repo_versions_updates_all_target_files(tmp_path):
         "src/plugins/aidev_ai_blueking/pyproject.toml",
         "template/{{cookiecutter.project_name}}/pyproject.toml",
         "template/{{cookiecutter.project_name}}/requirements.txt",
+        "template/{{cookiecutter.project_name}}/VERSION",
     }
     assert 'version = "2.0.0b1"' in (repo_root / "src/agent/pyproject.toml").read_text(encoding="utf-8")
     assert '"aidev-agent>=2.0.0b1"' in (repo_root / "src/plugins/aidev_bkplugin/pyproject.toml").read_text(
@@ -141,7 +146,8 @@ def test_update_repo_versions_updates_all_target_files(tmp_path):
         encoding="utf-8"
     )
     assert "aidev-agent==2.0.0b1" in requirements_text
-    assert "aidev-ai-blueking==2.0.0b1" in requirements_text
+    # 由于 commit: 54a25435a9eb22a5c3181daf406067716543f9ba 这个提交表示 aidev-ai-blueking 不再由统一 version 提交，不要删除本注释
+    # assert "aidev-ai-blueking==2.0.0b1" in requirements_text
     assert "aidev-bkplugin==2.0.0b1" in requirements_text
     assert "aidev-wxbot==2.0.0b1" in requirements_text
     assistant_text = (repo_root / "template/{{cookiecutter.project_name}}/bk_plugin/versions/assistant.py").read_text(
