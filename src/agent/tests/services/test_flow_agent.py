@@ -218,16 +218,18 @@ class TestFlowAgentStop:
 
     @patch("aidev_agent.services.flow_agent.BKAidevApi")
     def test_cancel_after_task_started_emits_run_finished(self, mock_api):
-        """任务已启动后取消 → 发 RUN_FINISHED(runId="cancelled")
+        """任务已启动后取消 → 手动构造 revoke flow_agent_result + RUN_FINISHED(runId="cancelled")
 
         模拟场景：flow_agent_start 已发送，轮询中检测到取消信号。
-        _task_started=True → 发 RUN_FINISHED(cancelled)，writer 补写"用户已取消"。
+        _task_started=True → 基于 last_task_info 手动构造 revoke 事件，再发 RUN_FINISHED(cancelled)。
         """
         poll_count = {"n": 0}
 
         def mock_is_cancelled(thread_id, **kwargs):
             poll_count["n"] += 1
-            return poll_count["n"] >= 3
+            # is_cancelled 会在 _run_flow 起始检查、每次循环开头、_interruptible_sleep 中被调用
+            # 让第 4 次检查时触发取消（此时已完成 1 次正常轮询 + 1 次 sleep 检查）
+            return poll_count["n"] >= 4
 
         mock_poll_client = MockPollClient(task_info_sequence=[{"task_state": "RUNNING"}] * 10)
         mock_api.get_client.return_value = mock_poll_client
@@ -245,10 +247,72 @@ class TestFlowAgentStop:
         assert len(_find_custom_events(events, CustomMessageType.FLOW_AGENT_START.value)) == 1
         assert len(_find_custom_events(events, CustomMessageType.FLOW_AGENT_END.value)) == 0
 
+        # 最后一个 flow_agent_result 应是 revoke 状态（手动构造）
+        result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
+        assert result_events[-1]["value"]["task_state"] == "REVOKED"
+
         # 任务已启动后取消 → RUN_FINISHED(runId="cancelled")
         finished_events = _find_events_by_type(events, EventType.RUN_FINISHED)
         assert len(finished_events) >= 1
         assert finished_events[0].get("runId") == "cancelled"
+
+    @patch("aidev_agent.services.flow_agent.BKAidevApi")
+    def test_cancel_emits_revoke_result_with_nodes(self, mock_api):
+        """任务已启动后取消 → 基于 last_task_info 手动构造 revoke 事件
+
+        验证：
+        - revoke 事件的 task_state 为 REVOKED
+        - RUNNING 节点改为 REVOKED
+        - FINISHED 节点保持不变
+        - statistics 同步更新
+        """
+        poll_count = {"n": 0}
+
+        def mock_is_cancelled(thread_id, **kwargs):
+            poll_count["n"] += 1
+            return poll_count["n"] >= 4
+
+        running_data = {
+            "task_state": "RUNNING",
+            "task_id": 999,
+            "task_name": "test_task",
+            "nodes": {
+                "n1": {"id": "n1", "name": "消息展示", "type": "ServiceActivity", "state": "FINISHED"},
+                "n2": {"id": "n2", "name": "知识库", "type": "ServiceActivity", "state": "RUNNING"},
+                "n3": {"id": "n3", "name": "待执行节点", "type": "ServiceActivity", "state": "PENDING"},
+            },
+            "statistics": {"total": 3, "state_counts": {"FINISHED": 1, "RUNNING": 1, "PENDING": 1}},
+        }
+        mock_poll_client = MockPollClient(task_info_sequence=[running_data] * 10)
+        mock_api.get_client.return_value = mock_poll_client
+
+        agent = FlowAgentCompletionAgent(
+            resource_manager=MockFlowAgentClient(start_result={"task_id": "999"}),
+            flow_start_params={}, poll_interval=0.01, poll_timeout=60.0,
+            session_code="revoke_session",
+        )
+
+        with patch.object(GeneratorStreamingHelper, "is_cancelled", side_effect=mock_is_cancelled):
+            events = _parse_sse_events(agent._run_flow())
+
+        result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
+        # 最后一个 flow_agent_result 应该是 revoke 状态
+        revoke_event = result_events[-1]
+        assert revoke_event["value"]["task_state"] == "REVOKED"
+
+        # RUNNING 节点手动改为 REVOKED
+        assert revoke_event["value"]["nodes"]["n2"]["state"] == "REVOKED"
+        # FINISHED 节点保持不变
+        assert revoke_event["value"]["nodes"]["n1"]["state"] == "FINISHED"
+        # PENDING 节点保持不变
+        assert revoke_event["value"]["nodes"]["n3"]["state"] == "PENDING"
+
+        # statistics 更新
+        stats = revoke_event["value"]["statistics"]
+        assert stats["total"] == 3
+        assert stats["state_counts"]["REVOKED"] == 1
+        assert stats["state_counts"]["FINISHED"] == 1
+        assert stats["state_counts"]["PENDING"] == 1
 
     @patch("aidev_agent.services.flow_agent.BKAidevApi")
     def test_cancel_before_task_started_emits_run_error(self, mock_api):
