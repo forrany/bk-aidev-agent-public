@@ -160,6 +160,7 @@ class TestCommonQAAgentGetAgentExecutor:
 
         mock_builder = MagicMock()
         mock_builder.set_bkai_options.return_value = mock_builder
+        mock_builder.enable_security_runtime.return_value = mock_builder
         mock_builder.build.return_value = (MagicMock(), MagicMock())
         mock_builder_class.return_value = mock_builder
 
@@ -183,6 +184,7 @@ class TestCommonQAAgentGetAgentExecutor:
 
         mock_builder = MagicMock()
         mock_builder.set_bkai_options.return_value = mock_builder
+        mock_builder.enable_security_runtime.return_value = mock_builder
         mock_builder.build.return_value = (MagicMock(), MagicMock())
         mock_builder_class.return_value = mock_builder
 

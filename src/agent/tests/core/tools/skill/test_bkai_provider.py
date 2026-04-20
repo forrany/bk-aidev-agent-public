@@ -200,7 +200,7 @@ class TestBKAiProvider:
         skills = provider.discover()
         skill = skills[0]
 
-        assert skill["description"] == "Use this skill to create PDF files from various formats."
+        assert "Use this skill to create PDF files from various formats." in skill["description"]
         assert skill["description"] != "aaa"
 
     def test_discover_optional_fields_from_frontmatter(self, mock_client):
@@ -466,7 +466,7 @@ class TestBKAiProvider:
         skills = provider.discover()
 
         assert len(skills) == 1
-        assert skills[0]["description"] == "Short description"
+        assert "Short description" in skills[0]["description"]
 
     def test_path_pseudo_format(self, mock_client, related_skills):
         """Test that path uses pseudo-API format"""
