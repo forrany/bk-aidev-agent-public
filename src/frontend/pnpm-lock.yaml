@@ -116,8 +116,8 @@ importers:
         specifier: 0.0.1-beta.38
         version: 0.0.1-beta.38(vue@3.5.27(typescript@5.9.3))
       '@blueking/chat-x':
-        specifier: '>=0.0.26'
-        version: 0.0.26(typescript@5.9.3)
+        specifier: '>=0.0.27'
+        version: 0.0.27(typescript@5.9.3)
       bkui-vue:
         specifier: 2.0.2-beta.81
         version: 2.0.2-beta.81(highlight.js@11.11.1)(vue@3.5.27(typescript@5.9.3))
@@ -670,8 +670,8 @@ packages:
     peerDependencies:
       vue: ^3.5.24
 
-  '@blueking/chat-x@0.0.26':
-    resolution: {integrity: sha512-2liRc2oRFC0t9L9vnl6LhGqQttY5skNhfEluDnIjqn0bh9GAUhEaN7thnrWOyBgHnmChTzwHlcQoDlvEvW1LvA==}
+  '@blueking/chat-x@0.0.27':
+    resolution: {integrity: sha512-QhELB6iFAYWlaVUaIUpFgt/SxPHHyV0zGHGJTNg5FMohxyxW9+8NZRNBNOoY7qBU1evJbTtxekCXASQMBIuFAA==}
     hasBin: true
 
   '@blueking/chat-x@0.0.3-beta.4':
@@ -8426,7 +8426,7 @@ snapshots:
     dependencies:
       vue: 3.5.27(typescript@5.9.3)
 
-  '@blueking/chat-x@0.0.26(typescript@5.9.3)':
+  '@blueking/chat-x@0.0.27(typescript@5.9.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.3.6)
       bkui-vue: 2.0.2-beta.81(highlight.js@11.11.1)(vue@3.5.27(typescript@5.9.3))
