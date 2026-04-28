@@ -210,5 +210,7 @@ src/agent/.cursor
 src/agent/openspec
 # src/agent/AGENTS.md
 src/agent/CODEBUDDY.md
+src/agent/.planning
+src/agent/harness
 
 

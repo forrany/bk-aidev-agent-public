@@ -228,6 +228,11 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         enable_traces: bool = True,
         debug: bool = False,
         max_attribute_length: int = 4096,
+        agent_id: Optional[str] = None,
+        agent_code: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        session_code: Optional[str] = None,
+        caller_executor: Optional[str] = None,
     ):
         """
         初始化 Trace 收集器
@@ -239,6 +244,11 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
             enable_traces: 是否启用 traces，默认 True
             debug: 是否为调试状态
             max_attribute_length: 属性值最大长度，默认 4096
+            agent_id: agent.info.id
+            agent_code: agent.info.code
+            agent_name: agent.info.name
+            session_code: agent.session.session_code
+            caller_executor: agent.session.caller_executor
         """
         super().__init__()
 
@@ -248,6 +258,13 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         self.enable_traces = enable_traces
         self.debug = debug
         self.max_attribute_length = max_attribute_length
+
+        # Agent / Session 基础信息，会注入到所有 span 中
+        self._agent_id = agent_id
+        self._agent_code = agent_code
+        self._agent_name = agent_name
+        self._session_code = session_code
+        self._caller_executor = caller_executor
 
         # Span 管理 - 使用 SpanHolder 管理完整的 Span 层级
         self.root_span: Optional[Span] = None
@@ -344,6 +361,18 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         attributes = attributes or {}
         if self.debug:
             attributes["debug.thread_id"] = threading.current_thread().name
+
+        # 注入 Agent / Session 基础信息到所有 span
+        if self._agent_id is not None:
+            attributes["agent.info.id"] = self._agent_id
+        if self._agent_code is not None:
+            attributes["agent.info.code"] = self._agent_code
+        if self._agent_name is not None:
+            attributes["agent.info.name"] = self._agent_name
+        if self._session_code is not None:
+            attributes["agent.session.session_code"] = self._session_code
+        if self._caller_executor is not None:
+            attributes["agent.session.caller_executor"] = self._caller_executor
 
         # 创建 Span
         span = self.tracer.start_span(

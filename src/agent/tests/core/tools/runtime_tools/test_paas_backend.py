@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 from aidev_agent.core.tools.runtime_tools.paas_backend import ExecResult, PaasSandboxBackend
 from aidev_agent.core.tools.runtime_tools.types import EditResult, ExecuteResult, WriteResult
@@ -37,11 +39,42 @@ def _make_response(*, status_code: int = 200, json_data=None, content: bytes = b
     return _Resp()
 
 
+def _make_http_response(*, status_code: int = 200, json_data=None, content: bytes = b""):
+    """创建一个可用于 mock 的 HTTP Response 替身（用于 client 层 API 测试）。"""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.content = content
+    resp.json.return_value = json_data
+    resp.raise_for_status.return_value = None
+    if status_code >= 400:
+        from requests.exceptions import HTTPError
+
+        resp.raise_for_status.side_effect = HTTPError(response=resp)
+    return resp
+
+
+def _make_backend(**kwargs) -> PaasSandboxBackend:
+    """创建一个带默认参数的 PaasSandboxBackend 实例，用于测试 HTTP 方法。"""
+    defaults = dict(
+        app_code="test-app",
+        access_token="test-token",
+        bk_username="test-username",
+        snapshot="",
+        snapshot_entrypoint=[],
+        env_vars={},
+    )
+    defaults.update(kwargs)
+    return PaasSandboxBackend(**defaults)
+
+
 class MockOps:
     """记录沙箱操作调用，代替原来的 MockClient。
 
-    通过 monkeypatch 将 PaasSandboxBackend 的 HTTP 方法替换为此对象的实现，
+    通过 monkeypatch 将 PaasSandboxBackend 的底层 HTTP 方法替换为此对象的实现，
     从而在不发真实 HTTP 请求的情况下验证 Backend 的业务逻辑。
+
+    注意：~ 路径展开由 Backend 的 _resolve_path 在公开方法入口统一处理，
+    到达 upload_file/download_file 时路径已是绝对路径。
     """
 
     def __init__(self):
@@ -49,7 +82,6 @@ class MockOps:
         self.sandbox_destroyed = False
         self.exec_handler = lambda sandbox_id, cmd, **kw: ExecResult(stdout="", stderr="", exit_code=0)
         self.uploaded_files: dict[str, bytes] = {}
-        self.deleted_files: list[str] = []
 
     def create_sandbox(self, name=None, env_vars=None, snapshot=None, snapshot_entrypoint=None):
         self.sandbox_created = True
@@ -68,11 +100,6 @@ class MockOps:
         if path not in self.uploaded_files:
             raise FileNotFoundError(f"HTTP 404: file not found: {path}")
         return self.uploaded_files[path]
-
-    def delete_file(self, sandbox_id, path, recursive=False):
-        self.deleted_files.append(path)
-        if path in self.uploaded_files:
-            del self.uploaded_files[path]
 
 
 @pytest.fixture()
@@ -97,7 +124,6 @@ def backend(mock_ops, monkeypatch):
     monkeypatch.setattr(b, "exec_command", mock_ops.exec_command)
     monkeypatch.setattr(b, "upload_file", mock_ops.upload_file)
     monkeypatch.setattr(b, "download_file", mock_ops.download_file)
-    monkeypatch.setattr(b, "delete_file", mock_ops.delete_file)
     return b
 
 
@@ -146,7 +172,9 @@ class TestPaasSandboxBackendLifecycle:
 class TestPaasSandboxBackendLsInfo:
     def test_ls_info_parsing(self, backend, mock_ops):
         def handler(sandbox_id, cmd, **kw):
-            if cmd.startswith("ls "):
+            # ls_info 使用 ["bash", "-c", cmd] 形式执行
+            actual_cmd = cmd[-1] if isinstance(cmd, list) else cmd
+            if actual_cmd.startswith("ls "):
                 return ExecResult(stdout="file1.txt\nsubdir/\n", stderr="", exit_code=0)
             return ExecResult(stdout="", stderr="", exit_code=0)
 
@@ -171,7 +199,7 @@ class TestPaasSandboxBackendRead:
         def handler(sandbox_id, cmd, **kw):
             if cmd.startswith("test -f "):
                 return ExecResult(stdout="", stderr="", exit_code=0)
-            if "wc -l" in cmd:
+            if "END{print NR}" in cmd:
                 return ExecResult(stdout="3\n", stderr="", exit_code=0)
             if cmd.startswith("awk "):
                 return ExecResult(stdout="     1\tline1\n     2\tline2\n", stderr="", exit_code=0)
@@ -198,7 +226,7 @@ class TestPaasSandboxBackendRead:
         def handler(sandbox_id, cmd, **kw):
             if cmd.startswith("test -f "):
                 return ExecResult(stdout="", stderr="", exit_code=0)
-            if "wc -l" in cmd:
+            if "END{print NR}" in cmd:
                 return ExecResult(stdout="0\n", stderr="", exit_code=0)
             return ExecResult(stdout="", stderr="", exit_code=0)
 
@@ -211,7 +239,7 @@ class TestPaasSandboxBackendRead:
         def handler(sandbox_id, cmd, **kw):
             if cmd.startswith("test -f "):
                 return ExecResult(stdout="", stderr="", exit_code=0)
-            if "wc -l" in cmd:
+            if "END{print NR}" in cmd:
                 return ExecResult(stdout="2\n", stderr="", exit_code=0)
             return ExecResult(stdout="", stderr="", exit_code=0)
 
@@ -257,8 +285,8 @@ class TestPaasSandboxBackendEdit:
         mock_ops.uploaded_files["/app/test.txt"] = b"hello world\n"
 
         def handler(sandbox_id, cmd, **kw):
-            if cmd.startswith("test -f "):
-                return ExecResult(stdout="", stderr="", exit_code=0)
+            if cmd.startswith("cat "):
+                return ExecResult(stdout="hello world\n", stderr="", exit_code=0)
             return ExecResult(stdout="", stderr="", exit_code=0)
 
         mock_ops.exec_handler = handler
@@ -272,8 +300,8 @@ class TestPaasSandboxBackendEdit:
 
     def test_edit_file_not_found(self, backend, mock_ops):
         def handler(sandbox_id, cmd, **kw):
-            if cmd.startswith("test -f "):
-                return ExecResult(stdout="", stderr="", exit_code=1)
+            if cmd.startswith("cat "):
+                return ExecResult(stdout="", stderr="No such file", exit_code=1)
             return ExecResult(stdout="", stderr="", exit_code=0)
 
         mock_ops.exec_handler = handler
@@ -287,8 +315,8 @@ class TestPaasSandboxBackendEdit:
         mock_ops.uploaded_files["/app/test.txt"] = b"hello world\n"
 
         def handler(sandbox_id, cmd, **kw):
-            if cmd.startswith("test -f "):
-                return ExecResult(stdout="", stderr="", exit_code=0)
+            if cmd.startswith("cat "):
+                return ExecResult(stdout="hello world\n", stderr="", exit_code=0)
             return ExecResult(stdout="", stderr="", exit_code=0)
 
         mock_ops.exec_handler = handler
@@ -418,6 +446,198 @@ class TestPaasSandboxBackendExecute:
         assert res.exit_code == 0
 
 
+def _is_echo_home(cmd) -> bool:
+    """判断 cmd 是否为 echo $HOME 命令（兼容字符串和列表格式）。"""
+    if isinstance(cmd, list):
+        return len(cmd) == 3 and cmd[2] == "echo $HOME"
+    return cmd == "echo $HOME"
+
+
+class TestResolvePath:
+    """验证 _resolve_path 将 ~ 展开为绝对路径，供 HTTP API 使用。"""
+
+    def test_absolute_path_unchanged(self, backend, mock_ops):
+        """绝对路径原样返回，不触发 shell 调用。"""
+        assert backend._resolve_path("/app/test.txt") == "/app/test.txt"
+
+    def test_tilde_only(self, backend, mock_ops):
+        """单独 ~ 展开为 $HOME。"""
+
+        def handler(sandbox_id, cmd, **kw):
+            if _is_echo_home(cmd):
+                return ExecResult(stdout="/root\n", stderr="", exit_code=0)
+            return ExecResult(stdout="", stderr="", exit_code=0)
+
+        mock_ops.exec_handler = handler
+        assert backend._resolve_path("~") == "/root"
+
+    def test_tilde_with_subpath(self, backend, mock_ops):
+        """~/sub/path 展开为 /root/sub/path。"""
+
+        def handler(sandbox_id, cmd, **kw):
+            if _is_echo_home(cmd):
+                return ExecResult(stdout="/root\n", stderr="", exit_code=0)
+            return ExecResult(stdout="", stderr="", exit_code=0)
+
+        mock_ops.exec_handler = handler
+        assert backend._resolve_path("~/foo/bar.txt") == "/root/foo/bar.txt"
+
+    def test_tilde_slash_only(self, backend, mock_ops):
+        """~/ 展开为 /root/。"""
+
+        def handler(sandbox_id, cmd, **kw):
+            if _is_echo_home(cmd):
+                return ExecResult(stdout="/root\n", stderr="", exit_code=0)
+            return ExecResult(stdout="", stderr="", exit_code=0)
+
+        mock_ops.exec_handler = handler
+        assert backend._resolve_path("~/") == "/root/"
+
+    def test_home_dir_cached(self, backend, mock_ops):
+        """第二次调用不再执行 echo $HOME，直接复用缓存。"""
+        call_count = 0
+
+        def handler(sandbox_id, cmd, **kw):
+            nonlocal call_count
+            if _is_echo_home(cmd):
+                call_count += 1
+                return ExecResult(stdout="/home/user\n", stderr="", exit_code=0)
+            return ExecResult(stdout="", stderr="", exit_code=0)
+
+        mock_ops.exec_handler = handler
+        backend._resolve_path("~/a.txt")
+        backend._resolve_path("~/b.txt")
+        assert call_count == 1
+        assert backend._resolve_path("~/c.txt") == "/home/user/c.txt"
+
+
+class TestTildePathIntegration:
+    """验证 ~ 路径在各方法中的端到端处理。"""
+
+    def _make_handler(self, mock_ops):
+        """返回一个 exec_handler，模拟 shell 命令行为。
+
+        由于 _resolve_path 在入口层已将 ~ 展开为 /root，
+        shell 命令中的路径都是绝对路径（经 shlex.quote 转义），
+        不再出现 $HOME。
+        """
+
+        def _extract_path(cmd: str) -> str:
+            """从 shell 命令末尾提取被 shlex.quote 转义的路径。"""
+            # shlex.quote 产生 '/root/xxx' 形式
+            path_part = cmd.rsplit(" ", 1)[-1].strip("'\"")
+            return path_part
+
+        def handler(sandbox_id, cmd, **kw):
+            # _resolve_path 探测 HOME（列表格式 ["/bin/sh", "-c", "echo $HOME"]）
+            if _is_echo_home(cmd):
+                return ExecResult(stdout="/root\n", stderr="", exit_code=0)
+            # ls_info 传 ["bash", "-c", cmd_str]，其余方法传字符串
+            actual_cmd = cmd[-1] if isinstance(cmd, list) and len(cmd) >= 1 else cmd
+            # test -e / test -f
+            if actual_cmd.startswith(("test -e ", "test -f ")):
+                path = _extract_path(actual_cmd)
+                if path in mock_ops.uploaded_files:
+                    return ExecResult(stdout="", stderr="", exit_code=0)
+                return ExecResult(stdout="", stderr="", exit_code=1)
+            # mkdir
+            if actual_cmd.startswith("mkdir "):
+                return ExecResult(stdout="", stderr="", exit_code=0)
+            # cat (edit 读取)
+            if actual_cmd.startswith("cat "):
+                path = _extract_path(actual_cmd)
+                if path in mock_ops.uploaded_files:
+                    return ExecResult(
+                        stdout=mock_ops.uploaded_files[path].decode("utf-8", errors="replace"),
+                        stderr="",
+                        exit_code=0,
+                    )
+                return ExecResult(stdout="", stderr="No such file", exit_code=1)
+            # awk 行数统计
+            if "END{print NR}" in actual_cmd:
+                path = _extract_path(actual_cmd)
+                if path in mock_ops.uploaded_files:
+                    content = mock_ops.uploaded_files[path].decode("utf-8", errors="replace")
+                    lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+                    return ExecResult(stdout=f"{lines}\n", stderr="", exit_code=0)
+                return ExecResult(stdout="0\n", stderr="", exit_code=0)
+            # awk 带行号输出
+            if actual_cmd.startswith("awk "):
+                path = _extract_path(actual_cmd)
+                if path in mock_ops.uploaded_files:
+                    content = mock_ops.uploaded_files[path].decode("utf-8", errors="replace")
+                    lines = content.split("\n")
+                    if lines and lines[-1] == "":
+                        lines = lines[:-1]
+                    out = "\n".join(f"{i + 1:>6}\t{line}" for i, line in enumerate(lines))
+                    return ExecResult(stdout=out + "\n", stderr="", exit_code=0)
+                return ExecResult(stdout="", stderr="", exit_code=0)
+            # rm
+            if actual_cmd.startswith("rm "):
+                path = _extract_path(actual_cmd)
+                mock_ops.uploaded_files.pop(path, None)
+                return ExecResult(stdout="", stderr="", exit_code=0)
+            return ExecResult(stdout="", stderr="", exit_code=0)
+
+        return handler
+
+    def test_write_tilde_then_read_tilde(self, backend, mock_ops):
+        """write('~/f.txt') 后 read('~/f.txt') 能正确读取。"""
+        mock_ops.exec_handler = self._make_handler(mock_ops)
+
+        w = backend.write("~/test.txt", "hello tilde\n")
+        assert w.error is None
+        # upload_file 应通过 _resolve_path 将 ~/test.txt 转为 /root/test.txt
+        assert "/root/test.txt" in mock_ops.uploaded_files
+
+        r = backend.read("~/test.txt", offset=0, limit=10)
+        assert "hello tilde" in r
+
+    def test_write_tilde_duplicate_detected(self, backend, mock_ops):
+        """write('~/f.txt') 两次时，第二次应检测到文件已存在。"""
+        mock_ops.exec_handler = self._make_handler(mock_ops)
+
+        w1 = backend.write("~/dup.txt", "first")
+        assert w1.error is None
+
+        w2 = backend.write("~/dup.txt", "second")
+        assert w2.error is not None
+        assert "already exists" in w2.error
+
+    def test_edit_tilde_path(self, backend, mock_ops):
+        """edit('~/f.txt') 能正确读取、修改并写回文件。"""
+        mock_ops.exec_handler = self._make_handler(mock_ops)
+        # 预写入
+        backend.write("~/edit_me.txt", "old content\n")
+
+        e = backend.edit("~/edit_me.txt", "old", "new")
+        assert e.error is None
+        assert e.occurrences == 1
+        assert mock_ops.uploaded_files["/root/edit_me.txt"] == b"new content\n"
+
+    def test_upload_tilde_download_tilde(self, backend, mock_ops):
+        """upload_files('~/f.bin') 后 download_files('~/f.bin') 内容一致。"""
+        mock_ops.exec_handler = self._make_handler(mock_ops)
+
+        payload = b"\x00\x01binary"
+        up = backend.upload_files([("~/bin.dat", payload)])
+        assert up[0]["error"] is None
+        assert "/root/bin.dat" in mock_ops.uploaded_files
+
+        down = backend.download_files(["~/bin.dat"])
+        assert down[0]["error"] is None
+        assert down[0]["content"] == payload
+
+    def test_write_empty_content(self, backend, mock_ops):
+        """write('', '') 应返回错误而非抛异常。"""
+        mock_ops.exec_handler = self._make_handler(mock_ops)
+
+        res = backend.write("/app/empty.txt", "")
+        assert isinstance(res, WriteResult)
+        assert res.error is not None
+        assert "empty" in res.error.lower()
+
+
 class TestPaasSandboxBackendInit:
     def test_init_basic_attributes(self):
         """验证构造函数正确赋值所有属性。"""
@@ -458,3 +678,127 @@ class TestPaasSandboxBackendInit:
             env_vars={},
         )
         assert backend._app_code == "app"
+
+
+class TestPaasSandboxBackendAuth:
+    """测试配置项显式注入。"""
+
+    def test_explicit_params(self):
+        """所有配置项均通过构造函数显式注入，不依赖任何环境变量。"""
+        backend = _make_backend(
+            app_code="explicit-app",
+            access_token="explicit-token",
+        )
+        assert backend._app_code == "explicit-app"
+        assert backend._access_token == "explicit-token"
+
+
+class TestPaasSandboxBackendErrors:
+    """测试错误处理。"""
+
+    def test_missing_app_code(self):
+        backend = _make_backend(app_code="")
+        with pytest.raises(ValueError, match="app_code"):
+            backend.create_sandbox()
+
+
+class TestPaasSandboxBackendHTTPMethods:
+    """测试各 HTTP API 方法（通过 mock client）。"""
+
+    @pytest.fixture()
+    def http_backend(self):
+        b = _make_backend()
+        b.client = MagicMock()
+        return b
+
+    def test_create_sandbox(self, http_backend):
+        http_backend.client.create_sandbox.request.return_value = _make_http_response(json_data={"uuid": "sb-123"})
+
+        sandbox_id = http_backend.create_sandbox(name="test")
+        assert sandbox_id == "sb-123"
+
+        http_backend.client.create_sandbox.request.assert_called_once_with(
+            json={"name": "test"},
+            path_params={"app_code": "test-app"},
+        )
+
+    def test_destroy_sandbox(self, http_backend):
+        http_backend.client.delete_sandbox.request.return_value = _make_http_response()
+
+        http_backend.destroy_sandbox("sb-123")
+
+        http_backend.client.delete_sandbox.request.assert_called_once_with(path_params={"sandbox_id": "sb-123"})
+
+    def test_exec_command(self, http_backend):
+        http_backend.client.exec_command.request.return_value = _make_http_response(
+            json_data={"stdout": "hello\n", "stderr": "", "exit_code": 0}
+        )
+
+        result = http_backend.exec_command("sb-123", "echo hello")
+        assert result.stdout == "hello\n"
+        assert result.stderr == ""
+        assert result.exit_code == 0
+
+        http_backend.client.exec_command.request.assert_called_once_with(
+            json={"cmd": "echo hello"},
+            path_params={"sandbox_id": "sb-123"},
+        )
+
+    def test_upload_file(self, http_backend):
+        http_backend.client.upload_file.request.return_value = _make_http_response(
+            json_data={"code": 0, "data": None, "message": "ok"}
+        )
+
+        http_backend.upload_file("sb-123", "/app/test.txt", b"hello content")
+
+        http_backend.client.upload_file.request.assert_called_once_with(
+            files={"file": ("test.txt", b"hello content"), "path": (None, "/app/test.txt")},
+            path_params={"sandbox_id": "sb-123"},
+        )
+
+    def test_download_file(self, http_backend):
+        content = b"file content here"
+        http_backend.client.download_file.request.return_value = _make_http_response(content=content)
+
+        result = http_backend.download_file("sb-123", "/app/test.txt")
+        assert result == content
+
+        http_backend.client.download_file.request.assert_called_once_with(
+            params={"path": "/app/test.txt"},
+            path_params={"sandbox_id": "sb-123"},
+        )
+
+
+class TestEnsureSandboxConcurrency:
+    """测试 _ensure_sandbox 的并发安全性。"""
+
+    def test_concurrent_ensure_sandbox_creates_once(self, monkeypatch):
+        """多线程并发调用 _ensure_sandbox 时，create_sandbox 只执行一次。"""
+        import threading
+        from unittest.mock import MagicMock
+
+        backend = PaasSandboxBackend(
+            app_code="test-app",
+            access_token="token",
+            bk_username="user",
+            snapshot="snap",
+            snapshot_entrypoint=[],
+            env_vars={},
+        )
+        mock_create = MagicMock(return_value="sandbox-123")
+        monkeypatch.setattr(backend, "create_sandbox", mock_create)
+        monkeypatch.setattr("aidev_agent.core.tools.runtime_tools.paas_backend.sleep", lambda _: None)
+
+        results: list[str | None] = [None] * 10
+
+        def worker(idx):
+            results[idx] = backend._ensure_sandbox()
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert mock_create.call_count == 1
+        assert all(r == "sandbox-123" for r in results)

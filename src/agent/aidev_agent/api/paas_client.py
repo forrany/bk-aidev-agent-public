@@ -46,13 +46,6 @@ class Client(BaseClient):
         path="agent_sandbox/sandboxes/{sandbox_id}/files/download",
     )
 
-    delete_file = bind_property(
-        Operation,
-        name="delete_file",
-        method="DELETE",
-        path="agent_sandbox/sandboxes/{sandbox_id}/files/",
-    )
-
 
 class BkPaaSSandboxApi:
     _api_name = "paasv3" if settings.RUN_VER == "ieod" else "bkpaas3"

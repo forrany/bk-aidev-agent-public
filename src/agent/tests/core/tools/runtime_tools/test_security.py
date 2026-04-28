@@ -23,7 +23,9 @@ from aidev_agent.core.tools.runtime_tools.security import (
     _is_script_file,
     _normalize_command_name,
     is_command_allowed,
+    redact_output,
     validate_command,
+    validate_path,
 )
 
 
@@ -908,3 +910,66 @@ class TestScriptPathValidation:
         ok, reason = _check_script_path_allowed("", ["/workspace"])
         assert not ok
         assert "未指定" in reason or "遍历" in reason
+
+
+class TestValidatePath:
+    """Test validate_path function from security module."""
+
+    @pytest.mark.parametrize(
+        "path, expected",
+        [
+            ("foo/bar", "foo/bar"),
+            ("/foo/bar", "/foo/bar"),
+            ("/./foo//bar", "/foo/bar"),
+            ("a/../b", "b"),
+        ],
+    )
+    def test_validate_path_normalizes(self, path, expected):
+        """Test path normalization."""
+        assert validate_path(path) == expected
+
+    def test_validate_path_prevents_traversal(self):
+        """Test that path traversal is prevented."""
+        with pytest.raises(ValueError, match="Path traversal not allowed"):
+            validate_path("../etc/passwd")
+
+    def test_validate_path_tilde_passes_through(self):
+        """Test that tilde paths are passed through without expansion (SEC-03).
+
+        ~ expansion should happen in the sandbox context, not via os.path.expanduser.
+        """
+        assert validate_path("~") == "~"
+        assert validate_path("~/.bashrc") == "~/.bashrc"
+
+    def test_validate_path_windows_absolute_rejected(self):
+        """Test that Windows absolute paths are rejected."""
+        with pytest.raises(ValueError, match="Windows absolute paths are not supported"):
+            validate_path("C:/Users/file.txt")
+
+    def test_validate_path_allowed_prefixes(self):
+        """Test path with allowed prefixes."""
+        assert validate_path("/data/file.txt", allowed_prefixes=["/data/", "/workspace/"]) == "/data/file.txt"
+
+    def test_validate_path_not_in_allowed_prefixes(self):
+        """Test that paths outside allowed prefixes are rejected."""
+        with pytest.raises(ValueError, match="must start with one of"):
+            validate_path("/etc/file.txt", allowed_prefixes=["/data/", "/workspace/"])
+
+
+class TestRedactOutput:
+    """Test redact_output function."""
+
+    @pytest.mark.parametrize(
+        "text, sensitive_values, expected",
+        [
+            ("token is abc123", ["abc123"], "token is __BKAI_AGENT_REDACTED__"),
+            ("user=admin token=xyz", ["admin", "xyz"], "user=__BKAI_AGENT_REDACTED__ token=__BKAI_AGENT_REDACTED__"),
+            ("no secrets here", ["secret_token"], "no secrets here"),
+            ("some text", [], "some text"),
+            ("some text", [""], "some text"),
+            ("key=abc key=abc", ["abc"], "key=__BKAI_AGENT_REDACTED__ key=__BKAI_AGENT_REDACTED__"),
+        ],
+    )
+    def test_redact_output(self, text, sensitive_values, expected):
+        """测试脱敏函数各种场景。"""
+        assert redact_output(text, sensitive_values) == expected
