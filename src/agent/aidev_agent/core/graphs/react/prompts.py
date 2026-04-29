@@ -69,6 +69,9 @@ ATOM_HISTORY_SYSTEM_PROMPT_TEMPLATE = _atom(
     "{{history_system_prompt}}\n\n"
     "{%- endif %}"
 )
+ATOM_IMAGE_RENDERING = _atom(
+    "如果在返回内容包含图片的情况下，请用markdown语法渲染图片，图片对应使用语法为：![图片描述](图片URL)。"
+)
 
 # ----------------------------------------------------------------------------
 # general_qa (tool_calling)
@@ -80,6 +83,8 @@ ATOM_GENERAL_TOOL_CALLING_SYSTEM = _atom(
     + "{% if not use_general_knowledge_on_miss %}如果无法使用提供的工具回答，请使用拒答文案'{{rejection_response}}'拒绝回答。{% endif -%}"
     + "\n\n"
     + ATOM_BEIJING_NOW
+    + "\n\n"
+    + ATOM_IMAGE_RENDERING
     + "\n\n"
     + ATOM_NO_SYSTEM_IN_THINKING
 )
@@ -182,12 +187,12 @@ ATOM_CLARIFYING_INSTRUCTION = (
 
 ATOM_PRIVATE_NOTES = (
     "\n\n注意：务必严格遵循以上要求和返回格式！请尽量保持答案简洁！请务必使用中文回答！"
-    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + "\n\n" + ATOM_BEIJING_NOW
+    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + "\n\n" + ATOM_BEIJING_NOW + ATOM_IMAGE_RENDERING
 )
 
 ATOM_CLARIFYING_NOTES = (
     "\n\n注意：务必严格遵循以上要求和返回格式！请尽量保持答案简洁！请务必使用中文回答！"
-    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + ATOM_BEIJING_NOW
+    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + "\n\n" + ATOM_BEIJING_NOW + ATOM_IMAGE_RENDERING
 )
 
 ATOM_PRIVATE_TOOL_CALLING_HUMAN = _atom(

@@ -44,6 +44,7 @@ from .prompt_middleware import (
     DecisionSystemMiddleware,
     HistorySystemPromptMiddleware,
     NoSystemInThinkingMiddleware,
+    ImageRenderingMiddleware,
     RoleDefinitionMiddleware,
     StructuredChatFormatMiddleware,
 )
@@ -293,6 +294,7 @@ def build_model_node(
         DecisionSystemMiddleware(enable_query_clarification=node_options.enable_query_clarification),
     )
     context_assembly.add_middleware("template", BeijingTimeMiddleware())
+    context_assembly.add_middleware("template", ImageRenderingMiddleware())
     context_assembly.add_middleware("template", NoSystemInThinkingMiddleware())
     context_assembly.add_middleware("template", HistorySystemPromptMiddleware())
     # 加载由 graph 层注入的额外模板中间件（例如 SkillsPromptMiddleware）

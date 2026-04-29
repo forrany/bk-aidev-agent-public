@@ -807,8 +807,10 @@ class ReActAgentBuilder:
 
         callbacks = list(self._callbacks or [])
         non_thinking_llm = self._non_thinking_llm or self._llm
-        use_structured_response = bool(is_model_without_function_calling(self._llm) and self._extra_tools)
-
+        if self._agent_options.intent_recognition_options.agent_type:
+            use_structured_response = bool("deepseek" in self._agent_options.intent_recognition_options.agent_type)
+        else:
+            use_structured_response = bool(is_model_without_function_calling(self._llm) and self._extra_tools)
         # 统一处理 agent_options
         prepared_agent_options = self._prepare_agent_options(
             self._agent_options,

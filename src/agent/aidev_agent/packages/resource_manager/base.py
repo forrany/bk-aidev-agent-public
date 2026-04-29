@@ -157,6 +157,8 @@ class BaseResourceManager(abc.ABC):
             knowledgebase_settings_data["llm_token_limit"] = prompt_setting.get("llm_token_limit")
         if prompt_setting.get("tool_output_compress_thrd") is not None:
             intent_recognition_data["tool_output_compress_thrd"] = prompt_setting.get("tool_output_compress_thrd")
+        if prompt_setting.get("non_thinking_llm") is not None:
+            intent_recognition_data["non_thinking_llm"] = prompt_setting.get("non_thinking_llm")
 
         conversation_settings = res.get("conversation_settings", {}) or {}
         return AgentConfig(

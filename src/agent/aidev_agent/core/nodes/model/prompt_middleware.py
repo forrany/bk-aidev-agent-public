@@ -107,6 +107,7 @@ class DecisionSystemMiddleware:
 
             ctx.metadata["slots_has_beijing"] = True
             ctx.metadata["slots_has_no_system_in_thinking"] = True
+            ctx.metadata["slots_has_image_rendering"] = True
             next()
             return
 
@@ -119,6 +120,7 @@ class DecisionSystemMiddleware:
             ctx.prompt_slots.human = p.ATOM_PRIVATE_TOOL_CALLING_HUMAN
             ctx.metadata["slots_has_beijing"] = True
             ctx.metadata["slots_has_no_system_in_thinking"] = True
+            ctx.metadata["slots_has_image_rendering"] = True
         else:  # clarifying
             ctx.prompt_slots.system += (
                 p.ATOM_CLARIFYING_QA_SYSTEM_CORE + p.ATOM_CLARIFYING_INSTRUCTION + p.ATOM_CLARIFYING_NOTES
@@ -126,6 +128,7 @@ class DecisionSystemMiddleware:
             ctx.prompt_slots.human = p.ATOM_PRIVATE_TOOL_CALLING_HUMAN
             ctx.metadata["slots_has_beijing"] = True
             ctx.metadata["slots_has_no_system_in_thinking"] = True
+            ctx.metadata["slots_has_image_rendering"] = True
 
         next()
 
@@ -166,5 +169,17 @@ class NoSystemInThinkingMiddleware:
             p = _get_prompt_atoms()
             ctx.prompt_slots.system += "\n\n" + p.ATOM_NO_SYSTEM_IN_THINKING
             ctx.metadata["slots_has_no_system_in_thinking"] = True
+
+        next()
+
+class ImageRenderingMiddleware:
+    """Append image rendering atom to system prompt when needed."""
+
+    def __call__(self, ctx: ProcessorContext, next: NextFunction) -> None:
+        mode: PromptMode = ctx.metadata.get("prompt_mode", "tool_calling")
+        if mode == "tool_calling" and not ctx.metadata.get("slots_has_image_rendering"):
+            p = _get_prompt_atoms()
+            ctx.prompt_slots.system += "\n\n" + p.ATOM_IMAGE_RENDERING
+            ctx.metadata["slots_has_image_rendering"] = True
 
         next()
