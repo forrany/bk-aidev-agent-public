@@ -3,12 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar, Dict, Tuple
 
 from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
-from aidev_agent.services.pydantic_models import AgentExecutorKwargs
+from aidev_agent.pydantic_models import AgentExecutorKwargs
 
 if TYPE_CHECKING:
     from langchain_core.runnables import Runnable, RunnableConfig
-
-    from aidev_agent.services.pydantic_models import AgentExecutorKwargs
 
 
 class CommonQAAgent:

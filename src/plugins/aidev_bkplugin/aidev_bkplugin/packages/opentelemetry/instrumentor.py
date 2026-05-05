@@ -21,7 +21,7 @@ import logging
 from typing import Any, Collection, Dict, Generator, Iterator, Optional
 
 import orjson
-from aidev_agent.services.pydantic_models import ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from aidev_agent.utils.local import request_local
 from langchain_core.messages import BaseMessage
 from opentelemetry import context as context_api

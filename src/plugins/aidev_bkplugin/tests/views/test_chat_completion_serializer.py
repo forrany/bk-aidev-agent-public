@@ -12,7 +12,7 @@ import uuid
 from unittest.mock import patch
 
 import pytest
-from aidev_agent.services.pydantic_models import ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from aidev_bkplugin.serializers.chat_completion import ChatCompletionRequestSerializer
 from rest_framework.exceptions import ValidationError
 

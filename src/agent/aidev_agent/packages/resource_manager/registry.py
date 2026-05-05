@@ -11,11 +11,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Optional, runtime_checkable
 
 from langchain_core.tools import StructuredTool
+from typing_extensions import Protocol
 
-from aidev_agent.utils.factory import SimpleFactory
+from aidev_agent.utils.factory import SingletonFactory
+
+if TYPE_CHECKING:
+    from aidev_agent.pydantic_models import AgentConfig
 
 
 @runtime_checkable
@@ -42,6 +46,13 @@ class ResourceManagerProtocol(Protocol):
         """取回 agent 配置原始字典。
 
         :param version: 可选的 agent 配置版本；为空时由后端返回最新版本。
+        """
+        ...
+
+    def get_agent_config(self, agent_code: str, version: Optional[str] = None, **kwargs) -> "AgentConfig":
+        """取回装配后的 ``AgentConfig``（dict → AgentConfig 装配统一收敛在本协议）。
+
+        默认实现见 ``BaseResourceManager.get_agent_config``；插件 / 测试侧需覆盖时按本协议鸭子类型实现即可。
         """
         ...
 
@@ -90,4 +101,4 @@ class ResourceManagerProtocol(Protocol):
         ...
 
 
-resource_manager: SimpleFactory[str, ResourceManagerProtocol] = SimpleFactory("resource_manager")
+resource_manager: SingletonFactory[str, ResourceManagerProtocol] = SingletonFactory("resource_manager")

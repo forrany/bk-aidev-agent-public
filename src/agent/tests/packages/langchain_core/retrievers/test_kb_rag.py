@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.enums import FineGrainedScoreType
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
-from aidev_agent.services.pydantic_models import (
+from aidev_agent.pydantic_models import (
     AgentOptions,
     IntentRecognition,
     KnowledgebaseSettings,

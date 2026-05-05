@@ -48,7 +48,7 @@ from aidev_agent.enums import Decision
 from aidev_agent.packages.langchain_core.models import ChatModel
 from aidev_agent.packages.langchain_core.models.utils import is_model_without_function_calling
 from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
-from aidev_agent.services.pydantic_models import AgentExecutorKwargs, AgentOptions
+from aidev_agent.pydantic_models import AgentExecutorKwargs, AgentOptions
 
 if TYPE_CHECKING:
     from langchain_core.runnables import Runnable

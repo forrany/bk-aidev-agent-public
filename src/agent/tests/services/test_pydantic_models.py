@@ -1,13 +1,13 @@
 from unittest.mock import MagicMock, patch
 
-from aidev_agent.services.common_agent import CommonQAAgent
-from aidev_agent.services.pydantic_models import (
+from aidev_agent.pydantic_models import (
     AgentExecutorKwargs,
     AgentOptions,
     ChatPrompt,
     ExecuteKwargs,
     SessionContentExtra,
 )
+from aidev_agent.services.common_agent import CommonQAAgent
 
 
 def test_chat_prompt():

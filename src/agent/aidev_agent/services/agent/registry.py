@@ -17,15 +17,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generator, Optional, Protocol, Type
 
 from aidev_agent.enums import AgentType
-from aidev_agent.services.pydantic_models import ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from aidev_agent.utils.factory import SimpleFactory
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from aidev_agent.packages.resource_manager import ResourceManagerProtocol
+    from aidev_agent.pydantic_models import AgentConfig
     from aidev_agent.services.common_agent import CommonQAAgent
-    from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
 
 
 # ============================== 构建期上下文 ==============================
@@ -71,9 +71,8 @@ class AgentBuildContext:
         agent_type: Agent 类型；与 ``chat`` / ``flow`` 子对象互斥关系一致，
             便于显式 dispatch。
         agent_config: 主智能体配置（已对应 ``agent_code`` 取回，避免下游重复请求）。
-        config_manager_class: 配置管理类（用于子 agent_code 的配置取回，
-            如命令切换出去的子 agent）。
-        resource_manager: 通用 API 资源管理器。
+        resource_manager: 通用 API 资源管理器（含 ``get_agent_config`` / ``retrieve_agent_config``
+            等业务方法；子 agent_code 的配置取回也通过它）。
         session_code: 会话代码。
         username: 用户名。
         session_context_data: 已清洗的会话上下文（去 system / 不完整 tool_calls
@@ -87,7 +86,6 @@ class AgentBuildContext:
 
     agent_code: str
     agent_type: AgentType
-    config_manager_class: Type["AgentConfigManager"]
     resource_manager: "ResourceManagerProtocol"
     agent_config: Optional["AgentConfig"] = None
     """主智能体配置（CHAT 路径在 ``_make_build_context`` 时预读；FLOW 路径不依赖配置，
@@ -144,8 +142,8 @@ class AgentProtocol(Protocol):
 # ============================== 注册中心 ==============================
 #
 # 直接使用 :class:`aidev_agent.utils.factory.SimpleFactory`，与
-# ``aidev_bkplugin/services/factory.py`` 的 ``agent_factory`` / ``agent_config_factory``
-# 共用同一注册抽象，不再引入项目专属的注册中心子类。
+# ``aidev_bkplugin/services/factory.py`` 的 ``agent_factory`` 共用同一注册抽象，
+# 不再引入项目专属的注册中心子类。
 #
 # 调用约定：
 # - 注册：``agent_registry.register(MyAgent.agent_type, MyAgent)``

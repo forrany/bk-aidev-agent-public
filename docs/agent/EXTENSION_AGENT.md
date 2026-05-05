@@ -16,7 +16,7 @@ bk_plugin/
 ├── config.py                      # 【重要】智能体配置文件
 ├── extend/
 │   ├── agent.py                   # 【重要】自定义工具扩展入口
-│   └── config_manager.py          # 配置管理器（一般无需修改）
+│   └── resource_manager.py        # 资源管理器（覆盖平台 agent 配置；一般无需修改）
 ├── versions/
 │   └── assistant_components.py    # 【重要】配置加载器
 └── docs/
@@ -41,9 +41,12 @@ bk_plugin/
 ### 1.3 配置生效路径
 
 配置通过以下链路生效：
-1. 智能体在运行时将读取 `settings.DEFAULT_CONFIG_MANAGER` 获取配置管理实例
-2. 插件默认使用 `bk_plugin.extend.config_manager.CustomAgentConfigManager` 进行配置管理
-3. `CustomAgentConfigManager` 将读取 `bk_plugin.config.AGENT_CONFIG` 覆盖平台配置
+1. SDK 在 `aidev_bkplugin.apps.AppConfig.ready()` 时读取 `settings.AIDEV_RESOURCE_MANAGER`，
+   通过 `resource_manager.replace_defaults(...)` 把自定义实现注入到全局资源管理器工厂。
+2. 插件默认使用 `bk_plugin.extend.resource_manager.CustomAgentResourceManager`
+   （继承 `aidev_agent.packages.resource_manager.AgentResourceManager`）。
+3. `CustomAgentResourceManager.get_agent_config(...)` 在调用 `super().get_agent_config(...)`
+   后用 `bk_plugin.config.AGENT_CONFIG` 覆盖对应字段。
 
 ## 二、自定义工具扩展
 

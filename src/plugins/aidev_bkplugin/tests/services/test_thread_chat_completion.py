@@ -73,12 +73,10 @@ class TestBuildChatCompletionAgentByThreadIdWithChatHistory:
             patch("aidev_bkplugin.services.agent.get_or_create_session_by_thread_id") as mock_session,
             patch("aidev_bkplugin.services.agent.save_session_content") as mock_save,
             patch("aidev_bkplugin.services.agent.agent_factory.get") as mock_agent_factory,
-            patch("aidev_bkplugin.services.agent.agent_config_factory.get") as mock_config_factory,
             patch("aidev_bkplugin.services.agent.AgentInstanceFactory.build_agent") as mock_build,
         ):
             mock_session.return_value = "session-abc"
             mock_agent_factory.return_value = MagicMock()
-            mock_config_factory.return_value = MagicMock()
             mock_build.return_value = MagicMock()
 
             agent_instance, session_code = build_chat_completion_agent_by_thread_id_with_chat_history(
@@ -103,12 +101,10 @@ class TestBuildChatCompletionAgentByThreadIdWithChatHistory:
             patch("aidev_bkplugin.services.agent.get_or_create_session_by_thread_id") as mock_session,
             patch("aidev_bkplugin.services.agent.save_session_content") as mock_save,
             patch("aidev_bkplugin.services.agent.agent_factory.get") as mock_agent_factory,
-            patch("aidev_bkplugin.services.agent.agent_config_factory.get") as mock_config_factory,
             patch("aidev_bkplugin.services.agent.AgentInstanceFactory.build_agent") as mock_build,
         ):
             mock_session.return_value = "session-empty"
             mock_agent_factory.return_value = MagicMock()
-            mock_config_factory.return_value = MagicMock()
             mock_build.return_value = MagicMock()
 
             agent_instance, session_code = build_chat_completion_agent_by_thread_id_with_chat_history(

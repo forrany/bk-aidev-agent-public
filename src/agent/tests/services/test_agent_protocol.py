@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.packages.langchain_core.models.mock import MockChatModel
+from aidev_agent.pydantic_models import AgentConfig, AgentOptions
 from aidev_agent.services.agent import (
     AgentBuildContext,
     AgentInstanceFactory,
@@ -27,8 +28,6 @@ from aidev_agent.services.agent import (
 )
 from aidev_agent.services.agent.chat import ChatAgentBuilder
 from aidev_agent.services.common_agent import CommonQAAgent
-from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
-from aidev_agent.services.pydantic_models import AgentOptions
 from aidev_agent.utils.factory import SimpleFactory
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -61,7 +60,6 @@ def _make_chat_ctx(
         agent_code=agent_code,
         agent_type=AgentType.CHAT,
         agent_config=_make_agent_config(agent_code),
-        config_manager_class=AgentConfigManager,
         resource_manager=MagicMock(name="rm"),
         session_code=session_code,
         username="alice",
@@ -109,7 +107,6 @@ class TestAgentBuildContext:
             agent_code="x",
             agent_type=AgentType.CHAT,
             agent_config=_make_agent_config("x"),
-            config_manager_class=AgentConfigManager,
             resource_manager=MagicMock(),
         )
         assert ctx.agent_code == "x"
@@ -127,7 +124,6 @@ class TestAgentBuildContext:
             agent_code="x",
             agent_type=AgentType.FLOW,
             agent_config=_make_agent_config("x"),
-            config_manager_class=AgentConfigManager,
             resource_manager=MagicMock(),
             flow=FlowBuildExtras(task_id="T-1", poll_interval=0.5),
             extra={"trace_id": "tx-1"},
@@ -230,7 +226,6 @@ def _make_flow_ctx(
         agent_code="agent-x",
         agent_type=AgentType.FLOW,
         agent_config=_make_agent_config("agent-x"),
-        config_manager_class=AgentConfigManager,
         resource_manager=rm,
         session_code=session_code,
         username=username,

@@ -333,8 +333,10 @@ class Client(BaseClient):
 
 class BKAidevApi(ApiProtocol):
     @classmethod
-    def get_client(cls, app_code=settings.APP_CODE, app_secret=settings.SECRET_KEY) -> Client:
-        return _get_client_by_settings(Client, endpoint=BKAIDEV_URL, bk_app_code=app_code, bk_app_secret=app_secret)
+    def get_client(cls, app_code=settings.APP_CODE, app_secret=settings.SECRET_KEY, **kwargs) -> Client:
+        return _get_client_by_settings(
+            Client, endpoint=BKAIDEV_URL, bk_app_code=app_code, bk_app_secret=app_secret, **kwargs
+        )
 
     @classmethod
     def get_client_by_request(cls, request):
@@ -343,7 +345,9 @@ class BKAidevApi(ApiProtocol):
     @classmethod
     def get_client_by_username(cls, username, app_code=None, app_secret=None, **kwargs):
         return _partial(Client, _get_client_by_username)(
-            username, endpoint=BKAIDEV_URL,
-            bk_app_code=app_code, bk_app_secret=app_secret,
+            username,
+            endpoint=BKAIDEV_URL,
+            bk_app_code=app_code,
+            bk_app_secret=app_secret,
             **kwargs,
         )

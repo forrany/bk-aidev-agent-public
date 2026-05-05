@@ -16,7 +16,7 @@
 
 import uuid
 
-from aidev_agent.services.pydantic_models import ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from rest_framework import serializers
 
 from aidev_bkplugin.services.agent import build_execute_kwargs, get_agent_config_info

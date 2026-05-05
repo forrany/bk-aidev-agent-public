@@ -22,7 +22,7 @@ import pytest
 from aidev_agent.config import settings
 from aidev_agent.packages.langchain_core.tools.base import Tool, make_mcp_tools, make_structured_tool
 from aidev_agent.packages.resource_manager.registry import resource_manager
-from aidev_agent.services.pydantic_models import AgentOptions, ExecuteKwargs
+from aidev_agent.pydantic_models import AgentOptions, ExecuteKwargs
 from langchain_core.tools import StructuredTool
 from langchain_core.tools.base import ToolException
 

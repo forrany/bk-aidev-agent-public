@@ -30,7 +30,7 @@ from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
-    from aidev_agent.services.pydantic_models import AgentOptions
+    from aidev_agent.pydantic_models import AgentOptions
 
 logger = logging.getLogger(__name__)
 

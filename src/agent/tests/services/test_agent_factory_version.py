@@ -4,7 +4,7 @@
 验证：
 - ``__init__/build_agent`` 接受 ``version`` 形参；
 - ``get_agent_config(agent_code)`` 对**主 agent_code** 透传 ``self.version``；
-- 对**子 agent_code``（命令切换出去的 mapping 目标）一律传 ``None``（最新版），
+- 对**子 agent_code**（命令切换出去的 mapping 目标）一律传 ``None``（最新版），
   不继承父 ``version``，符合"子 agent 版本语义独立"的设计约束。
 
 注：``AgentInstanceFactory`` 构造受私有 ``_FACTORY_TOKEN`` 闸口保护；同包单元测试
@@ -18,17 +18,17 @@ from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.agent.factory import _FACTORY_TOKEN
 
 
-class _FakeConfigManager:
-    """模拟 AgentConfigManager，用 MagicMock 接管 ``get_config`` 以便断言入参。"""
+def _make_resource_manager() -> MagicMock:
+    """显式注入到 factory 的资源管理器 Mock；只关注 ``get_agent_config`` 的入参语义。"""
+    rm = MagicMock(name="resource_manager")
+    rm.get_agent_config = MagicMock(name="get_agent_config")
+    return rm
 
-    get_config = MagicMock()
 
-
-def _build_factory(version=None):
-    _FakeConfigManager.get_config.reset_mock()
+def _build_factory(version=None) -> AgentInstanceFactory:
     return AgentInstanceFactory(
         agent_code="main_agent",
-        config_manager_class=_FakeConfigManager,
+        resource_manager=_make_resource_manager(),
         version=version,
         _token=_FACTORY_TOKEN,
     )
@@ -37,14 +37,14 @@ def _build_factory(version=None):
 def test_version_passes_through_for_main_agent_code():
     factory = _build_factory(version="v2")
     factory.get_agent_config("main_agent")
-    _FakeConfigManager.get_config.assert_called_once_with(agent_code="main_agent", version="v2")
+    factory.resource_manager.get_agent_config.assert_called_once_with(agent_code="main_agent", version="v2")
 
 
 def test_version_not_inherited_by_sub_agent_code():
     """子 agent_code 必须走 None（最新版），不继承父 version。"""
     factory = _build_factory(version="v2")
     factory.get_agent_config("sub_agent_code")
-    _FakeConfigManager.get_config.assert_called_once_with(agent_code="sub_agent_code", version=None)
+    factory.resource_manager.get_agent_config.assert_called_once_with(agent_code="sub_agent_code", version=None)
 
 
 def test_no_version_means_latest_for_all():
@@ -52,8 +52,8 @@ def test_no_version_means_latest_for_all():
     factory = _build_factory(version=None)
     factory.get_agent_config("main_agent")
     factory.get_agent_config("sub_agent_code")
-    assert _FakeConfigManager.get_config.call_count == 2
-    for call in _FakeConfigManager.get_config.call_args_list:
+    assert factory.resource_manager.get_agent_config.call_count == 2
+    for call in factory.resource_manager.get_agent_config.call_args_list:
         assert call.kwargs["version"] is None
 
 

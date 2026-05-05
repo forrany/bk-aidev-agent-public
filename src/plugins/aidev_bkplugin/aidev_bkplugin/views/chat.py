@@ -4,10 +4,10 @@ import uuid
 
 from aidev_agent.config import settings as agent_settings
 from aidev_agent.enums import AgentBuildType, AgentType, PromptRole
+from aidev_agent.pydantic_models import ChatPrompt, ExecuteKwargs
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
 from aidev_agent.services.messages_handler import ConsumerPreemptedError, StreamCancelledError
-from aidev_agent.services.pydantic_models import ChatPrompt, ExecuteKwargs
 from blueapps.core.exceptions import ClientBlueException
 from django.http.response import StreamingHttpResponse
 from rest_framework.views import Response
@@ -21,7 +21,7 @@ from aidev_bkplugin.services.agent import (
     get_or_create_session_by_thread_id,
 )
 from aidev_bkplugin.utils import bkaidev_api_client
-from aidev_bkplugin.views.base import IgnoreClientContentNegotiation, PluginViewSet, PluginResourceManager, logger
+from aidev_bkplugin.views.base import IgnoreClientContentNegotiation, PluginResourceManager, PluginViewSet, logger
 
 
 class ChatCompletionViewSet(PluginViewSet):

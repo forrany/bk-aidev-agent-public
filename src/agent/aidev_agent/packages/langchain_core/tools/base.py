@@ -38,7 +38,7 @@ from typing_extensions import Annotated
 
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
-from aidev_agent.services.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions
 from aidev_agent.utils.loop import run_coro_sync
 
 from .enums import FieldType, FuncType

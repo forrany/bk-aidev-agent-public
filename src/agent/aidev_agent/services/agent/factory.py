@@ -7,7 +7,9 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from aidev_agent.config import settings
 from aidev_agent.enums import AgentBuildType, AgentType
+from aidev_agent.packages.resource_manager.registry import ResourceManagerProtocol
 from aidev_agent.packages.resource_manager.registry import resource_manager as resource_manager_factory
+from aidev_agent.pydantic_models import AgentConfig
 from aidev_agent.services.agent.registry import (
     AgentBuildContext,
     ChatBuildExtras,
@@ -15,7 +17,6 @@ from aidev_agent.services.agent.registry import (
     agent_registry,
 )
 from aidev_agent.services.common_agent import CommonQAAgent
-from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
 
 logger = logging.getLogger("aidev-agent")
 
@@ -55,7 +56,7 @@ class AgentInstanceFactory:
         temperature: float = None,
         max_tokens: int = None,
         switch_agent_by_scene: bool = False,
-        config_manager_class: type[AgentConfigManager] | None = None,
+        resource_manager: Optional[ResourceManagerProtocol] = None,
         is_temporary: bool = False,
         checkpointer: BaseCheckpointSaver | None = None,
         username: str | None = None,
@@ -66,9 +67,6 @@ class AgentInstanceFactory:
         """
         初始化Agent工厂实例（受 ``_token`` 闸口保护，外部请走 :meth:`build_agent`）
 
-        资源管理器一律从全局 ``resource_manager`` 工厂注册器取（默认 ``AgentResourceManager``），
-        plugin / 测试侧替换实现请用 ``resource_manager.replace_defaults(...)``。
-
         :param agent_code: Agent代码
         :param agent_type: Agent类型 ("chat", "task", "workflow"等)
         :param build_type: 构建类型 ("session", "direct")
@@ -78,6 +76,9 @@ class AgentInstanceFactory:
         :param temperature: 模型温度
         :param max_tokens: 模型最大回复长度
         :param switch_agent_by_scene: 是否根据场景切换智能体
+        :param resource_manager: 显式注入的资源管理器实例；缺省 ``None`` 时回落到全局
+            ``resource_manager()`` 工厂（默认 ``AgentResourceManager``）。自定义业务可二选一：
+            进程级 ``resource_manager.replace_defaults(...)``，或调用级显式传入。
         :param is_temporary: 是否为临时Agent
         :param checkpointer: Checkpoint 存储后端，用于会话状态持久化
         :param username: 用户名
@@ -89,7 +90,7 @@ class AgentInstanceFactory:
             raise RuntimeError(
                 "AgentInstanceFactory 不可直接实例化，请通过 AgentInstanceFactory.build_agent(...) 构造。"
             )
-        self.resource_manager = resource_manager_factory()
+        self.resource_manager = resource_manager or resource_manager_factory()
         self.agent_code = agent_code
         self.agent_type = agent_type
         self.build_type = build_type
@@ -100,7 +101,6 @@ class AgentInstanceFactory:
         self.temperature = temperature or None
         self.max_tokens = max_tokens or None
         self.switch_agent_by_scene = switch_agent_by_scene
-        self.config_manager_class = config_manager_class or AgentConfigManager
         self.is_temporary = is_temporary
         self.checkpointer = checkpointer
         self.username = username
@@ -119,7 +119,7 @@ class AgentInstanceFactory:
         temperature: float | None = None,
         max_tokens: int | None = settings.MAX_TOKENS,
         switch_agent_by_scene: bool = False,
-        config_manager_class: Type[AgentConfigManager] | None = AgentConfigManager,
+        resource_manager: Optional[ResourceManagerProtocol] = None,
         is_temporary: bool = False,
         event_handler: Callable[[BaseEvent], None] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
@@ -129,9 +129,6 @@ class AgentInstanceFactory:
     ):
         """
         构建Agent实例
-
-        资源管理器一律从全局 ``resource_manager`` 工厂注册器取；plugin / 测试侧替换实现请用
-        ``resource_manager.replace_defaults(...)``，不再通过参数注入。
 
         :param agent_code: Agent代码
         :param agent_type: Agent类型 ("chat", "task", "workflow"等)
@@ -143,7 +140,9 @@ class AgentInstanceFactory:
         :param temperature: 模型温度
         :param max_tokens: 模型最大回复长度
         :param switch_agent_by_scene: 是否根据场景切换智能体
-        :param config_manager_class: 配置管理类
+        :param resource_manager: 显式注入的资源管理器实例；缺省 ``None`` 时回落到全局
+            ``resource_manager()`` 工厂。自定义业务二选一：进程级
+            ``resource_manager.replace_defaults(...)``，或调用级显式传入。
         :param is_temporary: 是否为临时Agent
         :param event_handler: 事件处理器，接收所有 AG-UI 事件（Callable[[BaseEvent], None]）
         :param checkpointer: Checkpoint 存储后端，用于会话状态持久化
@@ -164,7 +163,7 @@ class AgentInstanceFactory:
             temperature=temperature,
             max_tokens=max_tokens,
             switch_agent_by_scene=switch_agent_by_scene,
-            config_manager_class=config_manager_class,
+            resource_manager=resource_manager,
             is_temporary=is_temporary,
             checkpointer=checkpointer or MemorySaver(),
             username=username,
@@ -192,7 +191,7 @@ class AgentInstanceFactory:
         本工厂不替它们做版本路由（一律传 None → 最新版）。
         """
         version = self.version if agent_code == self.agent_code else None
-        return self.config_manager_class.get_config(agent_code=agent_code, version=version)
+        return self.resource_manager.get_agent_config(agent_code=agent_code, version=version)
 
     # ============== 内部方法 ==============
 
@@ -240,7 +239,6 @@ class AgentInstanceFactory:
             "agent_code": final_agent_code,
             "session_context_data": session_context_data,
             "switch_agent": switch_agent,
-            "config_manager_class": self.config_manager_class,
         }
 
     def _build_direct(self, session_context_data: List[dict]) -> dict:
@@ -253,7 +251,6 @@ class AgentInstanceFactory:
             "agent_code": self.agent_code,
             "session_context_data": session_context_data,
             "switch_agent": False,
-            "config_manager_class": self.config_manager_class,
         }
 
     def _check_agent_switch(self, session_context_data: List[dict], base_agent_config: AgentConfig) -> tuple[bool, str]:
@@ -364,7 +361,6 @@ class AgentInstanceFactory:
             agent_code=final_agent_code,
             agent_type=self.agent_type,
             agent_config=agent_config,
-            config_manager_class=base_args.get("config_manager_class") or self.config_manager_class,
             resource_manager=self.resource_manager,
             session_code=self.session_code,
             username=self.username,

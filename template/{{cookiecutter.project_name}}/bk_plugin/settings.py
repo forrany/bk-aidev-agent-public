@@ -53,10 +53,10 @@ load_settings("aidev_ai_blueking.settings")  # 小鲸配置
 load_settings("aidev_wxbot.settings")  # 企微机器人配置
 
 # 插件配置
-DEFAULT_AGENT = os.environ.get("AIDEV_DEFAULT_AGENT", "bk_plugin.extend.agent.CommonQAAgentExtend")
-DEFAULT_CONFIG_MANAGER = os.environ.get(
-    "AIDEV_DEFAULT_CONFIG_MANAGER",
-    "bk_plugin.extend.config_manager.CustomAgentConfigManager",
+AIDEV_AGENT = os.environ.get("AIDEV_AGENT", "bk_plugin.extend.agent.CommonQAAgentExtend")
+AIDEV_RESOURCE_MANAGER = os.environ.get(
+    "AIDEV_RESOURCE_MANAGER",
+    "bk_plugin.extend.resource_manager.CustomAgentResourceManager",
 )
 
 REST_FRAMEWORK = {

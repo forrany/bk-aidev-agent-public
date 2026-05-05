@@ -9,9 +9,9 @@ from urllib.parse import urlparse
 import pkg_resources
 from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.enums import AgentBuildType, ChatContentStatus, PromptRole, StreamEventType
+from aidev_agent.pydantic_models import ChatPrompt, ExecuteKwargs
 from aidev_agent.services.agent import AgentInstanceFactory, ChatCompletionAgent
 from aidev_agent.services.event_handlers import AGUISessionWriter
-from aidev_agent.services.pydantic_models import ChatPrompt, ExecuteKwargs
 from bkapi_client_core.exceptions import HTTPResponseError
 from django.conf import settings
 from langgraph.checkpoint.memory import MemorySaver
@@ -25,7 +25,7 @@ except ImportError:
     trace = None
     TraceContextTextMapPropagator = None
 
-from .factory import agent_config_factory, agent_factory
+from .factory import agent_factory
 from ..constants import AGUI_PROTOCOL_VERSION
 from ..utils import bkaidev_api_client
 
@@ -53,8 +53,7 @@ def build_chat_completion_agent_by_session_code(
     Returns:
         ChatCompletionAgent 实例
     """
-    agent_cls = agent_factory.get(settings.DEFAULT_NAME)
-    config_manager = agent_config_factory.get(settings.DEFAULT_NAME)
+    agent_cls = agent_factory.get(settings.AIDEV_AGENT_NAME)
 
     # 构建 event_handler（如果提供了 client）
     event_handler = AGUISessionWriter(session_code=session_code, client=bkaidev_api_client, username=username)
@@ -63,7 +62,6 @@ def build_chat_completion_agent_by_session_code(
         build_type=AgentBuildType.SESSION,
         session_code=session_code,
         agent_cls=agent_cls,
-        config_manager_class=config_manager,
         checkpointer=_get_checkpointer(),
         event_handler=event_handler,
         username=username,
@@ -79,13 +77,11 @@ def build_chat_completion_agent_by_chat_history(
     role_contents = get_agent_role_info()
     if role_contents:
         chat_history = role_contents + chat_history
-    agent_cls = agent_factory.get(settings.DEFAULT_NAME)
-    config_manager = agent_config_factory.get(settings.DEFAULT_NAME)
+    agent_cls = agent_factory.get(settings.AIDEV_AGENT_NAME)
     agent_instance = AgentInstanceFactory.build_agent(
         build_type=AgentBuildType.DIRECT,
         session_context_data=[each.model_dump() for each in chat_history],
         agent_cls=agent_cls,
-        config_manager_class=config_manager,
         checkpointer=_get_checkpointer(),
         username=username,
         version=version,
@@ -314,8 +310,7 @@ def save_chat_history_to_session(session_code: str, chat_history: list[ChatPromp
 def _build_session_agent_for_thread(
     session_code: str, username: str, version: str | None = None
 ) -> ChatCompletionAgent:
-    agent_cls = agent_factory.get(settings.DEFAULT_NAME)
-    config_manager = agent_config_factory.get(settings.DEFAULT_NAME)
+    agent_cls = agent_factory.get(settings.AIDEV_AGENT_NAME)
 
     event_handler = (
         AGUISessionWriter(session_code=session_code, client=bkaidev_api_client, username=username)
@@ -327,7 +322,6 @@ def _build_session_agent_for_thread(
         build_type=AgentBuildType.SESSION,
         session_code=session_code,
         agent_cls=agent_cls,
-        config_manager_class=config_manager,
         checkpointer=_get_checkpointer(),
         event_handler=event_handler,
         username=username,

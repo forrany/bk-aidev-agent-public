@@ -32,7 +32,7 @@ from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.utils import deduplicate_knowledge_chunks, is_structured_data
 from aidev_agent.packages.langgraph.streaming.utils import conditional_dispatch_custom_event
-from aidev_agent.services.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions
 from aidev_agent.utils.decorator import retry, timeit
 
 from .prompts import DEFAULT_INTENT_RECOGNITION_PROMPT_TEMPLATES
