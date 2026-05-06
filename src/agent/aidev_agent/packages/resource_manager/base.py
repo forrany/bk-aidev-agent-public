@@ -16,6 +16,7 @@ import abc
 import asyncio
 import json
 import os
+import time
 from copy import deepcopy
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, List, Optional
@@ -32,18 +33,31 @@ from aidev_agent.packages.langchain_core.tools.base import (
     McpToolsResult,
     _extract_mcp_tools_error_detail,
 )
-from aidev_agent.utils.loop import run_coro_sync
 from aidev_agent.pydantic_models import AgentConfig, AgentOptions, IntentRecognition, KnowledgebaseSettings
+from aidev_agent.utils.loop import run_coro_sync
 
 try:
-    from bkoauth import get_access_token_by_user
+    import bkoauth
 except ImportError:
-    get_access_token_by_user = None
+    bkoauth = None
 
 if TYPE_CHECKING:
     from aidev_agent.api.bk_aidev import Client
 
 _logger = getLogger(__name__)
+
+
+def _get_access_token_by_user(username: str) -> str | None:
+    """通过 bkoauth 获取用户 access_token（延迟访问，依赖 Django AppConfig.ready 调用 _init_function）。"""
+    fn = getattr(bkoauth, "get_access_token_by_user", None) if bkoauth else None
+    if fn is None:
+        return None
+    try:
+        token = fn(username)
+        return getattr(token, "access_token", None) if token else None
+    except Exception as e:
+        _logger.warning(f"Failed to get access_token by username {username}: {e}")
+        return None
 
 
 class BaseResourceManager(abc.ABC):
@@ -75,7 +89,7 @@ class BaseResourceManager(abc.ABC):
         """获取已完成认证信息注入的 API Client。子类必须实现。"""
         raise NotImplementedError
 
-    def _resolve_access_token(self, username: str = None) -> str:
+    def resolve_access_token(self, username: str = None) -> str:
         """获取 access_token，优先级：self.access_token > username 参数 > self.username > 空字符串。
 
         :param username: 用户名，用于 fallback 获取 access_token；未传入时使用 self.username
@@ -83,12 +97,8 @@ class BaseResourceManager(abc.ABC):
         """
         access_token = self.access_token or ""
         _username = username or self.username
-        if not access_token and _username and get_access_token_by_user is not None:
-            try:
-                token = get_access_token_by_user(_username)
-                access_token = getattr(token, "access_token", "") if token else ""
-            except Exception as e:
-                _logger.warning(f"Failed to get access_token by username {_username}: {e}")
+        if not access_token and _username:
+            access_token = _get_access_token_by_user(_username) or ""
         return access_token
 
     # ---------- 资源方法 (7) ----------
@@ -222,7 +232,7 @@ class BaseResourceManager(abc.ABC):
             if "mcp_type" in _server_config:
                 _server_config.pop("mcp_type")
             if _server_config.pop("credential_type", "") == CredentialType.BLUEAPPS.value:
-                access_token = self._resolve_access_token(username)
+                access_token = self.resolve_access_token(username)
                 # 根据是否拿到 access_token 决定认证方式
                 if access_token:
                     auth_info = {"access_token": access_token}
@@ -238,7 +248,11 @@ class BaseResourceManager(abc.ABC):
                 _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
 
         # 重试2次；返回 (tools, failure | None)，失败时返回 McpToolFetchFailure
-        async def _load_tool(server_name, selected_tools_map) -> tuple[list[StructuredTool], Any | None]:
+        total_servers = len(new_server_config)
+        _logger.info(f"[MCP] start loading {total_servers} server(s): {list(new_server_config.keys())}")
+
+        async def _load_tool(server_name, selected_tools_map, index) -> tuple[list[StructuredTool], Any | None]:
+            _start = time.monotonic()
             for _i in range(2):
                 client = MultiServerMCPClient(new_server_config)
                 try:
@@ -246,9 +260,12 @@ class BaseResourceManager(abc.ABC):
                     total_count = len(tools)
                     if selected_tools_map.get(server_name):
                         tools = [each for each in tools if each.name in selected_tools_map[server_name]]
+                    tool_names = [t.name for t in tools]
                     _logger.info(
-                        f"[MCP] server={server_name}: fetched={total_count}, "
-                        f"after_filter={len(tools)}, names={[t.name for t in tools]}"
+                        f"[MCP] {index}/{total_servers} server={server_name}: "
+                        f"fetched={total_count}, after_filter={len(tools)}, "
+                        f"tools={tool_names}, "
+                        f"cost={time.monotonic() - _start:.2f}s"
                     )
                     for each in tools:
                         if agent_options:
@@ -263,7 +280,8 @@ class BaseResourceManager(abc.ABC):
                     if _i == 0:
                         continue
                     _logger.warning(
-                        f"skip loading tools for server '{server_name}': {error_msg}",
+                        f"[MCP] {index}/{total_servers} server={server_name}: failed, "
+                        f"cost={time.monotonic() - _start:.2f}s, error={error_msg}",
                         exc_info=err,
                     )
                     return (
@@ -275,7 +293,7 @@ class BaseResourceManager(abc.ABC):
                         ),
                     )
 
-        coros = [_load_tool(server_name, selected_tools_map) for server_name in new_server_config]
+        coros = [_load_tool(server_name, selected_tools_map, i + 1) for i, server_name in enumerate(new_server_config)]
 
         async def _load_all_tools():
             return await asyncio.gather(*coros)
@@ -313,7 +331,7 @@ class BaseResourceManager(abc.ABC):
                 env_vars[key] = os.getenv(key, "")
 
         # 赋值 ACCESS_TOKEN：优先级 self.access_token > username > 环境变量
-        access_token = self._resolve_access_token(username)
+        access_token = self.resolve_access_token(username)
 
         env_vars["ACCESS_TOKEN"] = access_token or os.getenv("SANDBOX_BP_ACCESS_TOKEN", "")
 

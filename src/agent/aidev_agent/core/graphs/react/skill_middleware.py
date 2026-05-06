@@ -46,13 +46,13 @@ def _extract_paas_params(skill: SkillOptions, config: dict) -> dict:
         env_vars: dict,
 
     参数来源优先级：
-        - access_token: resource_manager()._resolve_access_token(username) > 环境变量 SANDBOX_BP_ACCESS_TOKEN
+        - access_token: resource_manager().resolve_access_token(username) > 环境变量 SANDBOX_BP_ACCESS_TOKEN
         - snapshot / env_vars: 从 skill metadata 的 bkai_paas_sandbox 字段获取
         - app_code: 从 settings 获取
 
     env_vars 构建逻辑已委托给 ``resource_manager().build_skill_env()``。
     """
-    access_token = resource_manager()._resolve_access_token(config.get("executor")) or os.getenv(
+    access_token = resource_manager().resolve_access_token(config.get("executor")) or os.getenv(
         "SANDBOX_BP_ACCESS_TOKEN", ""
     )
 

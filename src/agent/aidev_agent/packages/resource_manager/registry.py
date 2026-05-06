@@ -69,6 +69,14 @@ class ResourceManagerProtocol(Protocol):
         """按 ``tool_code`` 装配 LangChain ``StructuredTool``（含凭证拼装）。"""
         ...
 
+    def resolve_access_token(self, username: str = None) -> str:
+        """获取 access_token，优先级：self.access_token > username 参数 > self.username > 空字符串。
+
+        :param username: 用户名，用于 fallback 获取 access_token；未传入时使用 self.username
+        :return: access_token 字符串
+        """
+        ...
+
     def construct_mcp(self, mcp_config: dict, agent_options: Any = None, username: str = None, **kwargs) -> Any:
         """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
 
@@ -76,7 +84,7 @@ class ResourceManagerProtocol(Protocol):
         """
         ...
 
-    def build_skill_env(self, skill_config: dict, access_token: str = None) -> dict:
+    def build_skill_env(self, skill_config: dict, username: str = None) -> dict:
         """按 skill 配置生成沙箱环境变量。
 
         逻辑与 ``skill_middleware._extract_paas_params`` 中 env_vars 处理保持一致：
