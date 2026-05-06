@@ -34,7 +34,6 @@ from requests.exceptions import JSONDecodeError
 from typing_extensions import Annotated
 
 from aidev_agent.config import settings
-from aidev_agent.packages.resource_manager.registry import resource_manager
 from aidev_agent.pydantic_models import AgentOptions
 
 from .enums import FieldType, FuncType
@@ -552,11 +551,13 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
     """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
 
     .. deprecated::
-        推荐使用 ``resource_manager.construct_mcp()`` 替代。
+        推荐使用 ``resource_manager().construct_mcp()`` 替代。
 
     这是 ``BaseResourceManager.construct_mcp()`` 的兼容层。
     """
-    return resource_manager.construct_mcp(
+    from aidev_agent.packages.resource_manager.registry import resource_manager
+
+    return resource_manager().construct_mcp(
         mcp_config=server_config,
         agent_options=agent_options,
         username=username,

@@ -920,6 +920,7 @@ class TestReActAgentBuilder:
         """_extract_paas_params 应从 skill metadata 与 config 中提取参数"""
         from aidev_agent.config import settings
         from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
+        from aidev_agent.packages.resource_manager.registry import resource_manager
 
         monkeypatch.delenv("SANDBOX_BP_ACCESS_TOKEN", raising=False)
         skill = {
@@ -930,7 +931,12 @@ class TestReActAgentBuilder:
                 }
             }
         }
-        config = {"access_token": "token123", "executor": "admin"}
+        config = {"executor": "admin"}
+
+        mock_rm = MagicMock()
+        mock_rm.resolve_access_token.return_value = "token123"
+        mock_rm.build_skill_env.return_value = {"KEY": "VAL", "ACCESS_TOKEN": "token123"}
+        legacy = resource_manager.replace_defaults(mock_rm)
 
         result = _extract_paas_params(skill=skill, config=config)
         assert result["app_code"] == settings.APP_CODE
@@ -939,13 +945,23 @@ class TestReActAgentBuilder:
         assert result["snapshot"] == "snap1"
         assert result["snapshot_entrypoint"] == []
         assert result["env_vars"] == {"KEY": "VAL", "ACCESS_TOKEN": "token123"}
+        mock_rm.resolve_access_token.assert_called_once_with("admin")
+        mock_rm.build_skill_env.assert_called_once_with(skill_config=skill, username="admin")
+
+        resource_manager.replace_defaults(legacy)
 
     def test_extract_paas_params_defaults(self, monkeypatch):
         """skill=None 且 config 为空时应返回带 settings.APP_CODE 的默认值"""
         from aidev_agent.config import settings
         from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
+        from aidev_agent.packages.resource_manager.registry import resource_manager
 
         monkeypatch.delenv("SANDBOX_BP_ACCESS_TOKEN", raising=False)
+
+        mock_rm = MagicMock()
+        mock_rm.resolve_access_token.return_value = ""
+        mock_rm.build_skill_env.return_value = {"ACCESS_TOKEN": ""}
+        legacy = resource_manager.replace_defaults(mock_rm)
 
         result = _extract_paas_params(skill=None, config={})
         assert result["app_code"] == settings.APP_CODE
@@ -954,16 +970,28 @@ class TestReActAgentBuilder:
         assert result["snapshot"] == ""
         assert result["snapshot_entrypoint"] == []
         assert result["env_vars"] == {"ACCESS_TOKEN": ""}
+        mock_rm.resolve_access_token.assert_called_once_with(None)
+        mock_rm.build_skill_env.assert_called_once_with(skill_config=None, username=None)
+
+        resource_manager.replace_defaults(legacy)
 
     def test_extract_paas_params_access_token_from_env(self, monkeypatch):
         """config 未提供 access_token 时应从环境变量 SANDBOX_BP_ACCESS_TOKEN 读取"""
         from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
+        from aidev_agent.packages.resource_manager.registry import resource_manager
 
         monkeypatch.setenv("SANDBOX_BP_ACCESS_TOKEN", "env-token")
+
+        mock_rm = MagicMock()
+        mock_rm.resolve_access_token.return_value = ""
+        mock_rm.build_skill_env.return_value = {"ACCESS_TOKEN": "env-token"}
+        legacy = resource_manager.replace_defaults(mock_rm)
 
         result = _extract_paas_params(skill=None, config={})
         assert result["access_token"] == "env-token"
         assert result["env_vars"]["ACCESS_TOKEN"] == "env-token"
+
+        resource_manager.replace_defaults(legacy)
 
     # ----------------------------------------------------------------
     # C. build 返回值测试
