@@ -19,6 +19,7 @@ from typing_extensions import Protocol
 from aidev_agent.utils.factory import SingletonFactory
 
 if TYPE_CHECKING:
+    from aidev_agent.api.bk_aidev import Client
     from aidev_agent.pydantic_models import AgentConfig
 
 
@@ -29,6 +30,10 @@ class ResourceManagerProtocol(Protocol):
     所有方法定义业务契约（含返回结构语义），由 ``AgentResourceManager`` 提供默认实现。
     Plugin / 测试侧若要替换或 Mock，按本协议鸭子类型实现即可（不必继承）。
     """
+
+    def get_client(self, **kwargs) -> "Client":
+        """获取已完成认证信息注入的 API Client。"""
+        ...
 
     def retrieve_knowledgebase(self, id: int, **kwargs) -> dict:
         """按 ID 取回知识库详情（业务返回结构 = 后端 ``data`` 字段）"""
@@ -62,6 +67,23 @@ class ResourceManagerProtocol(Protocol):
 
     def construct_tool(self, tool_code: str, **kwargs) -> StructuredTool:
         """按 ``tool_code`` 装配 LangChain ``StructuredTool``（含凭证拼装）。"""
+        ...
+
+    def construct_mcp(self, mcp_config: dict, agent_options: Any = None, username: str = None, **kwargs) -> Any:
+        """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
+
+        使用 ``langchain_mcp_adapters`` 连接 MCP 服务器并获取工具列表。
+        """
+        ...
+
+    def build_skill_env(self, skill_config: dict, access_token: str = None) -> dict:
+        """按 skill 配置生成沙箱环境变量。
+
+        逻辑与 ``skill_middleware._extract_paas_params`` 中 env_vars 处理保持一致：
+        1. 从 ``metadata.bkai_paas_sandbox.envs`` 提取环境变量
+        2. 特殊规则：值为 ``None`` 时从环境变量获取
+        3. 赋值 ``ACCESS_TOKEN``
+        """
         ...
 
     def knowledge_query(self, data: dict[str, Any]) -> dict:

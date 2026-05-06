@@ -22,7 +22,6 @@ from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
 from aidev_agent.enums import AgentType, PromptRole
 from aidev_agent.exceptions import AgentException
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
-from aidev_agent.packages.langchain_core.tools import make_mcp_tools
 from aidev_agent.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
 from aidev_agent.services.agent.registry import AgentBuildContext, ChatBuildExtras
 from aidev_agent.services.common_agent import CommonAgentProtocol, CommonQAAgent
@@ -488,7 +487,9 @@ class ChatAgentBuilder:
             mcp_server_config = {each: config.mcp_server_config.get(each) for each in specific_mcps}
         else:
             mcp_server_config = config.mcp_server_config
-        mcp_result = make_mcp_tools(mcp_server_config, config.agent_options, username=self.ctx.username)
+        mcp_result = self.ctx.resource_manager.construct_mcp(
+            mcp_config=mcp_server_config, agent_options=config.agent_options, username=self.ctx.username
+        )
         self._mcp_fetch_failures = [f.model_dump() for f in mcp_result.fetch_failures]
         logger.info(f"ChatAgentBuilder: mcp_server_config->[{mcp_server_config}]")
         specific_tools = [each.get("code") for each in self._specific_resources if each.get("type") == "tool"]
@@ -513,19 +514,7 @@ class ChatAgentBuilder:
 
     def build_executor_info(self) -> dict:
         """构建执行用户信息"""
-        info = {"executor": self.ctx.username}
-
-        if self.ctx.username:
-            try:
-                from bkoauth import get_access_token_by_user
-
-                access_token = get_access_token_by_user(self.ctx.username).access_token
-                if access_token:
-                    info["access_token"] = access_token
-            except Exception as e:
-                logger.error(f"Failed to get access token: {e}")
-
-        return info
+        return {"executor": self.ctx.username}
 
     def build_checkpointer(self) -> BaseCheckpointSaver:
         """获取 Checkpointer，必须注入，否则抛出异常"""

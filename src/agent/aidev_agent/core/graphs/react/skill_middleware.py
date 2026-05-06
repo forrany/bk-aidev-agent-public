@@ -9,6 +9,7 @@ from aidev_agent.config import settings
 from aidev_agent.core.nodes.model.pydantic_models import NextFunction, ProcessorContext
 from aidev_agent.core.tools.skill.registry import SkillRegistry
 from aidev_agent.core.tools.skill.types import SkillOptions
+from aidev_agent.packages.resource_manager.registry import resource_manager
 
 
 def _extract_local_params(skill: SkillOptions, config: dict) -> dict:
@@ -45,25 +46,23 @@ def _extract_paas_params(skill: SkillOptions, config: dict) -> dict:
         env_vars: dict,
 
     参数来源优先级：
-        - access_token: config dict > 环境变量 SANDBOX_BP_ACCESS_TOKEN
+        - access_token: resource_manager()._resolve_access_token(username) > 环境变量 SANDBOX_BP_ACCESS_TOKEN
         - snapshot / env_vars: 从 skill metadata 的 bkai_paas_sandbox 字段获取
         - app_code: 从 settings 获取
+
+    env_vars 构建逻辑已委托给 ``resource_manager().build_skill_env()``。
     """
-    access_token = config.get("access_token") or os.getenv("SANDBOX_BP_ACCESS_TOKEN", "")
+    access_token = resource_manager()._resolve_access_token(config.get("executor")) or os.getenv(
+        "SANDBOX_BP_ACCESS_TOKEN", ""
+    )
 
     # 从 skill metadata 中获取 paas sandbox 配置
     paas_sandbox = {}
     if skill:
         paas_sandbox = skill.get("metadata", {}).get("bkai_paas_sandbox", {})
 
-    # 处理 env_vars
-    env_vars = paas_sandbox.get("envs", {})
-    # 特殊规则：如果值是 None，则从环境变量中获取
-    for key, value in env_vars.items():
-        if value is None:
-            env_vars[key] = os.getenv(key, "")
-    # 赋值 ACCESS_TOKEN
-    env_vars["ACCESS_TOKEN"] = access_token
+    # 委托 resource_manager 构建 env_vars（传入 username 作为 fallback）
+    env_vars = resource_manager().build_skill_env(skill_config=skill, username=config.get("executor"))
 
     return {
         "app_code": settings.APP_CODE,

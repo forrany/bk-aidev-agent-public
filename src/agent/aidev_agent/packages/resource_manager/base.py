@@ -13,18 +13,37 @@ Client 的创建、认证信息注入由 ``get_client()`` 负责，子类可覆�
 from __future__ import annotations
 
 import abc
+import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Optional
+import os
+from copy import deepcopy
+from logging import getLogger
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from langchain_core.tools import StructuredTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
 from aidev_agent.packages.langchain_core.tools import Tool, ToolExtra, make_structured_tool
+from aidev_agent.packages.langchain_core.tools.base import (
+    MCPExceptionWrapper,
+    McpToolFetchFailure,
+    McpToolsResult,
+    _extract_mcp_tools_error_detail,
+)
+from aidev_agent.utils.loop import run_coro_sync
 from aidev_agent.pydantic_models import AgentConfig, AgentOptions, IntentRecognition, KnowledgebaseSettings
+
+try:
+    from bkoauth import get_access_token_by_user
+except ImportError:
+    get_access_token_by_user = None
 
 if TYPE_CHECKING:
     from aidev_agent.api.bk_aidev import Client
+
+_logger = getLogger(__name__)
 
 
 class BaseResourceManager(abc.ABC):
@@ -55,6 +74,22 @@ class BaseResourceManager(abc.ABC):
     def get_client(self, **kwargs: Any) -> Client:
         """获取已完成认证信息注入的 API Client。子类必须实现。"""
         raise NotImplementedError
+
+    def _resolve_access_token(self, username: str = None) -> str:
+        """获取 access_token，优先级：self.access_token > username 参数 > self.username > 空字符串。
+
+        :param username: 用户名，用于 fallback 获取 access_token；未传入时使用 self.username
+        :return: access_token 字符串
+        """
+        access_token = self.access_token or ""
+        _username = username or self.username
+        if not access_token and _username and get_access_token_by_user is not None:
+            try:
+                token = get_access_token_by_user(_username)
+                access_token = getattr(token, "access_token", "") if token else ""
+            except Exception as e:
+                _logger.warning(f"Failed to get access_token by username {_username}: {e}")
+        return access_token
 
     # ---------- 资源方法 (7) ----------
 
@@ -161,6 +196,128 @@ class BaseResourceManager(abc.ABC):
             )
             return make_structured_tool(tool)
         return make_structured_tool(Tool.model_validate(result["data"]))
+
+    def construct_mcp(self, mcp_config: dict, agent_options: Any = None, username: str = None, **kwargs) -> Any:
+        """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
+
+        使用 ``langchain_mcp_adapters`` 连接 MCP 服务器并获取工具列表。
+        支持凭证处理、selected_tools 过滤、异常处理等功能。
+
+        :param mcp_config: MCP 客户端配置字典，格式为 ``{"server_name": {"url": ..., "transport": ...}}``
+        :param agent_options: Agent 选项，用于异常处理
+        :param username: 用户名，用于 BLUEAPPS 认证
+        :return: McpToolsResult 对象，包含 tools 和 fetch_failures
+        """
+        new_server_config = deepcopy(mcp_config)
+
+        # 提取每个 MCP Server 的 selected_tools 配置
+        selected_tools_map: dict[str, list[str]] = {}
+        for server_name, _server_config in new_server_config.items():
+            selected_tools = _server_config.pop("selected_tools", None)
+            if selected_tools:
+                selected_tools_map[server_name] = selected_tools
+
+        # 处理凭证
+        for _server_config in new_server_config.values():
+            if "mcp_type" in _server_config:
+                _server_config.pop("mcp_type")
+            if _server_config.pop("credential_type", "") == CredentialType.BLUEAPPS.value:
+                access_token = self._resolve_access_token(username)
+                # 根据是否拿到 access_token 决定认证方式
+                if access_token:
+                    auth_info = {"access_token": access_token}
+                elif username:
+                    auth_info = {
+                        "bk_app_code": self.app_code,
+                        "bk_app_secret": self.app_secret,
+                        "bk_username": username,
+                    }
+                else:
+                    auth_info = {"bk_app_code": self.app_code, "bk_app_secret": self.app_secret}
+                _server_config["headers"] = {"X-Bkapi-Authorization": json.dumps(auth_info)}
+                _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
+
+        # 重试2次；返回 (tools, failure | None)，失败时返回 McpToolFetchFailure
+        async def _load_tool(server_name, selected_tools_map) -> tuple[list[StructuredTool], Any | None]:
+            for _i in range(2):
+                client = MultiServerMCPClient(new_server_config)
+                try:
+                    tools: list[StructuredTool] = await client.get_tools(server_name=server_name)
+                    total_count = len(tools)
+                    if selected_tools_map.get(server_name):
+                        tools = [each for each in tools if each.name in selected_tools_map[server_name]]
+                    _logger.info(
+                        f"[MCP] server={server_name}: fetched={total_count}, "
+                        f"after_filter={len(tools)}, names={[t.name for t in tools]}"
+                    )
+                    for each in tools:
+                        if agent_options:
+                            each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
+                        if not each.metadata:
+                            each.metadata = {}
+                        each.metadata["mcp_name"] = server_name
+                    return (tools, None)
+                except Exception as err:
+                    error_detail = _extract_mcp_tools_error_detail(err)
+                    error_msg = f"获取MCP工具列表失败: {error_detail}"
+                    if _i == 0:
+                        continue
+                    _logger.warning(
+                        f"skip loading tools for server '{server_name}': {error_msg}",
+                        exc_info=err,
+                    )
+                    return (
+                        [],
+                        McpToolFetchFailure(
+                            server_name=server_name,
+                            message=error_msg,
+                            error_type=type(err).__name__,
+                        ),
+                    )
+
+        coros = [_load_tool(server_name, selected_tools_map) for server_name in new_server_config]
+
+        async def _load_all_tools():
+            return await asyncio.gather(*coros)
+
+        coro_results = run_coro_sync(_load_all_tools())
+        tools_list: List[StructuredTool] = []
+        failures: List[McpToolFetchFailure] = []
+        for tlist, fail in coro_results:
+            tools_list.extend(tlist)
+            if fail is not None:
+                failures.append(fail)
+        return McpToolsResult(tools=tools_list, fetch_failures=failures)
+
+    def build_skill_env(self, skill_config: dict, username: str = None) -> dict:
+        """根据 skill 配置生成沙箱环境变量。
+
+        逻辑与 ``skill_middleware._extract_paas_params`` 中 env_vars 处理保持一致：
+        1. 从 ``metadata.bkai_paas_sandbox.envs`` 提取环境变量
+        2. 特殊规则：值为 ``None`` 时从环境变量获取
+        3. 赋值 ``ACCESS_TOKEN``（从 self.access_token 或 username 获取）
+
+        :param skill_config: skill 配置字典，包含 metadata 等字段
+        :param username: 用户名，用于 fallback 获取 access_token
+        :return: 环境变量字典
+        """
+        env_vars = {}
+
+        if skill_config:
+            paas_sandbox = skill_config.get("metadata", {}).get("bkai_paas_sandbox", {})
+            env_vars = paas_sandbox.get("envs", {})
+
+        # 特殊规则：如果值是 None，则从环境变量中获取
+        for key, value in env_vars.items():
+            if value is None:
+                env_vars[key] = os.getenv(key, "")
+
+        # 赋值 ACCESS_TOKEN：优先级 self.access_token > username > 环境变量
+        access_token = self._resolve_access_token(username)
+
+        env_vars["ACCESS_TOKEN"] = access_token or os.getenv("SANDBOX_BP_ACCESS_TOKEN", "")
+
+        return env_vars
 
     def knowledge_query(self, data: dict[str, Any]) -> dict:
         client = self.get_client()
