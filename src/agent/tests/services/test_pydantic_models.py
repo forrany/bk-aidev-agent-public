@@ -154,7 +154,7 @@ class TestAgentExecutorKwargs:
 class TestCommonQAAgentGetAgentExecutor:
     """Tests for CommonQAAgent.get_agent_executor() (kwargs-only + model_validate)."""
 
-    @patch("aidev_agent.services.common_agent.ReActAgentBuilder")
+    @patch("aidev_agent.services.common_agent.agent.ReActAgentBuilder")
     def test_get_agent_executor_validates_kwargs_and_calls_builder(self, mock_builder_class):
         mock_llm = MagicMock()
 
@@ -178,7 +178,7 @@ class TestCommonQAAgentGetAgentExecutor:
         assert called_options.knowledge_llm == mock_llm
         assert called_options.support_vision is True
 
-    @patch("aidev_agent.services.common_agent.ReActAgentBuilder")
+    @patch("aidev_agent.services.common_agent.agent.ReActAgentBuilder")
     def test_get_agent_executor_preserves_extra_fields(self, mock_builder_class):
         mock_llm = MagicMock()
 

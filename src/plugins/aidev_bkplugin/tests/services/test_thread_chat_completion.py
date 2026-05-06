@@ -72,7 +72,7 @@ class TestBuildChatCompletionAgentByThreadIdWithChatHistory:
         with (
             patch("aidev_bkplugin.services.agent.get_or_create_session_by_thread_id") as mock_session,
             patch("aidev_bkplugin.services.agent.save_session_content") as mock_save,
-            patch("aidev_bkplugin.services.agent.agent_factory.get") as mock_agent_factory,
+            patch("aidev_bkplugin.services.agent.common_agent_factory.get") as mock_agent_factory,
             patch("aidev_bkplugin.services.agent.AgentInstanceFactory.build_agent") as mock_build,
         ):
             mock_session.return_value = "session-abc"
@@ -100,7 +100,7 @@ class TestBuildChatCompletionAgentByThreadIdWithChatHistory:
         with (
             patch("aidev_bkplugin.services.agent.get_or_create_session_by_thread_id") as mock_session,
             patch("aidev_bkplugin.services.agent.save_session_content") as mock_save,
-            patch("aidev_bkplugin.services.agent.agent_factory.get") as mock_agent_factory,
+            patch("aidev_bkplugin.services.agent.common_agent_factory.get") as mock_agent_factory,
             patch("aidev_bkplugin.services.agent.AgentInstanceFactory.build_agent") as mock_build,
         ):
             mock_session.return_value = "session-empty"

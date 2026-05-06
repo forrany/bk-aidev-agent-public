@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from aidev_agent.packages.resource_manager import ResourceManagerProtocol
     from aidev_agent.pydantic_models import AgentConfig
-    from aidev_agent.services.common_agent import CommonQAAgent
+    from aidev_agent.services.common_agent import CommonAgentProtocol
 
 
 # ============================== 构建期上下文 ==============================
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 class ChatBuildExtras:
     """Chat agent 构建期专属字段（仅在 ``agent_type == CHAT`` 时填充）"""
 
-    agent_cls: Optional[Type["CommonQAAgent"]] = None
+    agent_cls: Optional["CommonAgentProtocol"] = None
     callbacks: list[Any] = field(default_factory=list)
     auth_headers: Optional[dict[str, str]] = None
     temperature: Optional[float] = None

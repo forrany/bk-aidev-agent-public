@@ -50,12 +50,16 @@ def _make_chat_ctx(
     *,
     session_code: str | None = "session-1",
     callbacks=None,
-    agent_cls=CommonQAAgent,
+    agent_cls=None,
     session_context_data=None,
     switch_agent: bool = False,
     event_handler=None,
 ) -> AgentBuildContext:
-    """构造 chat 路径的 AgentBuildContext（无 factory 反向引用）。"""
+    """构造 chat 路径的 AgentBuildContext（无 factory 反向引用）。
+
+    ``agent_cls`` 现为「通用 agent 实例」（``CommonAgentProtocol``）；缺省时构造一个新
+    ``CommonQAAgent()`` 实例，避免污染 ``common_agent_factory`` 的全局默认。
+    """
     return AgentBuildContext(
         agent_code=agent_code,
         agent_type=AgentType.CHAT,
@@ -67,7 +71,7 @@ def _make_chat_ctx(
         switch_agent=switch_agent,
         event_handler=event_handler,
         chat=ChatBuildExtras(
-            agent_cls=agent_cls,
+            agent_cls=agent_cls if agent_cls is not None else CommonQAAgent(),
             callbacks=list(callbacks or []),
             checkpointer=MemorySaver(),
         ),

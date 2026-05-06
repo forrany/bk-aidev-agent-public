@@ -25,7 +25,7 @@ from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.tools import make_mcp_tools
 from aidev_agent.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
 from aidev_agent.services.agent.registry import AgentBuildContext, ChatBuildExtras
-from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.services.common_agent import CommonAgentProtocol, CommonQAAgent
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 from aidev_agent.utils.async_utils import async_to_sync_generator
@@ -58,7 +58,10 @@ class ChatCompletionAgent(BaseModel):
     agent_prompt: str | None = None
     max_token_size: int | None = None
     callbacks: list[BaseCallbackHandler] | None = None
-    agent_cls: type[CommonQAAgent] = CommonQAAgent
+    agent_cls: CommonAgentProtocol = Field(default_factory=CommonQAAgent)
+    """通用 agent 实例（实现 ``CommonAgentProtocol``）；ChatCompletionAgent 在 ``_get_agent`` 阶段
+    通过 ``self.agent_cls.get_agent_executor(...)`` 触发执行器构建。
+    字段名保留为 ``agent_cls`` 避免外部破坏，但语义已是「实例」。"""
     agent_options: AgentOptions = Field(default_factory=AgentOptions)
     messages: list[BaseMessage] = Field(default_factory=list)
     checkpointer: BaseCheckpointSaver | None = None

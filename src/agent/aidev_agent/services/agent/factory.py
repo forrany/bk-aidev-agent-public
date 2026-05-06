@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Callable, List, Optional, Type, cast
+from typing import Any, Callable, List, Optional, cast
 
 from ag_ui.core import BaseEvent
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -16,7 +16,7 @@ from aidev_agent.services.agent.registry import (
     FlowBuildExtras,
     agent_registry,
 )
-from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.services.common_agent import CommonAgentProtocol, common_agent_factory
 
 logger = logging.getLogger("aidev-agent")
 
@@ -50,7 +50,7 @@ class AgentInstanceFactory:
         agent_type: AgentType = AgentType.CHAT,
         build_type: AgentBuildType = AgentBuildType.SESSION,
         session_code: Optional[str] = None,
-        agent_cls: type[CommonQAAgent] | None = None,
+        agent_cls: CommonAgentProtocol | None = None,
         callbacks: List[Any] | None = None,
         auth_headers: dict[str, str] | None = None,
         temperature: float = None,
@@ -71,7 +71,8 @@ class AgentInstanceFactory:
         :param agent_type: Agent类型 ("chat", "task", "workflow"等)
         :param build_type: 构建类型 ("session", "direct")
         :param session_code: 会话代码 (build_type="session"时必需)
-        :param agent_cls: Agent类
+        :param agent_cls: 通用 agent 实例（实现 ``CommonAgentProtocol``）；缺省 ``None`` 时由 ``_make_build_context``
+            从 ``common_agent_factory.get()`` 兜底。
         :param callbacks: 回调函数列表
         :param temperature: 模型温度
         :param max_tokens: 模型最大回复长度
@@ -114,7 +115,7 @@ class AgentInstanceFactory:
         build_type: AgentBuildType = AgentBuildType.SESSION,
         session_code: Optional[str] = None,
         session_context_data: Optional[List[dict]] = None,
-        agent_cls: Type[CommonQAAgent] | None = CommonQAAgent,
+        agent_cls: CommonAgentProtocol | None = None,
         callbacks: List[Any] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = settings.MAX_TOKENS,
@@ -135,7 +136,8 @@ class AgentInstanceFactory:
         :param build_type: 构建类型 ("session", "direct")
         :param session_code: 会话代码 (build_type="session"时必需)
         :param session_context_data: 会话上下文数据 (build_type="direct"时使用)
-        :param agent_cls: Agent类
+        :param agent_cls: 通用 agent 实例（实现 ``CommonAgentProtocol``）；缺省 ``None`` 时由
+            ``_make_build_context`` 从 ``common_agent_factory.get()`` 兜底，贯通 ``replace_defaults`` 链路。
         :param callbacks: 回调函数列表
         :param temperature: 模型温度
         :param max_tokens: 模型最大回复长度
@@ -340,7 +342,7 @@ class AgentInstanceFactory:
             # CHAT 路径必读主配置（下游 ChatAgentBuilder 大量依赖）
             agent_config = self.get_agent_config(final_agent_code)
             chat_extras = ChatBuildExtras(
-                agent_cls=self.agent_cls,
+                agent_cls=self.agent_cls if self.agent_cls is not None else common_agent_factory.get(),
                 callbacks=list(self.callbacks),
                 auth_headers=self.auth_headers,
                 temperature=self.temperature,

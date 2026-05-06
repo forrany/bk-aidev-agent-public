@@ -11,6 +11,7 @@ from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.enums import AgentBuildType, ChatContentStatus, PromptRole, StreamEventType
 from aidev_agent.pydantic_models import ChatPrompt, ExecuteKwargs
 from aidev_agent.services.agent import AgentInstanceFactory, ChatCompletionAgent
+from aidev_agent.services.common_agent import common_agent_factory
 from aidev_agent.services.event_handlers import AGUISessionWriter
 from bkapi_client_core.exceptions import HTTPResponseError
 from django.conf import settings
@@ -25,7 +26,6 @@ except ImportError:
     trace = None
     TraceContextTextMapPropagator = None
 
-from .factory import agent_factory
 from ..constants import AGUI_PROTOCOL_VERSION
 from ..utils import bkaidev_api_client
 
@@ -53,7 +53,7 @@ def build_chat_completion_agent_by_session_code(
     Returns:
         ChatCompletionAgent 实例
     """
-    agent_cls = agent_factory.get(settings.AIDEV_AGENT_NAME)
+    agent_cls = common_agent_factory.get()
 
     # 构建 event_handler（如果提供了 client）
     event_handler = AGUISessionWriter(session_code=session_code, client=bkaidev_api_client, username=username)
@@ -77,7 +77,7 @@ def build_chat_completion_agent_by_chat_history(
     role_contents = get_agent_role_info()
     if role_contents:
         chat_history = role_contents + chat_history
-    agent_cls = agent_factory.get(settings.AIDEV_AGENT_NAME)
+    agent_cls = common_agent_factory.get()
     agent_instance = AgentInstanceFactory.build_agent(
         build_type=AgentBuildType.DIRECT,
         session_context_data=[each.model_dump() for each in chat_history],
@@ -310,7 +310,7 @@ def save_chat_history_to_session(session_code: str, chat_history: list[ChatPromp
 def _build_session_agent_for_thread(
     session_code: str, username: str, version: str | None = None
 ) -> ChatCompletionAgent:
-    agent_cls = agent_factory.get(settings.AIDEV_AGENT_NAME)
+    agent_cls = common_agent_factory.get()
 
     event_handler = (
         AGUISessionWriter(session_code=session_code, client=bkaidev_api_client, username=username)

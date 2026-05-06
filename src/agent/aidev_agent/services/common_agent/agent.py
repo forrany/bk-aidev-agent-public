@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Dict, Tuple
+from typing import TYPE_CHECKING, Tuple
 
 from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
 from aidev_agent.pydantic_models import AgentExecutorKwargs
@@ -10,18 +10,11 @@ if TYPE_CHECKING:
 
 
 class CommonQAAgent:
-    """
-    普通用户直接使用 CommonQAAgent 即可，会进行 agent 自适应路由
-    高级用户需根据使用情况继承不同的 agent，并在 CommonQAAgent 中注册使用
-    NOTE: 这里先继承自 ToolCallingCommonQAAgent，因为 aidev.resource.chat_completion.logic.ChatCompletionApp.get_window
-    中需要使用到 ensure_memory_window。待开发侧确认各类需要使用 CommonQAAgent 成员函数/属性的场景。
-    """
+    """SDK 默认通用智能体实现，与 ``CommonAgentProtocol`` 结构兼容。
 
-    agent_classes: ClassVar[Dict] = {}
-
-    @classmethod
-    def register_agent_class(cls, key, agent_class):
-        cls.agent_classes[key] = agent_class
+    自定义场景：继承本类并重写 :meth:`get_agent_executor`，在 plugin 的 ``apps.ready`` 中
+    通过 ``common_agent_factory.replace_defaults(MyAgent())`` 注入实例。
+    """
 
     @classmethod
     def get_agent_executor(cls, **kwargs) -> Tuple["Runnable", "RunnableConfig"]:

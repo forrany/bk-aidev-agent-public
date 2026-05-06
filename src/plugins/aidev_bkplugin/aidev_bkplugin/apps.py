@@ -27,13 +27,16 @@ class AgentConfig(AppConfig):
 
     def ready(self) -> None:
         from aidev_agent.packages.resource_manager import resource_manager
-
-        from aidev_bkplugin.services.factory import agent_factory
+        from aidev_agent.services.common_agent import CommonQAAgent, common_agent_factory
 
         if bkoauth:
             bkoauth._init_function()
 
-        agent_factory.register(settings.AIDEV_AGENT_NAME, import_string(settings.AIDEV_AGENT))
+        # 仅当 AIDEV_AGENT 解析出的类与 SDK 默认 CommonQAAgent 不一致时，实例化后注入；
+        # 缺省值即继续使用 SDK 默认实例（来自 common_agent_factory 的 default）。
+        custom_agent_cls = import_string(settings.AIDEV_AGENT)
+        if custom_agent_cls is not CommonQAAgent:
+            common_agent_factory.replace_defaults(custom_agent_cls())
 
         custom_resource_manager = getattr(settings, "AIDEV_RESOURCE_MANAGER", "")
         if custom_resource_manager:
