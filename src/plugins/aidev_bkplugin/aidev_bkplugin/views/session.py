@@ -9,9 +9,9 @@ from rest_framework.parsers import FileUploadParser
 from rest_framework.views import Response
 
 from aidev_bkplugin.constants import AGUI_PROTOCOL_VERSION
-from aidev_bkplugin.services.agent import get_agent_config_info
+from aidev_bkplugin.services.agent_config import AgentConfigFetcher
 from aidev_bkplugin.utils import is_local_dev
-from aidev_bkplugin.views.base import PluginViewSet, client, logger, PluginResourceManager
+from aidev_bkplugin.views.base import PluginResourceManager, PluginViewSet, client, logger
 
 
 class ChatSessionViewSet(PluginViewSet):
@@ -147,7 +147,7 @@ class ChatSessionContentViewSet(PluginViewSet):
         #    用户点击「停止」→ revoke（任务变为 REVOKED/FAILED），不可恢复
         if session_code:
             try:
-                agent_info = get_agent_config_info(username)
+                agent_info = AgentConfigFetcher.get_info(username=username)
                 if agent_info.get("agent_type") == "flow":
                     logger.info(f"Flow agent detected, revoking flow task for session_code={session_code}")
                     rm = PluginResourceManager(username=username)

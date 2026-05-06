@@ -23,14 +23,10 @@ from aidev_agent.config import settings as agent_settings
 from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
-from aidev_bkplugin.services.agent import (
-    build_execute_kwargs,
-    get_agent_config_info,
-    get_or_create_session_by_thread_id,
-    run_chat_completion_with_thread_id,
-    save_session_content,
-)
-from aidev_bkplugin.utils import bkaidev_api_client
+from aidev_bkplugin.services.agent_config import AgentConfigFetcher
+from aidev_bkplugin.services.agent_execution import AgentExecutor, build_execute_kwargs
+from aidev_bkplugin.services.agent_helpers import AgentHelper
+from aidev_bkplugin.services.agent_session import SessionManager
 
 from .auth import WxFlowAgentClient
 from .context import LlmChunkMsg
@@ -85,7 +81,7 @@ class ChatAgentStrategy:
             {"stream": True, "thread_id": thread_id, "executor": username, "group_id": group_id},
             username,
         )
-        result, session_code = run_chat_completion_with_thread_id(
+        result, session_code = AgentExecutor.run_chat_completion_with_thread_id(
             thread_id=thread_id,
             input_text=content,
             username=username,
@@ -143,10 +139,11 @@ class FlowAgentStrategy:
         logger.info(f"[FlowAgentStrategy] 使用 RTX: {rtx_username}")
 
         # 2. 获取/创建 session
-        session_code = get_or_create_session_by_thread_id(rtx_username, thread_id)
+        session_manager = SessionManager(username=rtx_username)
+        session_code = session_manager.get_or_create_by_thread_id(thread_id)
 
         # 3. 保存用户输入
-        save_session_content(session_code, "user", content, rtx_username)
+        session_manager.save_content(session_code=session_code, role="user", content=content)
 
         # 4. 构建 agent 依赖（统一走 AgentInstanceFactory）
         # FlowAgent 不需要工厂 SESSION 路径的会话上下文清洗，统一走 DIRECT；
@@ -159,7 +156,7 @@ class FlowAgentStrategy:
             session_context_data=[],
             event_handler=AGUISessionWriter(
                 session_code=session_code,
-                client=bkaidev_api_client,
+                client=AgentHelper.get_client(),
                 username=rtx_username,
             ),
             username=rtx_username,
@@ -193,7 +190,7 @@ _DEFAULT_STRATEGY_TYPE = "chat"
 def resolve_strategy(username: str) -> AgentStrategy:
     """根据平台配置的 agent_type 解析出对应的处理策略。"""
     try:
-        agent_info = get_agent_config_info(username)
+        agent_info = AgentConfigFetcher.get_info(username=username)
         agent_type = agent_info.get("agent_type", "") or _DEFAULT_STRATEGY_TYPE
     except Exception as e:
         logger.warning(f"获取 agent_type 失败，回退到 chat: {e}")

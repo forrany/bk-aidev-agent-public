@@ -3,6 +3,7 @@
 import json
 from logging import getLogger
 
+from aidev_agent.packages.resource_manager.agent import AgentResourceManager
 from bk_plugin_framework.kit.api import custom_authentication_classes
 from bk_plugin_framework.kit.decorators import inject_user_token, login_exempt
 from django.conf import settings
@@ -16,33 +17,33 @@ from rest_framework.views import APIView, Response
 from rest_framework.viewsets import ViewSetMixin
 
 from aidev_bkplugin.permissions import AgentPluginPermission
-from aidev_bkplugin.utils import bkaidev_api_client
-from aidev_agent.packages.resource_manager.agent import AgentResourceManager
-
-
-class IgnoreClientContentNegotiation(DefaultContentNegotiation):
-    """
-    自定义内容协商类，忽略客户端 Accept 头的限制。
-    用于支持流式响应（text/event-stream），避免 406 Not Acceptable 错误。
-    """
-
-    def select_renderer(self, request, renderers, format_suffix=None):
-        # 直接返回第一个渲染器，忽略客户端 Accept 头
-        return (renderers[0], renderers[0].media_type)
-
-
-logger = getLogger(__name__)
-client = bkaidev_api_client
+from aidev_bkplugin.services.agent_helpers import AgentHelper
 
 
 class PluginResourceManager(AgentResourceManager):
-    """Plugin 层 ResourceManager，自动附加用户认证信息。
+    """带用户态认证注入的资源管理器。
 
-    传入 username，基类 ``get_client()`` 自动通过 bkoauth 获取 access_token 并注入用户认证。
+    传入 ``username``，基类 ``get_client()`` 自动通过 bkoauth 取 ``access_token`` 注入到 client header；
+    用于 view 层调 flow agent 等需要用户态鉴权的接口。``services`` 层不再使用本类，统一走
+    ``resource_manager()`` 全局单例 + ``X-BKAIDEV-USER`` header。
     """
 
     def __init__(self, username: str):
         super().__init__(username=username)
+
+
+class IgnoreClientContentNegotiation(DefaultContentNegotiation):
+    """忽略客户端 Accept 头限制的内容协商类。
+
+    支持流式响应（``text/event-stream``）避免 406 Not Acceptable。
+    """
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        return (renderers[0], renderers[0].media_type)
+
+
+logger = getLogger(__name__)
+client = AgentHelper.get_client()
 
 
 @method_decorator(login_exempt, name="dispatch")

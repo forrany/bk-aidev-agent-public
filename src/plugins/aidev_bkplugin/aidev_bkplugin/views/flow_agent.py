@@ -2,16 +2,16 @@
 
 from logging import getLogger
 
+from aidev_agent.config import settings as agent_settings
+from aidev_agent.services.agent.flow import FlowAgentCompletionAgent
 from blueapps.core.exceptions import ClientBlueException
 from django.http.response import StreamingHttpResponse
 from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.views import Response
 
-from aidev_agent.config import settings as agent_settings
-from aidev_agent.services.agent.flow import FlowAgentCompletionAgent
-from aidev_bkplugin.services.agent import build_execute_kwargs
-from aidev_bkplugin.views.base import IgnoreClientContentNegotiation, PluginViewSet, PluginResourceManager
+from aidev_bkplugin.services.agent_execution import build_execute_kwargs
+from aidev_bkplugin.views.base import IgnoreClientContentNegotiation, PluginResourceManager, PluginViewSet
 
 logger = getLogger(__name__)
 
@@ -248,7 +248,11 @@ class FlowAgentViewSet(PluginViewSet):
             result = method(session_code=session_code, node_id=node_id)
             logger.info(
                 "[FLOW_AGENT] Node %s success: session_code=%s, node_id=%s, task_id=%s, result=%s",
-                action_name, session_code, node_id, task_id, result,
+                action_name,
+                session_code,
+                node_id,
+                task_id,
+                result,
             )
         except Exception as err:
             self._handle_api_error(f"{action_name}_node", err)
@@ -272,7 +276,10 @@ class FlowAgentViewSet(PluginViewSet):
         except Exception as err:
             logger.exception(
                 "[FLOW_AGENT] Failed to resume polling after %s: session_code=%s, task_id=%s, error=%s",
-                action_name, session_code, task_id, err,
+                action_name,
+                session_code,
+                task_id,
+                err,
             )
             self._handle_api_error(f"{action_name}_node_resume", err)
 

@@ -4,7 +4,7 @@ from django.core.cache import cache
 from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied
 
-from .services.agent import get_agent_config_info
+from .services.agent_config import AgentConfigFetcher
 
 
 class AgentPluginPermission(permissions.BasePermission):
@@ -27,7 +27,7 @@ class AgentPluginPermission(permissions.BasePermission):
         allowed_access = cache.get(cache_key)
 
         if allowed_access is None:
-            agent_info = get_agent_config_info(username)
+            agent_info = AgentConfigFetcher.get_info(username=username)
             allowed_access = agent_info.get("allowed_access", False)
             if allowed_access:
                 cache.set(cache_key, allowed_access, timeout=self.CACHE_ALLOWED_TIMEOUT)

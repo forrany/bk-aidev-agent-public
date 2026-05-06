@@ -32,7 +32,7 @@ from opentelemetry.trace import Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from wrapt import wrap_function_wrapper
 
-from aidev_bkplugin.services.agent import get_agent_config_info
+from aidev_bkplugin.services.agent_config import AgentConfigFetcher
 
 from .callback_handler import BkAidevAgentCallbackHandler, BkAidevAgentInjector
 from .config import OTelConfig, default_config
@@ -327,7 +327,7 @@ class ChatCompletionAgentExecuteByAgentWrapper:
                 if hasattr(execute_kwargs, k) and getattr(execute_kwargs, k) is None:
                     setattr(execute_kwargs, k, v)
         # Agent 相关参数
-        agent_info = get_agent_config_info()  # get_agent_config_info 实现了缓存机制
+        agent_info = AgentConfigFetcher.get_info()
         agent_info.pop("otel_info", None)
         # trace 链路追踪的参数
         parent_trace_context = execute_kwargs.caller_trace_context

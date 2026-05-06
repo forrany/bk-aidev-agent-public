@@ -13,14 +13,10 @@ from django.http.response import StreamingHttpResponse
 from rest_framework.views import Response
 
 from aidev_bkplugin.serializers.chat_completion import ChatCompletionRequestSerializer
-from aidev_bkplugin.services.agent import (
-    build_chat_completion_agent_by_session_code,
-    build_chat_completion_agent_by_thread_id_with_chat_history,
-    build_session_detail_url,
-    execute_agent_with_save,
-    get_or_create_session_by_thread_id,
-)
-from aidev_bkplugin.utils import bkaidev_api_client
+from aidev_bkplugin.services.agent_builder import AgentBuilder
+from aidev_bkplugin.services.agent_execution import AgentExecutor
+from aidev_bkplugin.services.agent_helpers import AgentHelper
+from aidev_bkplugin.services.agent_session import SessionManager
 from aidev_bkplugin.views.base import IgnoreClientContentNegotiation, PluginResourceManager, PluginViewSet, logger
 
 
@@ -31,7 +27,7 @@ class ChatCompletionViewSet(PluginViewSet):
     def create(self, request):
         """
         入参校验与解析统一交给 ChatCompletionRequestSerializer：
-         - agent_type ← get_agent_config_info(username, version=execute_kwargs.version)
+         - agent_type ← AgentConfigFetcher.get_info(username=, version=execute_kwargs.version)
                           由 serializer 内部读取，**不接受用户输入**；
          - thread_id  ← request.data.thread_id or execute_kwargs.thread_id
                             or str(uuid.uuid4())（仅当 session_code 也为空时兜底）。
@@ -64,7 +60,7 @@ class ChatCompletionViewSet(PluginViewSet):
                 # 但未传 session_code 时触发；_handle_flow_agent 只接受 session_code。
                 if thread_id and not session_code:
                     try:
-                        session_code = get_or_create_session_by_thread_id(username, thread_id)
+                        session_code = SessionManager(username=username).get_or_create_by_thread_id(thread_id)
                         execute_kwargs.session_code = session_code
                         logger.info(
                             "[FLOW_AGENT] Resolved session_code from thread_id: thread_id=%s, session_code=%s",
@@ -94,9 +90,8 @@ class ChatCompletionViewSet(PluginViewSet):
             if not session_code:
                 raise ClientBlueException(message="session_code or thread_id is required")
 
-            agent_instance = build_chat_completion_agent_by_session_code(
-                session_code=session_code,
-                username=request.user.username,
+            agent_instance = AgentBuilder(username=request.user.username).by_session_code(
+                session_code,
                 version=execute_kwargs.version,
             )
             if _input:
@@ -130,7 +125,7 @@ class ChatCompletionViewSet(PluginViewSet):
             if session_code:
                 error_message_id = str(uuid.uuid4())
                 AGUISessionWriter(
-                    session_code=session_code, client=bkaidev_api_client, username=username
+                    session_code=session_code, client=AgentHelper.get_client(), username=username
                 )._create_session_content(
                     message_id=error_message_id,
                     role=PromptRole.ASSISTANT.value,
@@ -153,14 +148,18 @@ class ChatCompletionViewSet(PluginViewSet):
         """
         通过 thread_id 自动管理会话，使用 chat_history 初始化，自动保存到 session
         """
-        agent_instance, session_code = build_chat_completion_agent_by_thread_id_with_chat_history(
+        builder = AgentBuilder(username=username)
+        agent_instance, session_code = builder.by_thread_id_with_chat_history(
             thread_id=thread_id,
             chat_history=chat_history,
-            username=username,
             version=execute_kwargs.version,
         )
         execute_kwargs.session_code = session_code
-        result = execute_agent_with_save(agent_instance, execute_kwargs, session_code, username)
+        result = AgentExecutor(builder.session_manager).execute_with_save(
+            agent_instance,
+            execute_kwargs,
+            session_code,
+        )
         if execute_kwargs.stream:
             return self.streaming_response(result, session_code=session_code)
         return Response(result)
@@ -206,7 +205,9 @@ class ChatCompletionViewSet(PluginViewSet):
         # 构建 event_handler（如果有 session_code）
         event_handler = None
         if session_code:
-            event_handler = AGUISessionWriter(session_code=session_code, client=bkaidev_api_client, username=username)
+            event_handler = AGUISessionWriter(
+                session_code=session_code, client=AgentHelper.get_client(), username=username
+            )
 
         # FlowAgent 不需要工厂 SESSION 路径的会话上下文清洗（_get_agent_config /
         # _check_agent_switch / get_chat_session_context 等），统一走 DIRECT；
@@ -237,7 +238,7 @@ class ChatCompletionViewSet(PluginViewSet):
             if session_code:
                 error_message_id = str(uuid.uuid4())
                 AGUISessionWriter(
-                    session_code=session_code, client=bkaidev_api_client, username=username
+                    session_code=session_code, client=AgentHelper.get_client(), username=username
                 )._create_session_content(
                     message_id=error_message_id,
                     role=PromptRole.ASSISTANT.value,
@@ -301,7 +302,7 @@ class ChatCompletionViewSet(PluginViewSet):
         # 注入 session 相关响应标头，便于客户端获取会话信息和跳转链接
         if session_code:
             sr.headers["x-bkaidev-agent-session-code"] = session_code
-            session_url = build_session_detail_url(session_code)
+            session_url = AgentHelper.build_session_detail_url(session_code)
             if session_url:
                 sr.headers["x-bkaidev-agent-session-url"] = session_url
                 logger.debug(f"[streaming_response] 注入响应标头: session_code={session_code}, url={session_url}")

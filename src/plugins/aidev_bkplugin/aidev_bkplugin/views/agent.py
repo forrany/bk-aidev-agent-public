@@ -5,7 +5,8 @@ from django.conf import settings
 from rest_framework.decorators import action
 from rest_framework.views import Response
 
-from aidev_bkplugin.services.agent import get_agent_config_info, get_agent_version
+from aidev_bkplugin.services.agent_config import AgentConfigFetcher
+from aidev_bkplugin.services.agent_helpers import AgentHelper
 from aidev_bkplugin.utils import is_local_dev, set_user_access_token
 from aidev_bkplugin.views.base import PluginViewSet
 
@@ -13,7 +14,7 @@ from aidev_bkplugin.views.base import PluginViewSet
 class AgentInfoViewSet(PluginViewSet):
     @action(detail=False, methods=["GET"], url_path="info", url_name="info")
     def info(self, request):
-        agent_info = get_agent_config_info(request.user.username)
+        agent_info = AgentConfigFetcher.get_info(username=request.user.username)
 
         conversation_settings = agent_info.get("conversation_settings", {})
         commands = conversation_settings.get("commands", [])
@@ -58,4 +59,4 @@ class AgentInfoViewSet(PluginViewSet):
     @action(detail=False, methods=["GET"], url_path="version", url_name="version")
     def version(self, request, *args, **kwargs):
         """获取所有以 aidev 开头的已安装包及其版本"""
-        return Response(data=get_agent_version())
+        return Response(data=AgentHelper.get_agent_version())

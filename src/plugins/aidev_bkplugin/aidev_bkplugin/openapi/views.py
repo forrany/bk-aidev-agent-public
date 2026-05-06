@@ -9,7 +9,7 @@ from rest_framework.response import Response
 
 from aidev_bkplugin.packages.apigw.permissions import ApigwPermission
 from aidev_bkplugin.permissions import AgentPluginPermission
-from aidev_bkplugin.services.agent import get_agent_version
+from aidev_bkplugin.services.agent_helpers import AgentHelper
 from aidev_bkplugin.views.agent import AgentInfoViewSet
 from aidev_bkplugin.views.base import PluginViewSet
 from aidev_bkplugin.views.chat import ChatCompletionViewSet
@@ -57,7 +57,7 @@ class OpenapiAgentAbilitiesViewSet(OpenapiPluginViewSet):
 
     def list(self, request, *args, **kwargs):
         """获取所有以 aidev 开头的已安装包及其版本"""
-        return Response(data=get_agent_version())
+        return Response(data=AgentHelper.get_agent_version())
 
     @action(detail=False, methods=["GET"], url_path="flush", url_name="flush")
     def flush(self, request, *args, **kwargs):
