@@ -28,6 +28,8 @@ dependencies = [
     "opentelemetry-instrumentation-celery==0.54b1",
     "opentelemetry-instrumentation-dbapi==0.54b1",
     "opentelemetry-instrumentation-django==0.54b1",
+    "opentelemetry-instrumentation-httpx==0.54b1",
+    "opentelemetry-instrumentation-threading==0.54b1",
     "opentelemetry-instrumentation-langchain==0.38.10",
     "opentelemetry-instrumentation-logging==0.54b1",
     "opentelemetry-instrumentation-redis==0.54b1",

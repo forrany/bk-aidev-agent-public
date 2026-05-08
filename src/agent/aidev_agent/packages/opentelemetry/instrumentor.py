@@ -21,7 +21,6 @@ import logging
 from typing import Any, Collection, Dict, Generator, Iterator, Optional
 
 import orjson
-from aidev_agent.pydantic_models import ExecuteKwargs
 from langchain_core.messages import BaseMessage
 from opentelemetry import context as context_api
 from opentelemetry import trace
@@ -30,6 +29,8 @@ from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from wrapt import wrap_function_wrapper
+
+from aidev_agent.pydantic_models import ExecuteKwargs
 
 from .callback_handler import BkAidevAgentCallbackHandler, BkAidevAgentInjector
 from .config import OTelConfig

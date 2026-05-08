@@ -4,10 +4,9 @@ from functools import lru_cache
 from logging import getLogger
 from typing import Any, Dict, List
 
+from aidev_agent.packages.opentelemetry.utils import ExporterType
 from opentelemetry import context
 from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
-
-from aidev_bkplugin.packages.opentelemetry.utils import ExporterType
 
 logger = getLogger(__name__)
 

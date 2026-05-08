@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from aidev_bkplugin.packages.opentelemetry.callback_handler import (
+from aidev_agent.packages.opentelemetry.callback_handler import (
     BkAidevAgentCallbackHandler,
     BkAidevAgentInjector,
 )

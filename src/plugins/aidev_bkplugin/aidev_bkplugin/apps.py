@@ -14,8 +14,9 @@ except ImportError:
 # OpenTelemetry 是可选 extras，未安装时降级为 no-op。
 # 安装方式：pip install aidev-bkplugin[opentelemetry]
 try:
-    from aidev_bkplugin.packages.opentelemetry import BkAidevAgentInstrumentor
-    from aidev_bkplugin.packages.opentelemetry.config import OTelConfig
+    from aidev_agent.packages.opentelemetry import BkAidevAgentInstrumentor
+    from aidev_agent.packages.opentelemetry.config import OTelConfig
+
     from aidev_bkplugin.utils import get_otel_endpoints
 except ImportError:
     BkAidevAgentInstrumentor = None

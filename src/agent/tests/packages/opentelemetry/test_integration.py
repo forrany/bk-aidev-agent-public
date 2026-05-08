@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from aidev_bkplugin.packages.opentelemetry.callback_handler import (
+from aidev_agent.packages.opentelemetry.callback_handler import (
     BkAidevAgentCallbackHandler,
     BkAidevAgentInjector,
 )
@@ -442,7 +442,7 @@ class TestCompleteAgentExecution:
                 3. 所有 span 都能正确结束，没有泄露
 
                 背景：
-        在 aidev_bkplugin/views/chat.py 的 ChatCompletionViewSet.create 中，
+        在 aidev_agent/views/chat.py 的 ChatCompletionViewSet.create 中，
                 当使用流式响应时，StreamingHttpResponse 会在返回时立即结束 HTTP span。
                 如果 BkAidevAgentInjector 的 span 没有正确结束，会导致该线程的 trace 被污染。
         """

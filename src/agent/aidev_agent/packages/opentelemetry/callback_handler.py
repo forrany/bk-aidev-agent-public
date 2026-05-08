@@ -28,7 +28,6 @@ from uuid import UUID, uuid4
 
 import orjson
 import pytz
-from aidev_agent.pydantic_models import ExecuteKwargs
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
@@ -38,13 +37,15 @@ from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode, set_span_in_context
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from aidev_bkplugin.packages.opentelemetry.span_utils import (
+from aidev_agent.pydantic_models import ExecuteKwargs
+
+from .span_utils import (
     SpanHolder,
     set_chat_request,
     set_chat_response,
     set_llm_request,
 )
-from aidev_bkplugin.packages.opentelemetry.utils import (
+from .utils import (
     _safe_attach_context,
     _safe_detach_context,
     _set_span_attribute,

@@ -18,7 +18,7 @@ from langchain_core.outputs import (
 from opentelemetry.context.context import Context
 from opentelemetry.trace.span import Span
 
-from aidev_bkplugin.packages.opentelemetry.utils import CallbackFilteredJSONEncoder, _set_span_attribute
+from .utils import CallbackFilteredJSONEncoder, _set_span_attribute
 
 
 @dataclass

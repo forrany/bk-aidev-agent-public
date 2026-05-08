@@ -21,8 +21,8 @@ from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
-from aidev_bkplugin.packages.opentelemetry.config import OTelConfig
-from aidev_bkplugin.packages.opentelemetry.instrumentor import (
+from aidev_agent.packages.opentelemetry.config import OTelConfig
+from aidev_agent.packages.opentelemetry.instrumentor import (
     BkAidevAgentInstrumentor,
     ChatCompletionAgentExecuteByAgentWrapper,
     ChatCompletionAgentGetAgentWrapper,
@@ -82,7 +82,7 @@ def tracer_and_config():
     exporter.clear()
 
     # Patch ExecuteKwargs in instrumentor module to use our mocked version
-    with patch("aidev_bkplugin.packages.opentelemetry.instrumentor.ExecuteKwargs", ExecuteKwargs):
+    with patch("aidev_agent.packages.opentelemetry.instrumentor.ExecuteKwargs", ExecuteKwargs):
         yield tracer, config, exporter
 
     # 强制刷新所有 spans
@@ -189,7 +189,7 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
         assert result["execute_kwargs"].caller_bk_biz_id == 200
         assert result["execute_kwargs"].caller_order_type == "ai_chat"
 
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.BkAidevAgentInjector")
+    @patch("aidev_agent.packages.opentelemetry.instrumentor.BkAidevAgentInjector")
     def test_wrapper_call(self, mock_injector_class, tracer_and_config):
         """测试包装器的完整调用流程"""
         tracer, config, _ = tracer_and_config
@@ -284,7 +284,7 @@ class TestChatCompletionAgentGetAgentWrapper:
         assert len(cfg["callbacks"]) == 1
 
         # 验证添加的是 BkAidevAgentCallbackHandler
-        from aidev_bkplugin.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
+        from aidev_agent.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
 
         assert isinstance(cfg["callbacks"][0], BkAidevAgentCallbackHandler)
 
@@ -326,7 +326,7 @@ class TestChatCompletionAgentGetAgentWrapper:
         assert existing_callback in cfg["callbacks"]
 
         # 验证新增的是 BkAidevAgentCallbackHandler
-        from aidev_bkplugin.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
+        from aidev_agent.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
 
         callback_handlers = [cb for cb in cfg["callbacks"] if isinstance(cb, BkAidevAgentCallbackHandler)]
         assert len(callback_handlers) == 1
