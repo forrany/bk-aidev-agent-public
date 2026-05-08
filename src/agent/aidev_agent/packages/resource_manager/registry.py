@@ -35,6 +35,10 @@ class ResourceManagerProtocol(Protocol):
         """获取已完成认证信息注入的 API Client。"""
         ...
 
+    def get_agent_code(self, **kwargs) -> str:
+        """获取resource manager的agent_code"""
+        ...
+
     def retrieve_knowledgebase(self, id: int, **kwargs) -> dict:
         """按 ID 取回知识库详情（业务返回结构 = 后端 ``data`` 字段）"""
         ...

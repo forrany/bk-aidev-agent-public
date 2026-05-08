@@ -89,6 +89,10 @@ class BaseResourceManager(abc.ABC):
         """获取已完成认证信息注入的 API Client。子类必须实现。"""
         raise NotImplementedError
 
+    def get_agent_code(self, **kwargs: Any) -> str:
+        """获取resource manager的agent code。子类可覆写按照其他场景获取agent code"""
+        return self.app_code
+
     def resolve_access_token(self, username: str = None) -> str:
         """获取 access_token，优先级：self.access_token > username 参数 > self.username > 空字符串。
 
@@ -116,6 +120,7 @@ class BaseResourceManager(abc.ABC):
         return client.api.get_chat_session_context(path_params={"session_code": session_code}, **kwargs).get("data", [])
 
     def retrieve_agent_config(self, agent_code: str, version: Optional[str] = None, **kwargs) -> dict:
+        agent_code = agent_code or self.app_code
         params = kwargs.pop("params", None) or {}
         if version is not None:
             params["version"] = version

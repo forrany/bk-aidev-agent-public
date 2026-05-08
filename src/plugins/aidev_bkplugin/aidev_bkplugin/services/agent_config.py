@@ -21,7 +21,6 @@ from typing import Optional
 from aidev_agent.packages.resource_manager import resource_manager
 from aidev_agent.pydantic_models import ChatPrompt
 from aidev_agent.utils.local import request_local
-from django.conf import settings
 
 logger = getLogger(__name__)
 
@@ -50,7 +49,7 @@ class AgentConfigFetcher:
 
         请求级缓存命中：直接返回缓存值的 ``deepcopy``。脱离请求上下文（如离线脚本）时降级为不缓存。
         """
-        effective_app_code = app_code or settings.APP_CODE
+        effective_app_code = app_code or resource_manager().get_agent_code()
         cache_key = (effective_app_code, version, username)
         cache = cls._get_request_cache()
         if cache is not None and cache_key in cache:
