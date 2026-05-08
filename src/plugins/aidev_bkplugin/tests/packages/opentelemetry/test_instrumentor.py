@@ -21,9 +21,9 @@ from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
-from aidev_agent.utils.local import request_local
 from aidev_bkplugin.packages.opentelemetry.config import OTelConfig
 from aidev_bkplugin.packages.opentelemetry.instrumentor import (
+    BkAidevAgentInstrumentor,
     ChatCompletionAgentExecuteByAgentWrapper,
     ChatCompletionAgentGetAgentWrapper,
 )
@@ -76,7 +76,7 @@ def tracer_and_config():
     tracer = provider.get_tracer(__name__)
 
     # 创建配置
-    config = OTelConfig()
+    config = OTelConfig(otel_endpoints=[])
 
     # 清空当前的 spans（以防之前的测试留下数据）
     exporter.clear()
@@ -129,86 +129,34 @@ def verify_get_values_result(result):
     # 验证 agent_info 不能有 otel_info 字段
     assert "otel_info" not in agent_info
 
-    # 验证 agent_info 包含必需的字段
-    assert "agent_id" in agent_info
-    assert "agent_code" in agent_info
-    assert "agent_name" in agent_info
-    assert "agent_type" in agent_info
-    assert "service_catalogue" in agent_info
-    assert "updated_by" in agent_info
+
+class TestBkAidevAgentInstrumentor:
+    """测试 BkAidevAgentInstrumentor"""
+
+    def test_instrumentor_requires_config(self, tracer_and_config):
+        """测试 BkAidevAgentInstrumentor 必须传入 config"""
+        with pytest.raises(TypeError):
+            BkAidevAgentInstrumentor()
 
 
 class TestChatCompletionAgentExecuteByAgentWrapper:
     """测试 ChatCompletionAgentExecuteByAgentWrapper 包装器"""
 
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.AgentConfigFetcher")
-    def test_get_values_with_request_local(self, mock_fetcher_class, tracer_and_config):
-        """测试 get_values 从 request_local 获取 otel_info"""
+    def test_get_values_with_execute_kwargs_param(self, tracer_and_config):
+        """测试 get_values 从 instance.agent_info 获取 agent_info"""
         tracer, config, _ = tracer_and_config
 
-        # 模拟 AgentConfigFetcher.get_info() 返回值
-        mock_agent_info = {
-            "agent_id": "test-agent-123",
-            "agent_code": "test_agent",
-            "agent_name": "测试智能体",
-            "agent_type": "ai_chat",
-            "service_catalogue": "test_service",
-            "updated_by": "admin",
-            "otel_info": {"should_be_removed": True},  # 这个字段应该被移除
-        }
-        mock_fetcher_class.get_info.return_value = mock_agent_info
-
-        # 设置 request_local.otel_info
-        request_local.otel_info = {
-            "session_code": "session-123",
-            "executor": "test-user",
-            "caller_bk_app_code": "test-app",
-            "caller_bk_biz_env": "domestic_biz",
-            "caller_executor": "test-user",
-            "caller_bk_biz_id": 100,
-            "caller_order_type": "ai_chat",
-        }
-
-        # 创建包装器
-        wrapper = ChatCompletionAgentExecuteByAgentWrapper(tracer, config)
-
-        # 准备输入 - 使用 BaseMessage list
-        messages = [HumanMessage(content="测试问题")]
-
-        # 调用 get_values
-        result = wrapper.get_values(messages=messages, execute_kwargs=None)
-
-        # 使用公共验证函数
-        verify_get_values_result(result)
-
-        # 验证具体的值
-        assert result["inputs"] == "测试问题"
-        assert result["execute_kwargs"].session_code == "session-123"
-        assert result["execute_kwargs"].caller_executor == "test-user"
-        assert result["execute_kwargs"].caller_bk_app_code == "test-app"
-        assert result["execute_kwargs"].caller_bk_biz_env == "domestic_biz"
-        assert result["execute_kwargs"].caller_bk_biz_id == 100
-        assert result["execute_kwargs"].caller_order_type == "ai_chat"
-
-        # 清理
-        delattr(request_local, "otel_info")
-
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.AgentConfigFetcher")
-    def test_get_values_with_execute_kwargs_param(self, mock_fetcher_class, tracer_and_config):
-        """测试 get_values 从 execute_kwargs 参数获取"""
-        tracer, config, _ = tracer_and_config
-
-        # 模拟 AgentConfigFetcher.get_info() 返回值
-        mock_agent_info = {
+        # 创建 mock instance 并设置 agent_info
+        mock_instance = MagicMock()
+        mock_instance.agent_info = {
             "agent_id": "test-agent-456",
             "agent_code": "test_agent_2",
             "agent_name": "测试智能体2",
             "agent_type": "ai_chat",
             "service_catalogue": "test_service_2",
             "updated_by": "admin",
-            "otel_info": {"should_be_removed": True},  # 这个字段应该被移除
+            "otel_info": "base64encoded",  # agent_info 中 otel_info 会被 pop 掉
         }
-        mock_fetcher_class.get_info.return_value = mock_agent_info
 
         # 创建 ExecuteKwargs 对象
         execute_kwargs = ExecuteKwargs(
@@ -227,7 +175,7 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
         messages = [HumanMessage(content="测试问题2")]
 
         # 调用 get_values
-        result = wrapper.get_values(messages=messages, execute_kwargs=execute_kwargs)
+        result = wrapper.get_values(messages=messages, execute_kwargs=execute_kwargs, instance=mock_instance)
 
         # 使用公共验证函数
         verify_get_values_result(result)
@@ -241,14 +189,18 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
         assert result["execute_kwargs"].caller_bk_biz_id == 200
         assert result["execute_kwargs"].caller_order_type == "ai_chat"
 
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.AgentConfigFetcher")
     @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.BkAidevAgentInjector")
-    def test_wrapper_call(self, mock_injector_class, mock_fetcher_class, tracer_and_config):
+    def test_wrapper_call(self, mock_injector_class, tracer_and_config):
         """测试包装器的完整调用流程"""
         tracer, config, _ = tracer_and_config
 
-        # 模拟 AgentConfigFetcher.get_info() 返回值
-        mock_agent_info = {
+        # 创建 mock injector 实例
+        mock_injector = MagicMock()
+        mock_injector_class.return_value = mock_injector
+
+        # 创建 mock instance 并设置 agent_info
+        mock_instance = MagicMock()
+        mock_instance.agent_info = {
             "agent_id": "test-agent-789",
             "agent_code": "test_agent_3",
             "agent_name": "测试智能体3",
@@ -256,22 +208,6 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
             "service_catalogue": "test_service_3",
             "updated_by": "admin",
             "otel_info": {},
-        }
-        mock_fetcher_class.get_info.return_value = mock_agent_info
-
-        # 创建 mock injector 实例
-        mock_injector = MagicMock()
-        mock_injector_class.return_value = mock_injector
-
-        # 设置 request_local.otel_info
-        request_local.otel_info = {
-            "session_code": "session-789",
-            "executor": "test-user-3",
-            "caller_bk_app_code": "test-app-3",
-            "caller_bk_biz_env": "domestic_biz",
-            "caller_executor": "test-user-3",
-            "caller_bk_biz_id": 300,
-            "caller_order_type": "ai_chat",
         }
 
         # 创建包装器
@@ -290,7 +226,7 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
         # 调用包装器
         generator = wrapper(
             wrapped=mock_execute_by_agent,
-            instance=None,
+            instance=mock_instance,
             args=(messages, execute_kwargs),
             kwargs={},
         )
@@ -309,9 +245,6 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
         mock_injector.on_bk_agent_start.assert_called_once()
         mock_injector.on_bk_agent_end.assert_called_once()
 
-        # 清理
-        delattr(request_local, "otel_info")
-
 
 class TestChatCompletionAgentGetAgentWrapper:
     """测试 ChatCompletionAgentGetAgentWrapper 包装器"""
@@ -319,6 +252,14 @@ class TestChatCompletionAgentGetAgentWrapper:
     def test_wrapper_adds_callback_handler(self, tracer_and_config):
         """测试包装器添加 callback handler"""
         tracer, config, _ = tracer_and_config
+
+        # 创建 mock instance 并设置 agent_info
+        mock_instance = MagicMock()
+        mock_instance.agent_info = {
+            "agent_id": "test",
+            "agent_code": "code",
+            "agent_name": "name",
+        }
 
         # 创建包装器
         wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
@@ -332,7 +273,7 @@ class TestChatCompletionAgentGetAgentWrapper:
         # 调用包装器
         agent, cfg = wrapper(
             wrapped=mock_get_agent,
-            instance=None,
+            instance=mock_instance,
             args=(),
             kwargs={},
         )
@@ -351,6 +292,14 @@ class TestChatCompletionAgentGetAgentWrapper:
         """测试包装器保留已有的 callbacks"""
         tracer, config, _ = tracer_and_config
 
+        # 创建 mock instance 并设置 agent_info
+        mock_instance = MagicMock()
+        mock_instance.agent_info = {
+            "agent_id": "test",
+            "agent_code": "code",
+            "agent_name": "name",
+        }
+
         # 创建包装器
         wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
 
@@ -365,7 +314,7 @@ class TestChatCompletionAgentGetAgentWrapper:
         # 调用包装器
         agent, cfg = wrapper(
             wrapped=mock_get_agent,
-            instance=None,
+            instance=mock_instance,
             args=(),
             kwargs={},
         )

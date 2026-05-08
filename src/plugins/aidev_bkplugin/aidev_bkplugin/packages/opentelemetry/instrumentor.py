@@ -22,7 +22,6 @@ from typing import Any, Collection, Dict, Generator, Iterator, Optional
 
 import orjson
 from aidev_agent.pydantic_models import ExecuteKwargs
-from aidev_agent.utils.local import request_local
 from langchain_core.messages import BaseMessage
 from opentelemetry import context as context_api
 from opentelemetry import trace
@@ -32,10 +31,8 @@ from opentelemetry.trace import Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from wrapt import wrap_function_wrapper
 
-from aidev_bkplugin.services.agent_config import AgentConfigFetcher
-
 from .callback_handler import BkAidevAgentCallbackHandler, BkAidevAgentInjector
-from .config import OTelConfig, default_config
+from .config import OTelConfig
 from .otel_service import BkAgentOTelService
 from .utils import dont_throw
 
@@ -56,8 +53,8 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
     请注意，不要使用 BkAidevAgentInstrumentor().instrument() 多次，由于 BaseInstrumentor() 是单例化的，第二次会导致 trace 获取异常
     """
 
-    def __init__(self, config: Optional[OTelConfig] = None):
-        self._otel_service_config = config or default_config
+    def __init__(self, config: OTelConfig = None):
+        self._otel_service_config = config
         self._otel_service: Optional[BkAgentOTelService] = None
 
     def start_otel_service(self):
@@ -313,7 +310,7 @@ class ChatCompletionAgentExecuteByAgentWrapper:
         self.tracer = tracer
         self.config = config
 
-    def get_values(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs = None):
+    def get_values(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs = None, instance=None):
         # 用户输入
         if isinstance(messages, list) and len(messages) >= 1 and isinstance(messages[-1], BaseMessage):
             user_input = messages[-1].content
@@ -322,12 +319,8 @@ class ChatCompletionAgentExecuteByAgentWrapper:
             user_input = None
         # 调用相关参数
         execute_kwargs = execute_kwargs or ExecuteKwargs()
-        if hasattr(request_local, "otel_info") and isinstance(request_local.otel_info, dict):
-            for k, v in request_local.otel_info.items():
-                if hasattr(execute_kwargs, k) and getattr(execute_kwargs, k) is None:
-                    setattr(execute_kwargs, k, v)
         # Agent 相关参数
-        agent_info = AgentConfigFetcher.get_info()
+        agent_info = dict(instance.agent_info) if instance and instance.agent_info else {}
         agent_info.pop("otel_info", None)
         # trace 链路追踪的参数
         parent_trace_context = execute_kwargs.caller_trace_context
@@ -370,7 +363,7 @@ class ChatCompletionAgentExecuteByAgentWrapper:
         args,
         kwargs,
     ):
-        values = self.get_values(*args, **kwargs)
+        values = self.get_values(*args, **kwargs, instance=instance)
         base_handler = BkAidevAgentInjector(tracer=self.tracer, parent_trace_context=values.get("parent_trace_context"))
 
         base_handler.on_bk_agent_start(**values)
@@ -440,7 +433,7 @@ class ChatCompletionAgentGetAgentWrapper:
         agent, cfg = wrapped(*args, **kwargs)
         callbacks = cfg.setdefault("callbacks", [])
         execute_kwargs = kwargs.get("execute_kwargs") or ExecuteKwargs()
-        agent_info = AgentConfigFetcher.get_info()
+        agent_info = dict(instance.agent_info) if instance and instance.agent_info else {}
         callback_handler = BkAidevAgentCallbackHandler(
             tracer=self.tracer,
             parent_trace_context=execute_kwargs.caller_trace_context,

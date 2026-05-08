@@ -86,6 +86,7 @@ class ChatCompletionAgent(BaseModel):
     resource_manager: Any = Field(
         default=None, exclude=True, description="per-request 资源管理器（含正确 app_code / access_token）"
     )
+    agent_info: dict | None = Field(default=None, description="原始配置信息，来自 AgentConfig.agent_info")
 
     IMAGE_FILE_PATTERN: ClassVar[re.Pattern] = re.compile(r"^!\[.*\]\((http[^)]+/([^/]+?))\)")
     TOOL_EXECUTION_INTERVAL: ClassVar[int] = 10
@@ -129,6 +130,7 @@ class ChatCompletionAgent(BaseModel):
         self.chat_history = builder.build_chat_history(ctx.session_context_data)
         self.checkpointer = builder.build_checkpointer()
         self.callbacks = chat.callbacks
+        self.agent_info = ctx.agent_config.agent_info if ctx.agent_config else None
 
         if chat.agent_cls is not None:
             self.agent_cls = chat.agent_cls

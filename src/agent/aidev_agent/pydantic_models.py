@@ -378,3 +378,5 @@ class AgentConfig(BaseModel):
     # 超参数配置
     temperature: float | None = Field(None, description="模型温度")
     max_tokens: int | None = Field(None, description="最大回复长度")
+    # 原始配置信息（来自 retrieve_agent_config 的完整字典，含 otel_info 等平台透传字段）
+    agent_info: dict | None = Field(None, description="智能体配置信息，agent_info 接口的原始值，仅仅用于数据上报")

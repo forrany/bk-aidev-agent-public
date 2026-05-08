@@ -18,21 +18,21 @@ to the current version of the project delivered to anyone in the future.
 
 import os
 
-from aidev_bkplugin.packages.opentelemetry.utils import get_env_bool, get_otel_endpoints
+from .utils import get_env_bool
 
 
 class OTelConfig:
     """OTel 上报配置"""
 
-    def __init__(self):
+    def __init__(self, otel_endpoints: list[dict] | None = None):
         # ===== 基础配置 =====
         self.enabled: bool = get_env_bool("BKAI_AGENT_OTEL_ENABLED", True)
         self.debug: bool = get_env_bool("BKAI_AGENT_OTEL_DEBUG", False)
 
         # ===== OTEL Endpoint 配置 =====
         self.service_name: str = os.getenv("BKPAAS_APP_ID", "") or os.getenv("BKPAAS_APP_CODE", "aidev-agent")
-        # ===== OTel Endpoint 地址(支持多个) =====
-        self.otel_endpoints: list[dict] = get_otel_endpoints()
+        # ===== OTel Endpoint 地址(支持多个,由调用方注入) =====
+        self.otel_endpoints: list[dict] = otel_endpoints if otel_endpoints is not None else []
 
         # ===== 功能开关 =====
         self.enable_traces: bool = get_env_bool("BKAI_AGENT_ENABLE_TRACES", True)
@@ -55,7 +55,3 @@ class OTelConfig:
             f"otel_endpoints={endpoints_summary}, "
             f"enable_traces={self.enable_traces})"
         )
-
-
-# 默认配置实例
-default_config = OTelConfig()

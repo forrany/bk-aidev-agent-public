@@ -15,8 +15,12 @@ except ImportError:
 # 安装方式：pip install aidev-bkplugin[opentelemetry]
 try:
     from aidev_bkplugin.packages.opentelemetry import BkAidevAgentInstrumentor
+    from aidev_bkplugin.packages.opentelemetry.config import OTelConfig
+    from aidev_bkplugin.utils import get_otel_endpoints
 except ImportError:
     BkAidevAgentInstrumentor = None
+    OTelConfig = None
+    get_otel_endpoints = None
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,8 @@ class AgentConfig(AppConfig):
             resource_manager.replace_defaults(import_string(custom_resource_manager)())
 
         if BkAidevAgentInstrumentor is not None:
-            BkAidevAgentInstrumentor().instrument()
+            otel_config = OTelConfig(otel_endpoints=get_otel_endpoints())
+            BkAidevAgentInstrumentor(config=otel_config).instrument()
         else:
             logger.info(
                 "[aidev_bkplugin] OpenTelemetry extras 未安装，跳过自动 instrument；"

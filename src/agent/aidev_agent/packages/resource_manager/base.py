@@ -184,6 +184,10 @@ class BaseResourceManager(abc.ABC):
             model_context_options_data["llm_code_agent_type"] = intent_recognition_data["agent_type"]
 
         conversation_settings = res.get("conversation_settings", {}) or {}
+
+        # 构造 agent_info：完整的原始配置字典（不对 otel_info 解码，保持原始数据）
+        agent_info = dict(res)
+
         return AgentConfig(
             agent_code=agent_code,
             agent_name=res["agent_name"],
@@ -203,6 +207,7 @@ class BaseResourceManager(abc.ABC):
             },
             temperature=prompt_setting.get("temperature"),
             max_tokens=prompt_setting.get("max_tokens"),
+            agent_info=agent_info,
         )
 
     def retrieve_skill(self, skill_id: str, version: str, **kwargs) -> dict:
