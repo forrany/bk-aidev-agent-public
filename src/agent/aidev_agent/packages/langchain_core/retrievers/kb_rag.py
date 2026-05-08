@@ -768,7 +768,7 @@ class KnowledgeRag:
         kb_retriever = kwargs.get("kb_retriever", self.kb_retriever)
         output_state = {}
         # 过滤chat_history中的消息，只保留HumanMessage和AIMessage类型的消息
-        chat_history = [msg for msg in chat_history if isinstance(msg, (HumanMessage, AIMessage))]
+        chat_history = [msg for msg in (chat_history or []) if isinstance(msg, (HumanMessage, AIMessage))]
         res = raw_input
         if agent_options.knowledge_query_options.independent_query_mode == IndependentQueryMode.REWRITE:
             res = self.query_cls_pipeline(chat_history, query, llm, agent_options, **kwargs)

@@ -257,7 +257,7 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
         其他：
             with_scalar_data 参数应该由 agent_options.KnowledgebaseSettings.with_scalar_data 进行调整
         """
-        super().__init__(llm, agent_options, kb_retriever)
+        super().__init__(llm, agent_options, [], kb_retriever)
         self.score_threshold = score_threshold
         self.topk = topk
 
@@ -278,7 +278,7 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
             输出状态
         """
         query = self.get_query(state)
-        ret = self.retriever.retrieve(query, self.agent_options, input=query)
+        ret = self.retriever.retrieve(query, self.agent_options, self.chat_history, input=query)
         # 获取所有 embedding 召回的资源（带细粒度分数）
         knowledge_resources_emb_recalled = ret.get("knowledge_resources_emb_recalled", [])
 
