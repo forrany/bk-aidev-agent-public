@@ -374,10 +374,12 @@ class ReActAgentBuilder:
         # Skills（从配置链路传入的关联技能配置 list）
         if options.skills is not None and options.skills:
             self.set_enable_skills(True)
+            # 优先使用 per-request resource_manager（含调试Agent自己的app_code / access_token），
+            _rm = options.resource_manager or resource_manager()
             self.add_skill_sources(
                 [
                     BKAiProvider(
-                        client=resource_manager(),
+                        client=_rm,
                         related_skills=options.skills,
                     )
                 ]
@@ -614,6 +616,13 @@ class ReActAgentBuilder:
             backend_cls = self._runtime_types[skill_runtime]
             extractor = self._runtime_param_with_skill.get(skill_runtime)
             params = extractor(skill, self._executor_info or {}) if extractor is not None else {}
+            logger.info(
+                f"[credential] skill_runtime={skill_runtime}, skill_name={skill_name}, "
+                f"executor_info_keys={list((self._executor_info or {}).keys())}, "
+                f"has_app_code={bool((self._executor_info or {}).get('app_code'))}, "
+                f"has_access_token={bool((self._executor_info or {}).get('access_token'))}, "
+                f"backend_cls={backend_cls.__name__}"
+            )
             skill_backend = backend_cls(**params)
             # 注册这个 backend
             resolver.register_runtime(

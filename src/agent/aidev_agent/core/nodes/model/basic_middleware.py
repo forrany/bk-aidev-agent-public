@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pytz
@@ -101,11 +101,26 @@ def get_beijing_now() -> str:
     beijing_now = utc_now.astimezone(pytz.timezone("Asia/Shanghai")).strftime("%Y年%m月%d日 %H时%M分%S秒")
     return beijing_now
 
+
 def beijing_to_timestamp(beijing_now):
     """将北京时间字符串转换为时间戳"""
-    standard_format_str = beijing_now.replace(" ", "").replace("年", "-").replace("月", "-").replace("日", " ").replace("时", ":").replace("分", ":").replace("秒", "")
-    timestamp = int(datetime.strptime(standard_format_str.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=8))).astimezone(timezone.utc).timestamp())
+    standard_format_str = (
+        beijing_now.replace(" ", "")
+        .replace("年", "-")
+        .replace("月", "-")
+        .replace("日", " ")
+        .replace("时", ":")
+        .replace("分", ":")
+        .replace("秒", "")
+    )
+    timestamp = int(
+        datetime.strptime(standard_format_str.strip(), "%Y-%m-%d %H:%M:%S")
+        .replace(tzinfo=timezone(timedelta(hours=8)))
+        .astimezone(timezone.utc)
+        .timestamp()
+    )
     return timestamp
+
 
 def get_context_type_from_state(state: Dict[str, Any]) -> str:
     knowledge_content = state.get("knowledge_content")
@@ -309,6 +324,7 @@ class SpecialVariablesMiddleware:
         ctx.variables = {**ctx.variables, **special_vars}
         next()
 
+
 class SpecialVariablesPostMiddleware:
     """在工具压缩后执行的变量渲染中间件，只重新渲染agent_scratchpad变量"""
 
@@ -329,6 +345,7 @@ class SpecialVariablesPostMiddleware:
 
         ctx.variables["agent_scratchpad"] = agent_scratchpad
         next()
+
 
 class DeepSeekR1VariablesMiddleware:
     """DeepSeek-R1：避免使用 system prompt（将 SystemMessage 视为 user）。"""

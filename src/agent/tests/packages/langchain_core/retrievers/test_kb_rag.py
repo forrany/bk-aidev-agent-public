@@ -553,7 +553,9 @@ class TestKnowledgeRag:
     def test_query_cls_with_resp_or_rewrite_continue(self, mock_invoke_decorator, mock_dispatch):
         """测试 query_cls_with_resp_or_rewrite 方法 - 返回 continue"""
         mock_llm = MagicMock()
-        mock_invoke_func = MagicMock(return_value=create_mock_llm_response("<<<<<continue>>>>>$REWRITTEN_QUERY: 云桌面绿屏解决方法"))
+        mock_invoke_func = MagicMock(
+            return_value=create_mock_llm_response("<<<<<continue>>>>>$REWRITTEN_QUERY: 云桌面绿屏解决方法")
+        )
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
@@ -574,7 +576,9 @@ class TestKnowledgeRag:
     def test_query_cls_with_resp_or_rewrite_finish(self, mock_invoke_decorator, mock_dispatch):
         """测试 query_cls_with_resp_or_rewrite 方法 - 返回 finish"""
         mock_llm = MagicMock()
-        mock_invoke_func = MagicMock(return_value=create_mock_llm_response("<<<<<finish>>>>>$RESPONSE: 不客气！很高兴能帮到您。"))
+        mock_invoke_func = MagicMock(
+            return_value=create_mock_llm_response("<<<<<finish>>>>>$RESPONSE: 不客气！很高兴能帮到您。")
+        )
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)

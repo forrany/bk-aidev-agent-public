@@ -172,6 +172,7 @@ class NoSystemInThinkingMiddleware:
 
         next()
 
+
 class ImageRenderingMiddleware:
     """Append image rendering atom to system prompt when needed."""
 

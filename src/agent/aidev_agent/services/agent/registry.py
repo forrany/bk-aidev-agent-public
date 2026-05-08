@@ -38,6 +38,7 @@ class ChatBuildExtras:
     agent_cls: Optional["CommonAgentProtocol"] = None
     callbacks: list[Any] = field(default_factory=list)
     auth_headers: Optional[dict[str, str]] = None
+    default_headers: Optional[dict[str, str]] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     checkpointer: Optional["BaseCheckpointSaver"] = None
@@ -57,6 +58,7 @@ class FlowBuildExtras:
     flow_start_params: dict = field(default_factory=dict)
     poll_interval: Optional[float] = None
     poll_timeout: Optional[float] = None
+    resume_from_node: Optional[str] = None
 
 
 @dataclass

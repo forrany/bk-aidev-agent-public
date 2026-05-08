@@ -53,6 +53,7 @@ class AgentInstanceFactory:
         agent_cls: CommonAgentProtocol | None = None,
         callbacks: List[Any] | None = None,
         auth_headers: dict[str, str] | None = None,
+        default_headers: dict[str, str] | None = None,
         temperature: float = None,
         max_tokens: int = None,
         switch_agent_by_scene: bool = False,
@@ -99,6 +100,7 @@ class AgentInstanceFactory:
         self.agent_cls = agent_cls
         self.callbacks = [each for each in callbacks if each] if callbacks else []
         self.auth_headers = auth_headers or None
+        self.default_headers = default_headers or None
         self.temperature = temperature or None
         self.max_tokens = max_tokens or None
         self.switch_agent_by_scene = switch_agent_by_scene
@@ -117,6 +119,8 @@ class AgentInstanceFactory:
         session_context_data: Optional[List[dict]] = None,
         agent_cls: CommonAgentProtocol | None = None,
         callbacks: List[Any] | None = None,
+        auth_headers: dict[str, str] | None = None,
+        default_headers: dict[str, str] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = settings.MAX_TOKENS,
         switch_agent_by_scene: bool = False,
@@ -162,6 +166,8 @@ class AgentInstanceFactory:
             session_code=session_code,
             agent_cls=agent_cls,
             callbacks=callbacks,
+            auth_headers=auth_headers,
+            default_headers=default_headers,
             temperature=temperature,
             max_tokens=max_tokens,
             switch_agent_by_scene=switch_agent_by_scene,
@@ -345,6 +351,7 @@ class AgentInstanceFactory:
                 agent_cls=self.agent_cls if self.agent_cls is not None else common_agent_factory.get(),
                 callbacks=list(self.callbacks),
                 auth_headers=self.auth_headers,
+                default_headers=self.default_headers,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 checkpointer=self.checkpointer,
@@ -357,6 +364,7 @@ class AgentInstanceFactory:
                 flow_start_params=remaining_extra.pop("flow_start_params", None) or {},
                 poll_interval=remaining_extra.pop("poll_interval", None),
                 poll_timeout=remaining_extra.pop("poll_timeout", None),
+                resume_from_node=remaining_extra.pop("resume_from_node", None),
             )
 
         return AgentBuildContext(

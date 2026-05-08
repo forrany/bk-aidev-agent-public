@@ -4,11 +4,11 @@ AG-UI 事件工具模块
 提供统一的事件发送方法和常量定义
 """
 
+import contextlib
 from typing import Callable, Literal
 
 from ag_ui.core import EventType, RunFinishedEvent
 from ag_ui.encoder import EventEncoder
-
 
 # Run ID 常量定义
 RunIdType = Literal["cancelled", "stopped"]
@@ -74,12 +74,9 @@ def emit_run_finished_event(
         run_id=run_id,
     )
 
-    # 如果提供了事件处理器，调用它分发事件
+    # 如果提供了事件处理器，调用它分发事件（事件处理器的异常不应影响流式响应，由调用方决定是否记录日志）
     if event_handler:
-        try:
+        with contextlib.suppress(Exception):
             event_handler(finished_event)
-        except Exception:
-            # 事件处理器的异常不应影响流式响应，由调用方决定是否记录日志
-            pass
 
     return encoder.encode(finished_event)

@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _NOT_READY_MSG = "AGENT_SANDBOX_SERVICE_NOT_READY"
+_NOT_READY_MAX_RETRIES = 5
+_NOT_READY_SLEEP_SECONDS = 2
 
 
 class PaasSandboxError(Exception):
@@ -186,6 +188,10 @@ class PaasSandboxBackend:
 
     Args:
         app_code: 应用编码，用于 API 鉴权和 URL 路径拼接，可选（默认 ``""``）。
+        app_secret: 应用密钥，与 app_code 配合用于 API 鉴权，可选（默认 ``""``）。
+            当 app_code 和 app_secret 同时提供时，优先使用显式凭证创建 Client，
+            而非依赖 Django settings 全局配置。这在等平台进程中尤为重要——
+            Django settings 的 BK_APP_CODE 是平台的凭证，而非 Agent 应用的凭证。
         bk_username: 蓝鲸用户名，用于 ``X-Bkapi-Authorization`` 请求头，可选（默认 ``""``）。
         access_token: 访问令牌，用于 ``X-Bkapi-Authorization`` 请求头，可选（默认 ``""``）。
         snapshot: 沙箱基础镜像快照名，必填。
@@ -201,6 +207,7 @@ class PaasSandboxBackend:
         self,
         *,
         app_code: str = "",
+        app_secret: str = "",
         bk_username: str = "",
         access_token: str = "",
         snapshot: str,
@@ -212,6 +219,8 @@ class PaasSandboxBackend:
 
         Args:
             app_code: 应用编码，可选（默认 ``""``）。
+            app_secret: 应用密钥，可选（默认 ``""``）。
+                同时提供 app_code 和 app_secret 时，使用显式凭证创建 Client。
             bk_username: 蓝鲸用户名，可选（默认 ``""``）。
             access_token: 访问令牌，可选（默认 ``""``）。
             snapshot: 沙箱基础镜像快照名，必填。
@@ -222,9 +231,27 @@ class PaasSandboxBackend:
 
         # 认证属性
         self._app_code = app_code
+        self._app_secret = app_secret
         self._bk_username = bk_username
         self._access_token = access_token
-        self.client = BkPaaSSandboxApi.get_client_by_username(bk_username)
+        logger.info(
+            f"[credential] PaasSandboxBackend.__init__: "
+            f"app_code={app_code!r}, has_app_secret={bool(app_secret)}, "
+            f"bk_username={bk_username!r}, has_access_token={bool(access_token)}, "
+            f"will_use_explicit_credential={bool(app_code and app_secret)}"
+        )
+        # 优先使用显式凭证（app_code + app_secret）创建 Client，
+        # 避免平台进程中 Django settings 全局凭证与 Agent app_code 不匹配 即可能会使用到平台的凭证
+        if app_code and app_secret:
+            self.client = BkPaaSSandboxApi.get_client(app_code=app_code, app_secret=app_secret)
+        else:
+            logger.warning(
+                f"[credential] PaasSandboxBackend.__init__: "
+                f"fallback to get_client_by_username('{bk_username}'), "
+                f"this may use Django settings credential (bkaidev) instead of agent app_code!"
+            )
+            self.client = BkPaaSSandboxApi.get_client_by_username(bk_username)
+        self.client.update_bkapi_authorization(access_token=access_token or None, bk_username=bk_username or "")
         # 沙箱属性
         self._sandbox_id: str | None = sandbox_id
         self._snapshot = snapshot
@@ -462,7 +489,6 @@ class PaasSandboxBackend:
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """读取文件内容（带行号）。"""
 
-        file_path = self._resolve_path(file_path)
         qfile = shlex.quote(file_path)
 
         # 1) 存在性检查
@@ -665,6 +691,12 @@ class PaasSandboxBackend:
         """在沙箱中执行 shell 命令。"""
 
         res: ExecResult = self._run(["bash", "-c", command], timeout=int(timeout))
+        logger.info(
+            f"[credential] PaasSandboxBackend.execute: "
+            f"app_code={self._app_code!r}, has_access_token={bool(self._access_token)}, "
+            f"bk_username={self._bk_username!r}, command={command[:80]!r}"
+        )
+        res = self._run(["/bin/sh", "-c", command], timeout=int(timeout))
 
         output = res.stdout
         if res.stderr:

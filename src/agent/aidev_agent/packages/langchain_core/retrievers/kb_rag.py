@@ -27,7 +27,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from typing_extensions import NotRequired
 
-from aidev_agent.enums import Decision, FineGrainedScoreType, IndependentQueryMode, IntentStatus
+from aidev_agent.enums import Decision, FineGrainedScoreType, IndependentQueryMode
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.utils import deduplicate_knowledge_chunks, is_structured_data
@@ -190,7 +190,7 @@ class KnowledgeRag:
             return None
         else:
             return resp_content
-        
+
     @timeit(message="意图切换检测")
     @retry(max_retries=5, max_seconds=3600)
     def latest_query_classification(self, agent_options, chat_history, query, llm, **kwargs):
@@ -329,7 +329,7 @@ class KnowledgeRag:
             return {
                 "query_cls": "new",
             }  # 其余所有边缘情况默认直接重新开始
-        
+
     def query_cls_pipeline(self, chat_history, query, llm, agent_options, **kwargs):
         if agent_options.knowledge_query_options.merge_query_cls_with_resp_or_rewrite:
             if chat_history:
@@ -381,6 +381,7 @@ class KnowledgeRag:
                 independent_query = query
 
         return independent_query
+
     # ====================================================================================================
     # RETRIEVAL 阶段方法
     # 使用具体的 Retrival 类来实现
@@ -738,7 +739,9 @@ class KnowledgeRag:
         }
         return state
 
-    def retrieve(self, query: str, agent_options: AgentOptions, chat_history: Optional[list] = None, **kwargs) -> KnowledgeRagRetrieveResult:
+    def retrieve(
+        self, query: str, agent_options: AgentOptions, chat_history: Optional[list] = None, **kwargs
+    ) -> KnowledgeRagRetrieveResult:
         # 基本校验
         dispatch_rag_event_chunk("开始召回知识")
         if not any(

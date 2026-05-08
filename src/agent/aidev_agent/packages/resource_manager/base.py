@@ -103,6 +103,11 @@ class BaseResourceManager(abc.ABC):
         _username = username or self.username
         if not access_token and _username:
             access_token = _get_access_token_by_user(_username) or ""
+            if not access_token:
+                _logger.warning(
+                    f"[credential] resolve_access_token: empty result, "
+                    f"app_code={self.app_code}, username={_username}, rm_type={type(self).__name__}"
+                )
         return access_token
 
     # ---------- 资源方法 (7) ----------
@@ -214,7 +219,14 @@ class BaseResourceManager(abc.ABC):
             return make_structured_tool(tool)
         return make_structured_tool(Tool.model_validate(result["data"]))
 
-    def construct_mcp(self, mcp_config: dict, agent_options: Any = None, username: str = None, **kwargs) -> Any:
+    def construct_mcp(
+        self,
+        mcp_config: dict,
+        agent_options: Any = None,
+        username: str = None,
+        executor_info: dict | None = None,
+        **kwargs,
+    ) -> Any:
         """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
 
         使用 ``langchain_mcp_adapters`` 连接 MCP 服务器并获取工具列表。
@@ -223,6 +235,8 @@ class BaseResourceManager(abc.ABC):
         :param mcp_config: MCP 客户端配置字典，格式为 ``{"server_name": {"url": ..., "transport": ...}}``
         :param agent_options: Agent 选项，用于异常处理
         :param username: 用户名，用于 BLUEAPPS 认证
+        :param executor_info: 执行用户信息（含 app_code/app_secret/access_token），
+            优先用于 MCP 凭证注入，与 skill sandbox 保持一致
         :return: McpToolsResult 对象，包含 tools 和 fetch_failures
         """
         new_server_config = deepcopy(mcp_config)
@@ -234,25 +248,41 @@ class BaseResourceManager(abc.ABC):
             if selected_tools:
                 selected_tools_map[server_name] = selected_tools
 
-        # 处理凭证
+        # 处理凭证：优先使用 executor_info 中的凭证（与 skill sandbox 一致），回退到 resource_manager
+        _blueapps_servers = []
+        _non_blueapps_servers = []
         for _server_config in new_server_config.values():
             if "mcp_type" in _server_config:
                 _server_config.pop("mcp_type")
             if _server_config.pop("credential_type", "") == CredentialType.BLUEAPPS.value:
-                access_token = self.resolve_access_token(username)
+                _blueapps_servers.append(_server_config)
+                # 凭证来源：executor_info > resource_manager
+                app_code = (executor_info or {}).get("app_code") or self.app_code
+                app_secret = (executor_info or {}).get("app_secret") or self.app_secret
+                access_token = (executor_info or {}).get("access_token") or self.resolve_access_token(username)
                 # 根据是否拿到 access_token 决定认证方式
                 if access_token:
                     auth_info = {"access_token": access_token}
                 elif username:
                     auth_info = {
-                        "bk_app_code": self.app_code,
-                        "bk_app_secret": self.app_secret,
+                        "bk_app_code": app_code,
+                        "bk_app_secret": app_secret,
                         "bk_username": username,
                     }
                 else:
-                    auth_info = {"bk_app_code": self.app_code, "bk_app_secret": self.app_secret}
+                    auth_info = {"bk_app_code": app_code, "bk_app_secret": app_secret}
                 _server_config["headers"] = {"X-Bkapi-Authorization": json.dumps(auth_info)}
                 _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
+            else:
+                _non_blueapps_servers.append(_server_config)
+
+        _logger.info(
+            f"[credential] construct_mcp: "
+            f"app_code={self.app_code}, rm_type={type(self).__name__}, "
+            f"blueapps={len(_blueapps_servers)}, non_blueapps={len(_non_blueapps_servers)}, "
+            f"from_executor_info={bool(executor_info and executor_info.get('app_code'))}, "
+            f"username={username or ''}"
+        )
 
         # 重试2次；返回 (tools, failure | None)，失败时返回 McpToolFetchFailure
         total_servers = len(new_server_config)

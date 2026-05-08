@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from bkapi_client_core.base import Operation
 from bkapi_client_core.client import BaseClient
+from bkapi_client_core.django_helper import _get_client_by_settings
 from bkapi_client_core.django_helper import get_client_by_request as _get_client_by_request
 from bkapi_client_core.django_helper import get_client_by_username as _get_client_by_username
 from bkapi_client_core.property import bind_property
@@ -51,9 +52,31 @@ class BkPaaSSandboxApi:
     _api_name = "paasv3" if settings.RUN_VER == "ieod" else "bkpaas3"
 
     @classmethod
+    def get_client(cls, app_code=None, app_secret=None, **kwargs):
+        """使用显式 app_code/app_secret 创建 Client（应用态认证）。
+
+        当运行在 gongfeng 等平台进程时，Django settings 的 BK_APP_CODE 是平台的凭证，
+        而非 Agent 应用的凭证。通过此方法可显式传入正确的 app_code/app_secret，
+        避免 PaaS Sandbox API 因 bk_app_code 与 URL 路径不匹配而拒绝请求。
+        """
+        return _get_client_by_settings(
+            Client,
+            endpoint=get_endpoint(cls._api_name, stage="prod"),
+            bk_app_code=app_code,
+            bk_app_secret=app_secret,
+            **kwargs,
+        )
+
+    @classmethod
     def get_client_by_request(cls, request):
         return _partial(Client, _get_client_by_request)(request, endpoint=get_endpoint(cls._api_name, stage="prod"))
 
     @classmethod
-    def get_client_by_username(cls, username):
-        return _partial(Client, _get_client_by_username)(username, endpoint=get_endpoint(cls._api_name, stage="prod"))
+    def get_client_by_username(cls, username, app_code=None, app_secret=None, **kwargs):
+        return _partial(Client, _get_client_by_username)(
+            username,
+            endpoint=get_endpoint(cls._api_name, stage="prod"),
+            bk_app_code=app_code,
+            bk_app_secret=app_secret,
+            **kwargs,
+        )

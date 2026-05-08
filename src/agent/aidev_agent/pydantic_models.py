@@ -369,6 +369,13 @@ class AgentExecutorKwargs(BaseModel):
     # 执行用户信息
     executor_info: Optional[dict] = Field(default=None, description="执行用户信息")
 
+    # 资源管理器(resource_manager()是全局单例 会使用平台的app_code，这里使用per-request即每次chat_completion请求创建）
+    resource_manager: Optional[Any] = Field(
+        default=None,
+        description="per-request 资源管理器实例（ResourceManagerProtocol）；"
+        "缺省时 ReActAgentBuilder 回退到全局 resource_manager() 工厂。",
+    )
+
 
 class AgentConfig(BaseModel):
     """智能体配置"""

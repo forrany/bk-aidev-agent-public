@@ -121,6 +121,7 @@ class FlowAgentCompletionAgent(BaseModel):
         self.poll_timeout = (
             flow.poll_timeout if flow.poll_timeout is not None else float(agent_settings.FLOW_AGENT_POLL_TIMEOUT)
         )
+        self.resume_from_node = flow.resume_from_node
         self.username = ctx.username
         if ctx.event_handler is not None:
             self.event_handler = ctx.event_handler
@@ -214,7 +215,9 @@ class FlowAgentCompletionAgent(BaseModel):
                 yield encoder.encode(resumed_event)
                 self._task_started = True
                 logger.info(
-                    "[FLOW_AGENT] Node resumed: task_id=%s, action=%s", task_id, self.resume_from_node,
+                    "[FLOW_AGENT] Node resumed: task_id=%s, action=%s",
+                    task_id,
+                    self.resume_from_node,
                 )
             else:
                 self._task_started = True
@@ -316,7 +319,7 @@ class FlowAgentCompletionAgent(BaseModel):
 
             result_event = self._make_custom_event(
                 name=CustomMessageType.FLOW_AGENT_RESULT.value,
-                value=task_info,
+                value=[task_info],
             )
             self._dispatch_event(result_event)
             yield encoder.encode(result_event)
@@ -470,7 +473,7 @@ class FlowAgentCompletionAgent(BaseModel):
 
         revoke_event = self._make_custom_event(
             name=CustomMessageType.FLOW_AGENT_RESULT.value,
-            value=revoke_info,
+            value=[revoke_info],
         )
         self._dispatch_event(revoke_event)
         yield encoder.encode(revoke_event)

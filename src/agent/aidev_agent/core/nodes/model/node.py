@@ -43,8 +43,8 @@ from .prompt_middleware import (
     BeijingTimeMiddleware,
     DecisionSystemMiddleware,
     HistorySystemPromptMiddleware,
-    NoSystemInThinkingMiddleware,
     ImageRenderingMiddleware,
+    NoSystemInThinkingMiddleware,
     RoleDefinitionMiddleware,
     StructuredChatFormatMiddleware,
 )
@@ -343,7 +343,7 @@ def build_model_node(
     )
     # 工具压缩后重新渲染agent_scratchpad
     context_assembly.add_middleware(
-        "variable", 
+        "variable",
         SpecialVariablesPostMiddleware(use_structured_response=use_structured_response),
     )
     context_assembly.add_middleware(

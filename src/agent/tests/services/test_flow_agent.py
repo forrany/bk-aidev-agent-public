@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 from ag_ui.core import EventType
 from aidev_agent.core.ag_ui.types import CustomMessageType
-from aidev_agent.packages.resource_manager.registry import ResourceManagerProtocol
 from aidev_agent.services.agent import FlowAgentCompletionAgent
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 
@@ -75,12 +74,23 @@ class MockResourceManager:
     def retrieve_skill(self, skill_id: str, version: str, **kwargs) -> dict: ...
     def construct_tool(self, tool_code: str, **kwargs): ...
     def knowledge_query(self, data: dict, **kwargs) -> dict: ...
-    def retry_flow_agent_node(self, session_code: str, node_id: str, **kwargs) -> dict: return {}
-    def skip_flow_agent_node(self, session_code: str, node_id: str, **kwargs) -> dict: return {}
-    def stop_flow_agent_task(self, session_code: str, **kwargs) -> dict: return {}
-    def pause_flow_agent_task(self, session_code: str, **kwargs) -> dict: return {}
-    def resume_flow_agent_task(self, session_code: str, **kwargs) -> dict: return {}
-    def get_flow_agent_task_node_info(self, task_id: str, node_id: str, **kwargs) -> dict: return {}
+    def retry_flow_agent_node(self, session_code: str, node_id: str, **kwargs) -> dict:
+        return {}
+
+    def skip_flow_agent_node(self, session_code: str, node_id: str, **kwargs) -> dict:
+        return {}
+
+    def stop_flow_agent_task(self, session_code: str, **kwargs) -> dict:
+        return {}
+
+    def pause_flow_agent_task(self, session_code: str, **kwargs) -> dict:
+        return {}
+
+    def resume_flow_agent_task(self, session_code: str, **kwargs) -> dict:
+        return {}
+
+    def get_flow_agent_task_node_info(self, task_id: str, node_id: str, **kwargs) -> dict:
+        return {}
 
 
 class TestFlowAgentMainFlow:
@@ -97,7 +107,7 @@ class TestFlowAgentMainFlow:
                 {"task_state": "RUNNING", "nodes": {"n1": {"status": "running"}}},
                 {"task_state": "RUNNING", "nodes": {"n1": {"status": "completed"}, "n2": {"status": "running"}}},
                 {"task_state": "FINISHED", "task_outputs": [{"key": "output", "value": "ok"}]},
-            ]
+            ],
         )
 
         agent = FlowAgentCompletionAgent(
@@ -139,7 +149,7 @@ class TestFlowAgentMainFlow:
             task_info_sequence=[
                 {"task_state": "RUNNING", "nodes": {}},
                 {"task_state": "FAILED", "task_outputs": []},
-            ]
+            ],
         )
 
         agent = FlowAgentCompletionAgent(
@@ -252,7 +262,7 @@ class TestFlowAgentStop:
 
         # 最后一个 flow_agent_result 应是 revoke 状态（手动构造）
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
-        assert result_events[-1]["value"]["task_state"] == "REVOKED"
+        assert result_events[-1]["value"][0]["task_state"] == "REVOKED"
 
         # 任务已启动后取消 → RUN_FINISHED(runId="cancelled")
         finished_events = _find_events_by_type(events, EventType.RUN_FINISHED)
@@ -304,17 +314,19 @@ class TestFlowAgentStop:
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
         # 最后一个 flow_agent_result 应该是 revoke 状态
         revoke_event = result_events[-1]
-        assert revoke_event["value"]["task_state"] == "REVOKED"
+        # value 是 list，取第一个元素
+        revoke_value = revoke_event["value"][0]
+        assert revoke_value["task_state"] == "REVOKED"
 
-        # RUNNING 节点手动改为 REVOKED
-        assert revoke_event["value"]["nodes"]["n2"]["state"] == "REVOKED"
+        # nodes 是 dict，RUNNING 节点手动改为 REVOKED
+        assert revoke_value["nodes"]["n2"]["state"] == "REVOKED"
         # FINISHED 节点保持不变
-        assert revoke_event["value"]["nodes"]["n1"]["state"] == "FINISHED"
+        assert revoke_value["nodes"]["n1"]["state"] == "FINISHED"
         # PENDING 节点保持不变
-        assert revoke_event["value"]["nodes"]["n3"]["state"] == "PENDING"
+        assert revoke_value["nodes"]["n3"]["state"] == "PENDING"
 
         # statistics 更新
-        stats = revoke_event["value"]["statistics"]
+        stats = revoke_value["statistics"]
         assert stats["total"] == 3
         assert stats["state_counts"]["REVOKED"] == 1
         assert stats["state_counts"]["FINISHED"] == 1
@@ -588,12 +600,13 @@ class TestFlowAgentRetrySkip:
 
         # 最后一个 flow_agent_result 应是 REVOKED
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
-        assert result_events[-1]["value"]["task_state"] == "REVOKED"
+        revoke_value = result_events[-1]["value"][0]
+        assert revoke_value["task_state"] == "REVOKED"
 
         # RUNNING 节点被改为 REVOKED
-        assert result_events[-1]["value"]["nodes"]["n1"]["state"] == "REVOKED"
+        assert revoke_value["nodes"]["n1"]["state"] == "REVOKED"
         # FINISHED 节点保持不变
-        assert result_events[-1]["value"]["nodes"]["n2"]["state"] == "FINISHED"
+        assert revoke_value["nodes"]["n2"]["state"] == "FINISHED"
 
         # RUN_FINISHED(runId="cancelled")
         finished_events = _find_events_by_type(events, EventType.RUN_FINISHED)

@@ -67,6 +67,9 @@ class ChatCompletionAgent(BaseModel):
 
     event_handler: Callable[[BaseEvent], None] | None = None
     mcp_fetch_failures: list[dict] = Field(default_factory=list, description="MCP 工具拉取失败记录，用于流式事件")
+    resource_manager: Any = Field(
+        default=None, exclude=True, description="per-request 资源管理器（含正确 app_code / access_token）"
+    )
 
     IMAGE_FILE_PATTERN: ClassVar[re.Pattern] = re.compile(r"^\!\[.*\]\((http[^)]+/([^/]+?)\))")
     TOOL_EXECUTION_INTERVAL: ClassVar[int] = 10
@@ -95,6 +98,9 @@ class ChatCompletionAgent(BaseModel):
         self.chat_model = builder.build_chat_model()
         self.non_thinking_llm = builder.build_non_thinking_llm()
         self.skills = builder.build_skills()
+        # 先构建 executor_info，供 build_tools / construct_mcp 使用同一凭证源
+        self.executor_info = builder.build_executor_info()
+        self.resource_manager = ctx.resource_manager
         self.tools = builder.build_tools()
         self.mcp_fetch_failures = builder.mcp_fetch_failures
         self.knowledge_bases = builder.build_knowledge_bases()
@@ -102,7 +108,6 @@ class ChatCompletionAgent(BaseModel):
         self.chat_history = builder.build_chat_history(ctx.session_context_data)
         self.agent_options = builder.build_agent_options()
         self.agent_prompt = builder.build_agent_prompt()
-        self.executor_info = builder.build_executor_info()
         self.checkpointer = builder.build_checkpointer()
         self.role_prompt = builder.get_role_prompt()
         self.callbacks = chat.callbacks
@@ -266,9 +271,6 @@ class ChatCompletionAgent(BaseModel):
             knowledge_llm=self.chat_model
             if self.non_thinking_llm is None
             else ChatModel.get_setup_instance(model=self.non_thinking_llm),
-            non_thinking_llm=self.chat_model
-            if self.non_thinking_llm is None
-            else ChatModel.get_setup_instance(model=self.non_thinking_llm),
             extra_tools=self.tools,
             chat_history=messages[:-1],
             tool_execution_interval=self.TOOL_EXECUTION_INTERVAL,
@@ -282,6 +284,7 @@ class ChatCompletionAgent(BaseModel):
             executor_info=self.executor_info,
             execute_kwargs=execute_kwargs,
             checkpointer=self.checkpointer if self.checkpointer else MemorySaver(),
+            resource_manager=self.resource_manager,
         )
 
     def _chat_history_to_langchain_messages(self, chat_history: list[ChatPrompt]) -> list[BaseMessage]:
@@ -390,6 +393,7 @@ class ChatAgentBuilder:
         self.ctx = ctx
         self._specific_resources: list[dict] = []
         self._mcp_fetch_failures: list[dict] = []
+        self._executor_info: dict | None = None
         # 装配前先从最后一条 user 消息提取 specific_resources，供 build_tools / build_knowledge_bases 过滤
         self._handle_last_human_message(ctx.session_context_data)
 
@@ -423,6 +427,9 @@ class ChatAgentBuilder:
 
         if chat.auth_headers:
             kwargs["auth_headers"] = chat.auth_headers
+
+        if chat.default_headers:
+            kwargs["default_headers"] = chat.default_headers
 
         return ChatModel.get_setup_instance(**kwargs)
 
@@ -491,7 +498,10 @@ class ChatAgentBuilder:
         else:
             mcp_server_config = config.mcp_server_config
         mcp_result = self.ctx.resource_manager.construct_mcp(
-            mcp_config=mcp_server_config, agent_options=config.agent_options, username=self.ctx.username
+            mcp_config=mcp_server_config,
+            agent_options=config.agent_options,
+            username=self.ctx.username,
+            executor_info=self._executor_info,
         )
         self._mcp_fetch_failures = [f.model_dump() for f in mcp_result.fetch_failures]
         logger.info(f"ChatAgentBuilder: mcp_server_config->[{mcp_server_config}]")
@@ -516,8 +526,26 @@ class ChatAgentBuilder:
         return self.ctx.agent_config.agent_prompt
 
     def build_executor_info(self) -> dict:
-        """构建执行用户信息"""
-        return {"executor": self.ctx.username}
+        """构建执行用户信息，包含 access_token / app_code / app_secret 用于沙箱认证和 MCP 调用"""
+        info = {"executor": self.ctx.username}
+        access_token = self.ctx.resource_manager.resolve_access_token(self.ctx.username)
+        if access_token:
+            info["access_token"] = access_token
+        # 将 resource_manager 的 app_code/app_secret 传入 executor_info，
+        # 用于 PaaS Sandbox API 的应用态认证（平台测试页进程是平台凭证）
+        if self.ctx.resource_manager.app_code:
+            info["app_code"] = self.ctx.resource_manager.app_code
+        if self.ctx.resource_manager.app_secret:
+            info["app_secret"] = self.ctx.resource_manager.app_secret
+        logger.info(
+            f"[credential] build_executor_info: username={self.ctx.username}, "
+            f"access_token={'***' if access_token else 'empty'}, "
+            f"app_code={info.get('app_code', 'empty')}, "
+            f"has_app_secret={bool(info.get('app_secret'))}, "
+            f"rm_type={type(self.ctx.resource_manager).__name__}"
+        )
+        self._executor_info = info
+        return info
 
     def build_checkpointer(self) -> BaseCheckpointSaver:
         """获取 Checkpointer，必须注入，否则抛出异常"""

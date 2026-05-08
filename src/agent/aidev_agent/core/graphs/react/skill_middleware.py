@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
@@ -9,7 +10,8 @@ from aidev_agent.config import settings
 from aidev_agent.core.nodes.model.pydantic_models import NextFunction, ProcessorContext
 from aidev_agent.core.tools.skill.registry import SkillRegistry
 from aidev_agent.core.tools.skill.types import SkillOptions
-from aidev_agent.packages.resource_manager.registry import resource_manager
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_local_params(skill: SkillOptions, config: dict) -> dict:
@@ -40,32 +42,56 @@ def _extract_paas_params(skill: SkillOptions, config: dict) -> dict:
 
     PaasSandboxBackend.__init__ 签名（全部 keyword-only）：
         app_code: str = "",
+        app_secret: str = "",
         access_token: str = "",
         snapshot: str,
         snapshot_entrypoint: list[str],
         env_vars: dict,
 
     参数来源优先级：
-        - access_token: resource_manager().resolve_access_token(username) > 环境变量 SANDBOX_BP_ACCESS_TOKEN
+        - app_code / app_secret: config 传入（gongfeng 端 executor_info） > settings
+        - access_token: config.get("access_token") > settings fallback > 环境变量 SANDBOX_BP_ACCESS_TOKEN
         - snapshot / env_vars: 从 skill metadata 的 bkai_paas_sandbox 字段获取
-        - app_code: 从 settings 获取
 
-    env_vars 构建逻辑已委托给 ``resource_manager().build_skill_env()``。
+    env_vars 中的 ACCESS_TOKEN 直接使用本函数已解析的 access_token，
+    避免调用全局 resource_manager()（app_code=bkaidev）导致凭证不一致。
     """
-    access_token = resource_manager().resolve_access_token(config.get("executor")) or os.getenv(
-        "SANDBOX_BP_ACCESS_TOKEN", ""
+    # 由平台测试页传入app_code/app_secret
+    app_code = config.get("app_code") or settings.APP_CODE
+    app_secret = config.get("app_secret") or settings.SECRET_KEY
+
+    # 优先使用 executor_info 中传入的 access_token（由平台测试页通过 oauth_client 生成），
+    # 其次回退到环境变量 SANDBOX_BP_ACCESS_TOKEN。
+    # 不使用全局 resource_manager().resolve_access_token()，因为全局单例会默认使用平台的 app_code=bkaidev，
+    # 其签发的 token 会导致沙箱内 MCP 调用 403（appCode[bkaidev] 无权限）。
+    _token_from_config = config.get("access_token")
+    _token_from_env = os.getenv("SANDBOX_BP_ACCESS_TOKEN", "") if not _token_from_config else ""
+    access_token = _token_from_config or _token_from_env
+
+    logger.info(
+        f"[credential] _extract_paas_params: "
+        f"app_code={app_code}, "
+        f"token_source={'config' if _token_from_config else 'env' if _token_from_env else 'empty'}, "
+        f"executor={config.get('executor')}"
     )
 
     # 从 skill metadata 中获取 paas sandbox 配置
     paas_sandbox = {}
     if skill:
         paas_sandbox = skill.get("metadata", {}).get("bkai_paas_sandbox", {})
+    env_vars = {}
+    if skill:
+        env_vars = skill.get("metadata", {}).get("bkai_paas_sandbox", {}).get("envs", {})
 
-    # 委托 resource_manager 构建 env_vars（传入 username 作为 fallback）
-    env_vars = resource_manager().build_skill_env(skill_config=skill, username=config.get("executor"))
+    # 特殊规则：如果值是 None，则从环境变量中获取
+    for key, value in env_vars.items():
+        if value is None:
+            env_vars[key] = os.getenv(key, "")
+    env_vars["ACCESS_TOKEN"] = access_token or os.getenv("SANDBOX_BP_ACCESS_TOKEN", "")
 
     return {
-        "app_code": settings.APP_CODE,
+        "app_code": app_code,
+        "app_secret": app_secret,
         "bk_username": config.get("executor"),
         "access_token": access_token,
         "snapshot": paas_sandbox.get("image", ""),
