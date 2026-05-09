@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from importlib.metadata import version as pkg_version
 from logging import getLogger
 from typing import Any, Callable, ClassVar, Generator, List, Optional
 
@@ -169,9 +170,37 @@ class ChatCompletionAgent(BaseModel):
 
     # ---------- 内部方法 ----------
 
+    def _update_aidev_agent_header(self, execute_kwargs: ExecuteKwargs) -> None:
+        """Build complete X-BKAIDEV-Attributes header (agent.info + session) and inject in-place."""
+        agent_info = self.agent_info or {}
+        langgraph_thread_id = execute_kwargs.session_code or self.thread_id
+        attrs = {
+            "agent.info.code": agent_info.get("agent_code") or "",
+            "agent.info.name": agent_info.get("agent_name") or "",
+            "agent.info.service_catalogue": agent_info.get("service_catalogue") or "",
+            "agent.info.sdk_version": pkg_version("aidev_agent"),
+            "agent.session.caller_bk_app_code": execute_kwargs.caller_bk_app_code or "",
+            "agent.session.caller_bk_biz_env": execute_kwargs.caller_bk_biz_env or "",
+            "agent.session.caller_bk_biz_id": str(execute_kwargs.caller_bk_biz_id or ""),
+            "agent.session.caller_executor": execute_kwargs.caller_executor or "",
+            "agent.session.executor": execute_kwargs.executor or "",
+            "agent.session.caller_order_type": execute_kwargs.caller_order_type or "",
+            "agent.session.session_code": execute_kwargs.session_code or "",
+            "agent.session.langgraph_thread_id": langgraph_thread_id,
+        }
+
+        header_value = json.dumps(attrs, ensure_ascii=False)
+        for model in (self.chat_model, self.chat_model_non_thinking):
+            if model is None or not hasattr(model, "default_headers"):
+                continue
+            if model.default_headers is None:
+                model.default_headers = {}
+            model.default_headers["X-BKAIDEV-Attributes"] = header_value
+
     def _execute(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs):
         if not messages:
             raise ValueError("The messages list cannot be empty.")
+        self._update_aidev_agent_header(execute_kwargs)
         agent_e, cfg = self._get_agent(messages, execute_kwargs=execute_kwargs)
         cfg.setdefault("configurable", {})
         cfg["configurable"]["thread_id"] = execute_kwargs.session_code or self.thread_id

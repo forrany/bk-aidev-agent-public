@@ -23,6 +23,16 @@ except ImportError:
     OTelConfig = None
     get_otel_endpoints = None
 
+try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+except ImportError:
+    HTTPXClientInstrumentor = None
+
+try:
+    from opentelemetry.instrumentation.threading import ThreadingInstrumentor
+except ImportError:
+    ThreadingInstrumentor = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,5 +65,16 @@ class AgentConfig(AppConfig):
                 "[aidev_bkplugin] OpenTelemetry extras 未安装，跳过自动 instrument；"
                 "如需启用请安装 aidev-bkplugin[opentelemetry]。"
             )
+        # 注入 httpx (LLM 网关底层 HTTP 客户端) 的 trace 传播
+        # 使 LLM 调用自动携带 traceparent header，网关可加入分布式追踪
+        try:
+            HTTPXClientInstrumentor().instrument()
+        except Exception:  # noqa: BLE001
+            logger.debug("opentelemetry-instrumentation-httpx not available, skipping httpx instrumentation")
+        # 注入跨线程的 trace 传递，因为知识库中 LLM 提交是异步的
+        try:
+            ThreadingInstrumentor().instrument()
+        except Exception:  # noqa: BLE001
+            logger.debug("opentelemetry-instrumentation-threading not available, skipping httpx instrumentation")
 
         return super().ready()

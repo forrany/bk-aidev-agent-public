@@ -28,7 +28,7 @@ from uuid import UUID, uuid4
 
 import orjson
 import pytz
-from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks.base import AsyncCallbackHandler
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
 from opentelemetry import context as context_api
@@ -215,10 +215,13 @@ class BkAidevAgentInjector:
         self.root_span.end()
 
 
-class BkAidevAgentCallbackHandler(BaseCallbackHandler):
+class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
     """
     基于 LangChain 的 Callback 机制实现对于 BkAidevAgent 的相关信息统计
     """
+
+    run_inline = True  # 确保 callback 在当前 context 中直接执行，而非通过 asyncio.gather/create_task
+    # 这样 _safe_attach_context 修改的 ContextVar 对后续 node 执行可见
 
     def __init__(
         self,
@@ -525,7 +528,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
             return f"{parent_span.entity_path}.{parent_span.entity_name}"
 
     @dont_throw
-    def on_chain_start(
+    async def on_chain_start(
         self,
         serialized: Dict[str, Any],
         inputs: Dict[str, Any],
@@ -566,7 +569,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
             self._current_workflow_run_id = run_id
 
     @dont_throw
-    def on_chain_end(
+    async def on_chain_end(
         self,
         outputs: Dict[str, Any],
         *,
@@ -587,7 +590,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         self._end_span(span, run_id)
 
     @dont_throw
-    def on_chain_error(
+    async def on_chain_error(
         self,
         error: Union[Exception, KeyboardInterrupt],
         *,
@@ -633,7 +636,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
             self._current_workflow_run_id = None
 
     @dont_throw
-    def on_chat_model_start(
+    async def on_chat_model_start(
         self,
         serialized: dict[str, Any],
         messages: list[list[BaseMessage]],
@@ -658,7 +661,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         set_chat_request(span, serialized, messages, kwargs, self.spans[run_id])
 
     @dont_throw
-    def on_llm_start(
+    async def on_llm_start(
         self,
         serialized: Dict[str, Any],
         prompts: List[str],
@@ -682,7 +685,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         set_llm_request(span, serialized, prompts, kwargs, self.spans[run_id])
 
     @dont_throw
-    def on_llm_end(
+    async def on_llm_end(
         self,
         response: LLMResult,
         *,
@@ -710,7 +713,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         self._end_span(span, run_id)
 
     @dont_throw
-    def on_llm_error(
+    async def on_llm_error(
         self,
         error: Union[Exception, KeyboardInterrupt],
         *,
@@ -722,7 +725,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         self._handle_error(error, run_id, parent_run_id, **kwargs)
 
     @dont_throw
-    def on_tool_start(
+    async def on_tool_start(
         self,
         serialized: Dict[str, Any],
         input_str: str,
@@ -752,7 +755,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         )
 
     @dont_throw
-    def on_tool_end(
+    async def on_tool_end(
         self,
         output: str,
         *,
@@ -770,7 +773,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         self._end_span(span, run_id)
 
     @dont_throw
-    def on_tool_error(
+    async def on_tool_error(
         self,
         error: Union[Exception, KeyboardInterrupt],
         *,
@@ -788,7 +791,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         self._handle_error(error, run_id, parent_run_id, **kwargs)
 
     @dont_throw
-    def on_agent_error(
+    async def on_agent_error(
         self,
         error: Exception,
         *,
@@ -800,7 +803,7 @@ class BkAidevAgentCallbackHandler(BaseCallbackHandler):
         self._handle_error(error, run_id, parent_run_id, **kwargs)
 
     @dont_throw
-    def on_retriever_error(
+    async def on_retriever_error(
         self,
         error: Exception,
         *,

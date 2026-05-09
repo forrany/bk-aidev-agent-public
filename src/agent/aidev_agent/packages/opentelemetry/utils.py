@@ -16,6 +16,7 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -60,6 +61,7 @@ class CallbackFilteredJSONEncoder(json.JSONEncoder):
 def dont_throw(func):
     """
     A decorator that wraps the passed in function and logs exceptions instead of throwing them.
+    Supports both sync and async functions.
 
     @param func: The function to wrap
     @return: The wrapper function
@@ -67,17 +69,32 @@ def dont_throw(func):
     # Obtain a logger specific to the function's module
     logger = logging.getLogger(func.__module__)
 
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception:
-            logger.debug(
-                "OpenLLMetry failed to trace in %s, error: %s",
-                func.__name__,
-                traceback.format_exc(),
-            )
+    if asyncio.iscoroutinefunction(func):
 
-    return wrapper
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except Exception:
+                logger.debug(
+                    "OpenLLMetry failed to trace in %s, error: %s",
+                    func.__name__,
+                    traceback.format_exc(),
+                )
+
+        return async_wrapper
+    else:
+
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception:
+                logger.debug(
+                    "OpenLLMetry failed to trace in %s, error: %s",
+                    func.__name__,
+                    traceback.format_exc(),
+                )
+
+        return wrapper
 
 
 def _safe_attach_context(span: Span):
