@@ -12,7 +12,7 @@ from logging import getLogger
 from typing import TYPE_CHECKING
 
 from aidev_agent.core.ag_ui.types import CustomMessageType
-from aidev_bkplugin.services.agent import build_session_detail_url
+from aidev_bkplugin.services.agent_helpers import AgentHelper
 
 from .context import LlmChunkMsg
 
@@ -212,7 +212,7 @@ def _on_flow_end(
 
     # 拼接小鲸跳转链接
     if session_code:
-        detail_url = build_session_detail_url(session_code)
+        detail_url = AgentHelper.build_session_detail_url(session_code)
         if detail_url:
             llm_chunk.content += f"\n\n[查看详情]({detail_url})"
 

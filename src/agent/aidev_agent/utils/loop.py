@@ -32,40 +32,44 @@ def get_event_loop():
     Returns:
         asyncio.AbstractEventLoop: The current event loop for this thread.
     """
+    # Try to get the running loop first — it takes priority over the cached one
+    try:
+        running_loop = asyncio.get_running_loop()
+        if hasattr(_thread_local, "loop") and _thread_local.loop is not running_loop:
+            # Cached loop is stale (e.g. pytest created a new loop), update cache
+            _thread_local.loop = running_loop
+        return running_loop
+    except RuntimeError:
+        pass
+
     # Check if we have a cached loop for this thread
     if hasattr(_thread_local, "loop") and _thread_local.loop is not None and not _thread_local.loop.is_closed():
         return _thread_local.loop
 
+    # No running loop, try to get the event loop for this thread
     try:
-        # Try to get the running loop first
-        running_loop = asyncio.get_running_loop()
-        _thread_local.loop = running_loop
-        return running_loop
-    except RuntimeError:
-        # No running loop, try to get the event loop for this thread
-        try:
-            current_loop = asyncio.get_event_loop()
-            # Check if this loop is running
-            if current_loop.is_running():
-                # If the loop is running, we can't use run_until_complete on it
-                # Create a new loop for this thread
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                _thread_local.loop = new_loop
-                # Register cleanup function for this thread's loop
-                atexit.register(_cleanup_thread_loop, new_loop)
-                return new_loop
-            else:
-                _thread_local.loop = current_loop
-                return current_loop
-        except RuntimeError:
-            # No event loop exists, create a new one
+        current_loop = asyncio.get_event_loop()
+        # Check if this loop is running
+        if current_loop.is_running():
+            # If the loop is running, we can't use run_until_complete on it
+            # Create a new loop for this thread
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             _thread_local.loop = new_loop
             # Register cleanup function for this thread's loop
             atexit.register(_cleanup_thread_loop, new_loop)
             return new_loop
+        else:
+            _thread_local.loop = current_loop
+            return current_loop
+    except RuntimeError:
+        # No event loop exists, create a new one
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        _thread_local.loop = new_loop
+        # Register cleanup function for this thread's loop
+        atexit.register(_cleanup_thread_loop, new_loop)
+        return new_loop
 
 
 def close_thread_loop() -> None:
@@ -89,15 +93,17 @@ def close_thread_loop() -> None:
 
 
 def run_coro_sync(coro, timeout=None):
-    """Run a coroutine synchronously and release worker-thread loops afterward."""
+    """Run a coroutine synchronously in the current thread's event loop.
+
+    Note: The event loop is intentionally kept open after execution, so that
+    long-lived async clients (e.g. httpx.AsyncClient) can safely reuse their
+    connections across multiple calls on the same thread. Cleanup is handled by
+    atexit registration and by async_to_sync_generator's finally block.
+    """
     loop = get_event_loop()
-    try:
-        if timeout is not None:
-            coro = asyncio.wait_for(coro, timeout=timeout)
-        return loop.run_until_complete(coro)
-    finally:
-        if threading.current_thread() is not threading.main_thread():
-            close_thread_loop()
+    if timeout is not None:
+        coro = asyncio.wait_for(coro, timeout=timeout)
+    return loop.run_until_complete(coro)
 
 
 def _cleanup_thread_loop(loop):

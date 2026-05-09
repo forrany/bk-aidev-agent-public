@@ -36,12 +36,14 @@ from .basic_middleware import (
     BaseVariablesMiddleware,
     DeepSeekR1VariablesMiddleware,
     SpecialVariablesMiddleware,
+    SpecialVariablesPostMiddleware,
 )
 from .context_assembly import ContextAssembly
 from .prompt_middleware import (
     BeijingTimeMiddleware,
     DecisionSystemMiddleware,
     HistorySystemPromptMiddleware,
+    ImageRenderingMiddleware,
     NoSystemInThinkingMiddleware,
     RoleDefinitionMiddleware,
     StructuredChatFormatMiddleware,
@@ -292,6 +294,7 @@ def build_model_node(
         DecisionSystemMiddleware(enable_query_clarification=node_options.enable_query_clarification),
     )
     context_assembly.add_middleware("template", BeijingTimeMiddleware())
+    context_assembly.add_middleware("template", ImageRenderingMiddleware())
     context_assembly.add_middleware("template", NoSystemInThinkingMiddleware())
     context_assembly.add_middleware("template", HistorySystemPromptMiddleware())
     # 加载由 graph 层注入的额外模板中间件（例如 SkillsPromptMiddleware）
@@ -337,6 +340,11 @@ def build_model_node(
             token_limit=node_options.token_limit,
             token_margin=node_options.token_margin,
         ),
+    )
+    # 工具压缩后重新渲染agent_scratchpad
+    context_assembly.add_middleware(
+        "variable",
+        SpecialVariablesPostMiddleware(use_structured_response=use_structured_response),
     )
     context_assembly.add_middleware(
         "variable",

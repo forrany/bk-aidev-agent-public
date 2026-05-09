@@ -13,17 +13,12 @@
 """
 
 from .agent import AgentResourceManager
-from .base import BaseResourceManager
 from .registry import ResourceManagerProtocol, resource_manager
 
-# wiring：把默认实现注册到工厂；放在 __init__.py 而非 registry.py，
-# 让 registry.py 保持纯契约 / 不反向依赖 agent.py。
-resource_manager.replace_defaults(AgentResourceManager)
-
+resource_manager.replace_defaults(AgentResourceManager())
 
 __all__ = [
     "AgentResourceManager",
-    "BaseResourceManager",
     "ResourceManagerProtocol",
     "resource_manager",
 ]

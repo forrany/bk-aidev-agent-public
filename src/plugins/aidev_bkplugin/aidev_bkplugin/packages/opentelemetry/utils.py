@@ -163,9 +163,9 @@ def get_env_bool(key: str, default: bool) -> bool:
 
 def get_otel_endpoint_by_agent_info() -> tuple[str | None, str | None]:
     try:
-        from aidev_bkplugin.services.agent import get_agent_config_info
+        from aidev_bkplugin.services.agent_config import AgentConfigFetcher
 
-        agent_info = get_agent_config_info()
+        agent_info = AgentConfigFetcher.get_info()
         otel_info = agent_info.get("otel_info")
         return otel_info.get("otel_url"), otel_info.get("otel_token")
     except Exception:

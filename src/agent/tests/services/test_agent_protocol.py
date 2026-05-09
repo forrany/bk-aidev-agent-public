@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.packages.langchain_core.models.mock import MockChatModel
+from aidev_agent.pydantic_models import AgentConfig, AgentOptions
 from aidev_agent.services.agent import (
     AgentBuildContext,
     AgentInstanceFactory,
@@ -27,8 +28,6 @@ from aidev_agent.services.agent import (
 )
 from aidev_agent.services.agent.chat import ChatAgentBuilder
 from aidev_agent.services.common_agent import CommonQAAgent
-from aidev_agent.services.config_manager import AgentConfig, AgentConfigManager
-from aidev_agent.services.pydantic_models import AgentOptions
 from aidev_agent.utils.factory import SimpleFactory
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -51,17 +50,20 @@ def _make_chat_ctx(
     *,
     session_code: str | None = "session-1",
     callbacks=None,
-    agent_cls=CommonQAAgent,
+    agent_cls=None,
     session_context_data=None,
     switch_agent: bool = False,
     event_handler=None,
 ) -> AgentBuildContext:
-    """构造 chat 路径的 AgentBuildContext（无 factory 反向引用）。"""
+    """构造 chat 路径的 AgentBuildContext（无 factory 反向引用）。
+
+    ``agent_cls`` 现为「通用 agent 实例」（``CommonAgentProtocol``）；缺省时构造一个新
+    ``CommonQAAgent()`` 实例，避免污染 ``common_agent_factory`` 的全局默认。
+    """
     return AgentBuildContext(
         agent_code=agent_code,
         agent_type=AgentType.CHAT,
         agent_config=_make_agent_config(agent_code),
-        config_manager_class=AgentConfigManager,
         resource_manager=MagicMock(name="rm"),
         session_code=session_code,
         username="alice",
@@ -69,7 +71,7 @@ def _make_chat_ctx(
         switch_agent=switch_agent,
         event_handler=event_handler,
         chat=ChatBuildExtras(
-            agent_cls=agent_cls,
+            agent_cls=agent_cls if agent_cls is not None else CommonQAAgent(),
             callbacks=list(callbacks or []),
             checkpointer=MemorySaver(),
         ),
@@ -109,7 +111,6 @@ class TestAgentBuildContext:
             agent_code="x",
             agent_type=AgentType.CHAT,
             agent_config=_make_agent_config("x"),
-            config_manager_class=AgentConfigManager,
             resource_manager=MagicMock(),
         )
         assert ctx.agent_code == "x"
@@ -127,7 +128,6 @@ class TestAgentBuildContext:
             agent_code="x",
             agent_type=AgentType.FLOW,
             agent_config=_make_agent_config("x"),
-            config_manager_class=AgentConfigManager,
             resource_manager=MagicMock(),
             flow=FlowBuildExtras(task_id="T-1", poll_interval=0.5),
             extra={"trace_id": "tx-1"},
@@ -230,7 +230,6 @@ def _make_flow_ctx(
         agent_code="agent-x",
         agent_type=AgentType.FLOW,
         agent_config=_make_agent_config("agent-x"),
-        config_manager_class=AgentConfigManager,
         resource_manager=rm,
         session_code=session_code,
         username=username,

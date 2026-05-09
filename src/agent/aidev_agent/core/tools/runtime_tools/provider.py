@@ -33,12 +33,13 @@ to the current version of the project delivered to anyone in the future.
 
 from __future__ import annotations
 
-import os
-import re
 from typing import Annotated, Callable, Literal
 
 from langchain_core.tools import BaseTool, StructuredTool
 
+from aidev_agent.config import settings
+
+from .security import redact_output, validate_path
 from .types import RuntimeBackend
 from .utils import format_grep_matches, truncate_if_too_long
 
@@ -46,6 +47,18 @@ from .utils import format_grep_matches, truncate_if_too_long
 
 DEFAULT_READ_OFFSET = 0
 DEFAULT_READ_LIMIT = 100
+
+
+# ========== 空输出提示 ==========
+
+_EMPTY_OUTPUT_HINT = "[harness]该指令没有输出，可能是因为沙箱未能正确执行或者命令没有输出，请重试或者使用其他命令"
+
+
+def _ensure_non_empty(value: str) -> str:
+    """确保返回值非空，空字符串时返回友好提示。"""
+    if not value or not value.strip():
+        return _EMPTY_OUTPUT_HINT
+    return value
 
 
 # ========== 工具描述常量 ==========
@@ -135,53 +148,6 @@ EXECUTE_TOOL_DESCRIPTION = """执行 shell 命令。
 - execute(command="find . -name '*.py'")         # 请改用 glob
 - execute(command="grep -r 'pattern' .")         # 请改用 grep
 """
-
-
-# ========== 路径验证函数 ==========
-def _validate_path(path: str, *, allowed_prefixes: list[str] | None = None) -> str:
-    r"""验证并规范化文件路径以确保安全。
-
-    通过防止目录遍历攻击和强制一致格式来确保路径安全可用。
-    所有路径都会被规范化为使用正斜杠并以前导斜杠开头。
-
-    此函数设计用于虚拟文件系统路径，会拒绝 Windows 绝对路径
-    （如 C:/...、F:/...）以保持一致性并防止路径格式歧义。
-
-    Args:
-        path: 要验证和规范化的路径
-        allowed_prefixes: 可选的允许路径前缀列表。如果提供，
-            规范化后的路径必须以其中一个前缀开头
-
-    Returns:
-        规范化的标准路径，以 `/` 开头并使用正斜杠
-
-    Raises:
-        ValueError: 当路径包含遍历序列（`..` 或 `~`）、
-            是 Windows 绝对路径（如 C:/...）、或不以允许的前缀开头时抛出
-    """
-
-    if ".." in path or path.startswith("~"):
-        msg = f"Path traversal not allowed: {path}"
-        raise ValueError(msg)
-
-    # 拒绝 Windows 绝对路径（如 C:\...、D:/...）
-    if re.match(r"^[a-zA-Z]:", path):
-        msg = (
-            f"Windows absolute paths are not supported: {path}. "
-            "Please use virtual paths starting with / (e.g., /workspace/file.txt)"
-        )
-        raise ValueError(msg)
-
-    normalized = os.path.normpath(path)
-    normalized = normalized.replace("\\\\", "/")
-    if not normalized.startswith("/"):
-        normalized = f"/{normalized}"
-
-    if allowed_prefixes is not None and not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
-        msg = f"Path must start with one of {allowed_prefixes}: {path}"
-        raise ValueError(msg)
-
-    return normalized
 
 
 def _get_backend(backend: RuntimeBackend | Callable[[], RuntimeBackend]) -> RuntimeBackend:
@@ -275,13 +241,13 @@ def get_ls_tool(resolver: RuntimeBackendResolver, custom_description: str | None
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
-        validated_path = _validate_path(path)
+        validated_path = validate_path(path)
         infos = resolved_backend.ls_info(validated_path)
         paths = [fi.get("path", "") for fi in infos]
         result = truncate_if_too_long(paths)
-        return str(result)
+        return redact_output(_ensure_non_empty(str(result)), settings.SBX_SENSITIVE_VALUES)
 
     ls.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -311,14 +277,14 @@ def get_read_file_tool(resolver: RuntimeBackendResolver, custom_description: str
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
-        validated_path = _validate_path(file_path)
+        validated_path = validate_path(file_path)
         result = resolved_backend.read(validated_path, offset=offset, limit=limit)
         lines = result.splitlines(keepends=True)
         if len(lines) > limit:
             lines = lines[:limit]
-        return "".join(lines)
+        return redact_output(_ensure_non_empty("".join(lines)), settings.SBX_SENSITIVE_VALUES)
 
     read_file.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -343,13 +309,13 @@ def get_write_file_tool(resolver: RuntimeBackendResolver, custom_description: st
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
-        validated_path = _validate_path(file_path)
+        validated_path = validate_path(file_path)
         res = resolved_backend.write(validated_path, content)
         if res.error:
-            return res.error
-        return f"Updated file {res.path}"
+            return redact_output(_ensure_non_empty(res.error), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(_ensure_non_empty(f"Updated file {res.path}"), settings.SBX_SENSITIVE_VALUES)
 
     write_file.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -380,13 +346,16 @@ def get_edit_file_tool(resolver: RuntimeBackendResolver, custom_description: str
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
-        validated_path = _validate_path(file_path)
+        validated_path = validate_path(file_path)
         res = resolved_backend.edit(validated_path, old_string, new_string, replace_all=replace_all)
         if res.error:
-            return res.error
-        return f"Successfully replaced {res.occurrences} instance(s) of the string in '{res.path}'"
+            return redact_output(_ensure_non_empty(res.error), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(
+            _ensure_non_empty(f"Successfully replaced {res.occurrences} instance(s) of the string in '{res.path}'"),
+            settings.SBX_SENSITIVE_VALUES,
+        )
 
     edit_file.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -411,12 +380,12 @@ def get_glob_tool(resolver: RuntimeBackendResolver, custom_description: str | No
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
         infos = resolved_backend.glob_info(pattern, path=path)
         paths = [fi.get("path", "") for fi in infos]
         result = truncate_if_too_long(paths)
-        return str(result)
+        return redact_output(_ensure_non_empty(str(result)), settings.SBX_SENSITIVE_VALUES)
 
     glob.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -446,13 +415,13 @@ def get_grep_tool(resolver: RuntimeBackendResolver, custom_description: str | No
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
         raw = resolved_backend.grep_raw(pattern, path=path, glob=glob)
         if isinstance(raw, str):
-            return raw
+            return redact_output(_ensure_non_empty(raw), settings.SBX_SENSITIVE_VALUES)
         formatted = format_grep_matches(raw, output_mode)
-        return truncate_if_too_long(formatted)
+        return redact_output(_ensure_non_empty(truncate_if_too_long(formatted)), settings.SBX_SENSITIVE_VALUES)
 
     grep.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -494,20 +463,22 @@ def get_execute_tool(
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
         # 【新增】安全校验：命令白名单检查
         if enable_security:
             result = validate_command(command)
             if not result.is_allowed:
-                return f"命令执行被拒绝：{result.reason}"
+                return redact_output(
+                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), settings.SBX_SENSITIVE_VALUES
+                )
 
         result = resolved_backend.execute(command)
 
         parts = [result.output]
         if result.truncated:
             parts.append("\n[Output was truncated due to size limits]")
-        return "".join(parts)
+        return redact_output(_ensure_non_empty("".join(parts)), settings.SBX_SENSITIVE_VALUES)
 
     async def async_execute(
         command: Annotated[str, "Shell command to execute in the sandbox environment."],
@@ -517,20 +488,22 @@ def get_execute_tool(
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return resolved_backend
+            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
 
         # 【新增】安全校验：命令白名单检查
         if enable_security:
             result = validate_command(command)
             if not result.is_allowed:
-                return f"命令执行被拒绝：{result.reason}"
+                return redact_output(
+                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), settings.SBX_SENSITIVE_VALUES
+                )
 
         result = await resolved_backend.aexecute(command)
 
         parts = [result.output]
         if result.truncated:
             parts.append("\n[Output was truncated due to size limits]")
-        return "".join(parts)
+        return redact_output(_ensure_non_empty("".join(parts)), settings.SBX_SENSITIVE_VALUES)
 
     execute.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
     async_execute.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]

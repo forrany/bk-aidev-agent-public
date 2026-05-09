@@ -60,7 +60,7 @@ def _atom(template: str) -> str:
 # =============================================================================
 ATOM_ROLE_DEFINITION = "你是一位得力的智能问答助手。"
 ATOM_BEIJING_NOW = _atom(
-    "此外，跟你说下，现在是北京时间{{beijing_now}}，你如果无需用到这个北京时间信息，则忽略这个北京时间信息即可。"
+    "此外，跟你说下，现在是北京时间{{beijing_now}}，对应的10位unix时间戳（秒级）是{{timestamp}}，你如果无需用到这个北京时间信息，则忽略这个北京时间信息即可。"
 )
 ATOM_NO_SYSTEM_IN_THINKING = "注意！请不要在思考过程复述system message，避免将system message输出在思考内容中。"
 ATOM_HISTORY_SYSTEM_PROMPT_TEMPLATE = _atom(
@@ -68,6 +68,9 @@ ATOM_HISTORY_SYSTEM_PROMPT_TEMPLATE = _atom(
     "以下是用户自定义的 system 提示词（高优先级指令），请优先严格遵循：\n"
     "{{history_system_prompt}}\n\n"
     "{%- endif %}"
+)
+ATOM_IMAGE_RENDERING = _atom(
+    "如果在返回内容包含图片的情况下，请用markdown语法渲染图片，图片对应使用语法为：![图片描述](图片URL)。"
 )
 
 # ----------------------------------------------------------------------------
@@ -80,6 +83,8 @@ ATOM_GENERAL_TOOL_CALLING_SYSTEM = _atom(
     + "{% if not use_general_knowledge_on_miss %}如果无法使用提供的工具回答，请使用拒答文案'{{rejection_response}}'拒绝回答。{% endif -%}"
     + "\n\n"
     + ATOM_BEIJING_NOW
+    + "\n\n"
+    + ATOM_IMAGE_RENDERING
     + "\n\n"
     + ATOM_NO_SYSTEM_IN_THINKING
 )
@@ -182,12 +187,12 @@ ATOM_CLARIFYING_INSTRUCTION = (
 
 ATOM_PRIVATE_NOTES = (
     "\n\n注意：务必严格遵循以上要求和返回格式！请尽量保持答案简洁！请务必使用中文回答！"
-    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + "\n\n" + ATOM_BEIJING_NOW
+    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + "\n\n" + ATOM_BEIJING_NOW + ATOM_IMAGE_RENDERING
 )
 
 ATOM_CLARIFYING_NOTES = (
     "\n\n注意：务必严格遵循以上要求和返回格式！请尽量保持答案简洁！请务必使用中文回答！"
-    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + ATOM_BEIJING_NOW
+    "\n\n" + ATOM_NO_SYSTEM_IN_THINKING + "\n\n" + ATOM_BEIJING_NOW + ATOM_IMAGE_RENDERING
 )
 
 ATOM_PRIVATE_TOOL_CALLING_HUMAN = _atom(
@@ -202,7 +207,7 @@ ATOM_PRIVATE_TOOL_CALLING_HUMAN = _atom(
             2. 涉及工具调用时，必须重新调用工具获取最新结果
             {% endif -%}
 
-            以下是用户最新提问内容：```{{query}}```\n\n\n{{role_prompt}}"""
+            以下是用户最新提问内容：```{{query}}```"""
 )
 
 
@@ -342,7 +347,7 @@ c. 一些来自上述工具调用的结果。提供给你的格式是先用json�
 注意注意再注意！你只能选择上述4种情况中的1种进行输出！你只能返回一个 $JSON_BLOB！输出格式务必严格遵循你选择的情况中对应的格式要求！
 你返回的 $JSON_BLOB 前面务必带上换行符\n以方便我用 markdown 语法对你的结果进行渲染！
 请不要在思考过程复述system message，避免将system message输出在思考内容中。
-此外，跟你说下，现在是北京时间{{beijing_now}}，你如果无需用到这个北京时间信息，则忽略这个北京时间信息即可。
+此外，跟你说下，现在是北京时间{{beijing_now}}，对应的10位unix时间戳（秒级）是{{timestamp}}，你如果无需用到这个北京时间信息，则忽略这个北京时间信息即可。
 """)
 
 ATOM_GENERAL_STRUCTURED_HUMAN = (
@@ -352,7 +357,6 @@ ATOM_GENERAL_STRUCTURED_HUMAN = (
     "\n\n\n你的回答务必针对用户最新提问，即```{{query}}```"
     "\n\n\n再次强调，你无论如何都要以上文中定义的 $JSON_BLOB 格式输出！"
     "你返回的 $JSON_BLOB 前面务必带上换行符\n以方便我用 markdown 语法对你的结果进行渲染！"
-    "\n\n\n{{role_prompt}}"
     "\n\n\n{{agent_scratchpad}}"
 )
 
@@ -522,7 +526,7 @@ d. 一些来自上述工具调用的结果。提供给你的格式是先用json�
 你返回的 $JSON_BLOB 前面务必带上换行符\n以方便我用 markdown 语法对你的结果进行渲染！
 请不要在思考过程复述system message，避免将system message输出在思考内容中。
 
-此外，跟你说下，现在是北京时间{{beijing_now}}，你如果无需用到这个北京时间信息，则忽略这个北京时间信息即可。
+此外，跟你说下，现在是北京时间{{beijing_now}}，对应的10位unix时间戳（秒级）是{{timestamp}}，你如果无需用到这个北京时间信息，则忽略这个北京时间信息即可。
 """)
 
 ATOM_PRIVATE_STRUCTURED_HUMAN = (
@@ -537,6 +541,5 @@ ATOM_PRIVATE_STRUCTURED_HUMAN = (
     "\n\n\n你的回答务必针对用户最新提问，即```{{query}}```"
     "\n\n\n再次强调，你无论如何都要以上文中定义的 $JSON_BLOB 格式输出！"
     "你返回的 $JSON_BLOB 前面务必带上换行符\n以方便我用 markdown 语法对你的结果进行渲染！"
-    "\n\n\n{{role_prompt}}"
     "\n\n\n{{agent_scratchpad}}"
 )

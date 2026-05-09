@@ -603,8 +603,12 @@ class BaseSessionWriter(ABC):
             event: 包含 flow_agent_result 数据的事件（CustomEvent 或 RawEvent）
         """
         # 兼容 CustomEvent（直接有 value 属性）和 RawEvent（嵌套在 event dict 中）
+        # value 格式：dict（包含 task_id, task_name, task_state, nodes, statistics, task_outputs 等字段）
         if hasattr(event, "value"):
-            event_data = event.value if isinstance(event.value, dict) else {}
+            if isinstance(event.value, dict):
+                event_data = event.value
+            else:
+                event_data = {}
         else:
             event_data = event.event.get("data", {})
 

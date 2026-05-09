@@ -1,5 +1,12 @@
 import logging
+import os
 import sys
+
+
+def pytest_configure(config):
+    """在测试收集前强制使用 InMemory 消息处理器，避免连接 RabbitMQ"""
+    os.environ["MESSAGE_HANDLER_TYPE"] = "inmemory"
+
 
 try:
     from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel  # type: ignore

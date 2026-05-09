@@ -18,7 +18,7 @@ to the current version of the project delivered to anyone in the future.
 
 from django.core.management.base import BaseCommand
 
-from aidev_bkplugin.utils import bkaidev_api_client
+from aidev_bkplugin.services.agent_helpers import AgentHelper
 
 
 class Command(BaseCommand):
@@ -42,7 +42,7 @@ class Command(BaseCommand):
         self.stdout.write(f"正在提交会话升级任务，batch_size={batch_size}...")
 
         try:
-            result = bkaidev_api_client.api.upgrade_agent_sessions(json={"batch_size": batch_size})
+            result = AgentHelper.get_client().api.upgrade_agent_sessions(json={"batch_size": batch_size})
             if result.get("result") == "OK" or result.get("data", {}).get("result") == "OK":
                 self.stdout.write(self.style.SUCCESS("会话升级任务已提交成功，任务将在后台异步执行"))
                 self.stdout.write("提示：升级进度和结果请在 AIDev 平台查看")

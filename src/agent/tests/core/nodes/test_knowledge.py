@@ -13,7 +13,7 @@ from aidev_agent.core.nodes.knowledge import (
     make_knowledge_node,
 )
 from aidev_agent.enums import Decision
-from aidev_agent.services.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.store.memory import InMemoryStore
@@ -208,7 +208,7 @@ class TestAgentKnowledgeNodeInGraph:
 
         mock_llm = create_mock_llm()
         mock_options = create_mock_agent_options()
-        node = AgentKnowledgeNode(llm=mock_llm, agent_options=mock_options)
+        node = AgentKnowledgeNode(llm=mock_llm, agent_options=mock_options, chat_history=[])
 
         # 验证 query 作为参数调用
         result = run_knowledge_node_in_graph(node, {"query": "test query"})

@@ -34,7 +34,7 @@ from typing_extensions import NotRequired
 
 from aidev_agent.core.ag_ui.types import CustomMessageType
 from aidev_agent.enums import StreamEventType
-from aidev_agent.services.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions
 from aidev_agent.utils import Empty
 from aidev_agent.utils.async_utils import async_generator_with_timeout, async_to_sync_generator
 

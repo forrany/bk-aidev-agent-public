@@ -31,6 +31,7 @@ import logging
 import os
 import re
 import shlex
+import threading
 from dataclasses import dataclass
 from functools import wraps
 from time import sleep
@@ -39,6 +40,7 @@ from typing import Any, Optional
 from requests.exceptions import HTTPError
 
 from aidev_agent.api.paas_client import BkPaaSSandboxApi
+from aidev_agent.config import settings
 
 from .types import (
     EditResult,
@@ -83,7 +85,7 @@ def _extract_response_message(response) -> str | None:
             return body.get("message")
         return str(body)
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("[_extract_response_message] 解析响应体失败", exc_info=True)
     return None
 
 
@@ -119,7 +121,7 @@ def _paas_error_enhance(func):
 
 
 def _paas_retry_on_not_ready(func):
-    """装饰器：对 NOT_READY 错误自动重试，最多 ``_NOT_READY_MAX_RETRIES`` 次。
+    """装饰器：对 NOT_READY 错误自动重试，最多 ``SBX_PAAS_NOT_READY_MAX_RETRIES`` 次。
 
     重试耗尽后 raise 最后捕获的异常，让异常向上传播到公开方法层的
     ``@_paas_error_enhance`` 处理。
@@ -128,7 +130,7 @@ def _paas_retry_on_not_ready(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         last_exc: HTTPError | None = None
-        for attempt in range(_NOT_READY_MAX_RETRIES + 1):
+        for attempt in range(settings.SBX_PAAS_NOT_READY_MAX_RETRIES + 1):
             try:
                 return func(*args, **kwargs)
             except HTTPError as exc:
@@ -140,10 +142,10 @@ def _paas_retry_on_not_ready(func):
                     "沙箱服务未就绪 (%s)，重试 %d/%d",
                     message,
                     attempt + 1,
-                    _NOT_READY_MAX_RETRIES,
+                    settings.SBX_PAAS_NOT_READY_MAX_RETRIES,
                 )
-                if attempt < _NOT_READY_MAX_RETRIES:
-                    sleep(_NOT_READY_SLEEP_SECONDS)
+                if attempt < settings.SBX_PAAS_NOT_READY_MAX_RETRIES:
+                    sleep(settings.SBX_PAAS_NOT_READY_SLEEP_SECONDS)
         # 重试耗尽，raise 最后的异常
         raise last_exc  # type: ignore[misc]
 
@@ -186,6 +188,10 @@ class PaasSandboxBackend:
 
     Args:
         app_code: 应用编码，用于 API 鉴权和 URL 路径拼接，可选（默认 ``""``）。
+        app_secret: 应用密钥，与 app_code 配合用于 API 鉴权，可选（默认 ``""``）。
+            当 app_code 和 app_secret 同时提供时，优先使用显式凭证创建 Client，
+            而非依赖 Django settings 全局配置。这在等平台进程中尤为重要——
+            Django settings 的 BK_APP_CODE 是平台的凭证，而非 Agent 应用的凭证。
         bk_username: 蓝鲸用户名，用于 ``X-Bkapi-Authorization`` 请求头，可选（默认 ``""``）。
         access_token: 访问令牌，用于 ``X-Bkapi-Authorization`` 请求头，可选（默认 ``""``）。
         snapshot: 沙箱基础镜像快照名，必填。
@@ -201,6 +207,7 @@ class PaasSandboxBackend:
         self,
         *,
         app_code: str = "",
+        app_secret: str = "",
         bk_username: str = "",
         access_token: str = "",
         snapshot: str,
@@ -212,6 +219,8 @@ class PaasSandboxBackend:
 
         Args:
             app_code: 应用编码，可选（默认 ``""``）。
+            app_secret: 应用密钥，可选（默认 ``""``）。
+                同时提供 app_code 和 app_secret 时，使用显式凭证创建 Client。
             bk_username: 蓝鲸用户名，可选（默认 ``""``）。
             access_token: 访问令牌，可选（默认 ``""``）。
             snapshot: 沙箱基础镜像快照名，必填。
@@ -222,14 +231,34 @@ class PaasSandboxBackend:
 
         # 认证属性
         self._app_code = app_code
+        self._app_secret = app_secret
         self._bk_username = bk_username
         self._access_token = access_token
-        self.client = BkPaaSSandboxApi.get_client_by_username(bk_username)
+        logger.info(
+            f"[credential] PaasSandboxBackend.__init__: "
+            f"app_code={app_code!r}, has_app_secret={bool(app_secret)}, "
+            f"bk_username={bk_username!r}, has_access_token={bool(access_token)}, "
+            f"will_use_explicit_credential={bool(app_code and app_secret)}"
+        )
+        # 优先使用显式凭证（app_code + app_secret）创建 Client，
+        # 避免平台进程中 Django settings 全局凭证与 Agent app_code 不匹配 即可能会使用到平台的凭证
+        if app_code and app_secret:
+            self.client = BkPaaSSandboxApi.get_client(app_code=app_code, app_secret=app_secret)
+        else:
+            logger.warning(
+                f"[credential] PaasSandboxBackend.__init__: "
+                f"fallback to get_client_by_username('{bk_username}'), "
+                f"this may use Django settings credential (bkaidev) instead of agent app_code!"
+            )
+            self.client = BkPaaSSandboxApi.get_client_by_username(bk_username)
+        self.client.update_bkapi_authorization(access_token=access_token or None, bk_username=bk_username or "")
         # 沙箱属性
         self._sandbox_id: str | None = sandbox_id
         self._snapshot = snapshot
         self._snapshot_entrypoint = snapshot_entrypoint
         self._env_vars = env_vars
+        self._sandbox_lock = threading.Lock()
+        self._home_dir: str | None = None
 
     # ---- PaaS HTTP API（原 PaasSandboxClient 公开方法） ----
 
@@ -328,7 +357,7 @@ class PaasSandboxBackend:
 
         Args:
             sandbox_id: 沙箱 UUID。
-            path: 远程文件路径。
+            path: 远程文件路径（调用方应确保已展开 ``~``）。
             content: 文件内容（字节）。
         """
         filename = path.rsplit("/", 1)[-1] or "upload"
@@ -349,12 +378,11 @@ class PaasSandboxBackend:
 
         Args:
             sandbox_id: 沙箱 UUID。
-            path: 远程文件路径。
+            path: 远程文件路径（调用方应确保已展开 ``~``）。
 
         Returns:
             文件内容字节。
         """
-
         response = self.client.download_file.request(
             params={"path": path},
             path_params={"sandbox_id": sandbox_id},
@@ -362,32 +390,12 @@ class PaasSandboxBackend:
         response.raise_for_status()
         return response.content
 
-    def delete_file(self, sandbox_id: str, path: str, recursive: bool = False) -> None:
-        """删除沙箱中的文件或目录。
-
-        注意：API 网关未注册 files/delete 端点（POST/DELETE 均返回 404），
-        因此改用 exec_command 通过 shell 命令实现删除。
-
-        Args:
-            sandbox_id: 沙箱 UUID。
-            path: 远程文件路径。
-            recursive: 是否递归删除。
-
-        Raises:
-            RuntimeError: 删除失败。
-        """
-
-        qpath = shlex.quote(path)
-        cmd = f"rm -rf {qpath}" if recursive else f"rm -f {qpath}"
-
-        result = self.exec_command(sandbox_id, cmd)
-        if result.exit_code not in (0, None):
-            raise RuntimeError(f"删除文件失败: {result.stderr or result.stdout}")
-
     # ---- 沙箱生命周期 ----
 
     def _ensure_sandbox(self) -> str:
-        """确保沙箱实例已创建（惰性初始化）。
+        """确保沙箱实例已创建（惰性初始化，线程安全）。
+
+        使用双重检查锁定模式：外层快速路径不持锁，锁内二次检查防止竞态。
 
         Returns:
             沙箱 UUID。
@@ -399,14 +407,18 @@ class PaasSandboxBackend:
         if self._sandbox_id is not None:
             return self._sandbox_id
 
-        self._sandbox_id = self.create_sandbox(
-            snapshot=self._snapshot,
-            snapshot_entrypoint=self._snapshot_entrypoint,
-            env_vars=self._env_vars,
-        )
-        sleep(2)
-        logger.info("PaaS Sandbox 已创建: %s", self._sandbox_id)
-        return self._sandbox_id
+        with self._sandbox_lock:
+            if self._sandbox_id is not None:
+                return self._sandbox_id
+
+            self._sandbox_id = self.create_sandbox(
+                snapshot=self._snapshot,
+                snapshot_entrypoint=self._snapshot_entrypoint,
+                env_vars=self._env_vars,
+            )
+            sleep(settings.SBX_PAAS_NOT_READY_SLEEP_SECONDS)
+            logger.info("PaaS Sandbox 已创建: %s", self._sandbox_id)
+            return self._sandbox_id
 
     def _run(self, command: str | list, timeout: int | None = None) -> ExecResult:
         """在远程沙箱中执行 shell 命令并返回结果。"""
@@ -414,13 +426,26 @@ class PaasSandboxBackend:
         sandbox_id = self._ensure_sandbox()
         return self.exec_command(sandbox_id, command, timeout=timeout)
 
+    def _resolve_path(self, path: str) -> str:
+        """将 ``~`` 展开为绝对路径。
+
+        在每个公开方法入口处调用，确保后续所有操作（shell 命令和 HTTP API）
+        都只看到绝对路径。
+        """
+        if not path.startswith("~"):
+            return path
+        if self._home_dir is None:
+            res = self._run(["bash", "-c", "echo $HOME"])
+            self._home_dir = res.stdout.strip() or "/root"  # PaaS 沙箱默认以 root 用户运行
+        return self._home_dir + path[1:] if len(path) > 1 else self._home_dir
+
     def kill(self) -> None:
         """销毁沙箱实例。
 
         调用后会将内部沙箱 ID 置为 None，以便后续操作重新创建沙箱。
         """
 
-        if self._sandbox_id is None:
+        if getattr(self, "_sandbox_id", None) is None:
             return
 
         try:
@@ -437,10 +462,12 @@ class PaasSandboxBackend:
     def ls_info(self, path: str) -> list[FileInfo]:
         """列出目录中的文件和目录（非递归）。"""
 
+        path = self._resolve_path(path)
         qpath = shlex.quote(path)
         cmd = f"ls -1pA -- {qpath}"
-        res = self._run(cmd)
+        res = self._run(["bash", "-c", cmd])
         if res.exit_code not in (0, None):
+            logger.warning("ls_info 执行失败: path=%r, stdout=%r, exit_code=%s", path, res.stdout[:200], res.exit_code)
             return []
 
         base = path.rstrip("/") if path != "/" else "/"
@@ -462,6 +489,7 @@ class PaasSandboxBackend:
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """读取文件内容（带行号）。"""
 
+        file_path = self._resolve_path(file_path)
         qfile = shlex.quote(file_path)
 
         # 1) 存在性检查
@@ -469,8 +497,8 @@ class PaasSandboxBackend:
         if exists.exit_code not in (0, None):
             return f"Error: File '{file_path}' not found"
 
-        # 2) 行数检查
-        wc = self._run(f'bash -c "wc -l < {qfile}"')
+        # 2) 行数检查（awk END{print NR} 正确计算无尾换行文件的行数，wc -l 不行）
+        wc = self._run(f"awk 'END{{print NR}}' {qfile}")
         try:
             total_lines = int(wc.stdout.strip() or "0")
         except ValueError:
@@ -494,6 +522,7 @@ class PaasSandboxBackend:
     def write(self, file_path: str, content: str) -> WriteResult:
         """创建新文件并写入内容。"""
 
+        file_path = self._resolve_path(file_path)
         qfile = shlex.quote(file_path)
 
         # 文件已存在则失败
@@ -514,6 +543,10 @@ class PaasSandboxBackend:
 
         # 通过文件上传 API 写入
         file_bytes = content.encode("utf-8")
+        if not file_bytes:
+            return WriteResult(
+                error="Cannot write empty content. Provide non-empty content or use execute to create the file."
+            )
         self.upload_file(sandbox_id, file_path, file_bytes)
 
         return WriteResult(path=file_path, files_update=None)
@@ -522,27 +555,24 @@ class PaasSandboxBackend:
     def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
         """通过替换字符串编辑文件。"""
 
-        sandbox_id = self._ensure_sandbox()
-
-        # 1) 检查文件是否存在
+        file_path = self._resolve_path(file_path)
+        # 1) 通过 shell 读取文件内容（兼容中文路径，download_file API 对非 ASCII 路径不稳定）
         qfile = shlex.quote(file_path)
-        exists = self._run(f"test -f {qfile}")
-        if exists.exit_code not in (0, None):
+        cat = self._run(f"cat {qfile}")
+        if cat.exit_code not in (0, None):
             return EditResult(error=f"Error: File '{file_path}' not found")
+        content = cat.stdout
 
-        # 2) 下载文件内容
-        raw_bytes = self.download_file(sandbox_id, file_path)
-        content = raw_bytes.decode("utf-8", errors="replace")
-
-        # 3) 执行字符串替换
+        # 2) 执行字符串替换
         result = perform_string_replacement(content, old_string, new_string, replace_all)
         if isinstance(result, str):
             return EditResult(error=result)
 
         new_content, occurrences = result
 
-        # 4) 写回文件（先删后传）
-        self.delete_file(sandbox_id, file_path)
+        # 3) 写回文件（先删后传，使用 shell 命令删除而非不存在的网关 API）
+        sandbox_id = self._ensure_sandbox()
+        self._run(f"rm -f {qfile}")
         self.upload_file(sandbox_id, file_path, new_content.encode("utf-8"))
 
         return EditResult(path=file_path, files_update=None, occurrences=int(occurrences))
@@ -556,7 +586,7 @@ class PaasSandboxBackend:
         except re.error as e:
             return f"Invalid regex pattern: {e}"
 
-        base_path = path or "/"
+        base_path = self._resolve_path(path) if path else "/"
         qpattern = shlex.quote(pattern)
         qbase = shlex.quote(base_path)
 
@@ -594,7 +624,7 @@ class PaasSandboxBackend:
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
         """查找匹配 glob 模式的文件（远程执行）。"""
 
-        base = path or "/"
+        base = self._resolve_path(path) if path else "/"
         qbase = shlex.quote(base)
 
         p = pattern.lstrip("/")
@@ -631,7 +661,8 @@ class PaasSandboxBackend:
 
         for path, content in files:
             try:
-                self.upload_file(sandbox_id, path, content)
+                resolved = self._resolve_path(path)
+                self.upload_file(sandbox_id, resolved, content)
                 responses.append({"path": path, "error": None})
             except Exception as e:  # noqa: BLE001
                 responses.append({"path": path, "error": str(e)})
@@ -647,7 +678,8 @@ class PaasSandboxBackend:
 
         for path in paths:
             try:
-                content_bytes = self.download_file(sandbox_id, path)
+                resolved = self._resolve_path(path)
+                content_bytes = self.download_file(sandbox_id, resolved)
                 responses.append({"path": path, "content": content_bytes, "error": None})
             except Exception as e:  # noqa: BLE001
                 error_msg = "file_not_found" if "404" in str(e) else str(e)
@@ -659,11 +691,20 @@ class PaasSandboxBackend:
     def execute(self, command: str, timeout: int = 120, max_output_size: int = 100000) -> ExecuteResult:
         """在沙箱中执行 shell 命令。"""
 
+        res: ExecResult = self._run(["bash", "-c", command], timeout=int(timeout))
+        logger.info(
+            f"[credential] PaasSandboxBackend.execute: "
+            f"app_code={self._app_code!r}, has_access_token={bool(self._access_token)}, "
+            f"bk_username={self._bk_username!r}, command={command[:80]!r}"
+        )
         res = self._run(["/bin/sh", "-c", command], timeout=int(timeout))
 
         output = res.stdout
         if res.stderr:
             output = f"{output}\n{res.stderr}" if output else res.stderr
+
+        if not output:
+            logger.warning("命令执行返回空输出: command=%r, exit_code=%s", command[:200], res.exit_code)
 
         truncated = False
         if len(output) > max_output_size:

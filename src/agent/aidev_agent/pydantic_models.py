@@ -368,3 +368,33 @@ class AgentExecutorKwargs(BaseModel):
 
     # 执行用户信息
     executor_info: Optional[dict] = Field(default=None, description="执行用户信息")
+
+    # 资源管理器(resource_manager()是全局单例 会使用平台的app_code，这里使用per-request即每次chat_completion请求创建）
+    resource_manager: Optional[Any] = Field(
+        default=None,
+        description="per-request 资源管理器实例（ResourceManagerProtocol）；"
+        "缺省时 ReActAgentBuilder 回退到全局 resource_manager() 工厂。",
+    )
+
+
+class AgentConfig(BaseModel):
+    """智能体配置"""
+
+    agent_code: str = Field(..., description="智能体代码")
+    agent_name: str = Field(..., description="智能体名称")
+    chat_model: str = Field(..., description="LLM模型名称")
+    non_thinking_llm: str = Field(..., description="非深度思考模型")
+    role_prompts: list[dict[Literal["role", "content"], str]] | None = Field(None, description="角色提示词(平台)")
+    knowledgebase_ids: list = Field(default_factory=list, description="知识库ID列表")
+    knowledge_ids: list = Field(default_factory=list, description="知识ID列表")
+    tool_codes: list = Field(default_factory=list, description="工具列表")
+    opening_mark: str | None = Field(None, description="智能体开场白")
+    generating_keyword: str | None = Field(description="生成关键词", default="生成中")
+    mcp_server_config: dict | None = Field(None, description="MCP服务器配置")
+    related_skills: list | None = Field(None, description="关联技能配置")
+    agent_options: AgentOptions = Field(..., description="智能体选项")
+    command_agent_mapping: dict = Field(default_factory=dict, description="智能体映射关联")
+    agent_prompt: str | None = Field(None, description="智能体提示词(内嵌)")
+    # 超参数配置
+    temperature: float | None = Field(None, description="模型温度")
+    max_tokens: int | None = Field(None, description="最大回复长度")

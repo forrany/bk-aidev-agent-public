@@ -4,7 +4,7 @@ import pytest
 from aidev_agent.config import settings
 from aidev_agent.core.tools.knowledge import make_knowledge_retrieval_tool
 from aidev_agent.packages.langchain_core.models import ChatModel
-from aidev_agent.services.pydantic_models import AgentOptions, KnowledgebaseSettings
+from aidev_agent.pydantic_models import AgentOptions, KnowledgebaseSettings
 
 
 @pytest.mark.skipif(

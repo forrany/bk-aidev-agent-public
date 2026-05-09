@@ -137,7 +137,9 @@ FLOW_AGENT_POLL_INTERVAL = env.float("FLOW_AGENT_POLL_INTERVAL", 0.5)  # 轮询�
 FLOW_AGENT_POLL_TIMEOUT = env.float("FLOW_AGENT_POLL_TIMEOUT", 600.0)  # 轮询超时时间（秒）
 
 # Sandbox 相关配置
-SANDBOX_BP_API_HOST = env.str("SANDBOX_BP_API_HOST", "")
+SBX_PAAS_NOT_READY_MAX_RETRIES = env.int("SBX_PAAS_NOT_READY_MAX_RETRIES", 5)
+SBX_PAAS_NOT_READY_SLEEP_SECONDS = env.int("SBX_PAAS_NOT_READY_SLEEP_SECONDS", 2)
+SBX_SENSITIVE_VALUES: list[str] = [v.strip() for v in env.str("SBX_SENSITIVE_VALUES", "").split(",") if v.strip()]
 
 # SSM相关配置
 BK_SSM_ENDPOINT = env.str("BK_SSM_ENDPOINT", "https://bkssm.service.consul")  # noqa

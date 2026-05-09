@@ -396,6 +396,7 @@ class KnowledgeCompressionMiddleware(BaseCompressionMiddleware):
         # 执行压缩流程
         provided_chat_history = ctx.metadata.get("provided_chat_history", [])
         self._dispatch_log(ctx, text="Token 超限，尝试压缩知识库知识内容以减少 token 使用。")
+        logger.info("=====>Token 超限，尝试压缩知识库知识内容以减少 token 使用")
         compressed_context = self.knowledge_compressor_func(
             provided_chat_history,
             ctx.variables.get("query", ""),
@@ -796,7 +797,7 @@ class ToolOutputLengthCompressionMiddleware(BaseToolOutputCompressionMiddleware)
                     state,
                     reason="工具调用结果过长，尝试压缩工具调用结果以减少 token 使用。",
                 )
-
+                logger.info("=====>工具调用结果过长，尝试压缩工具调用结果以减少 token 使用。")
         next()
 
 
@@ -891,5 +892,10 @@ class ChatHistoryCompressionMiddleware(BaseCompressionMiddleware):
             logger.warning(
                 f"已尝试抛除会话历史，但仍然超过 token 限制。（限制: {self.token_limit}，余量: {self.token_margin}）"
             )
+            err_msg = (
+                "已尝试按优先级压缩上下文，但仍然超过 token 限制，无法回答问题，请尝试其他 LLM。"
+                f"（当前 token 数为: {self._try_get_token_len(ctx)}，支持的 token 数为: {self.token_limit}，设置的 token limit margin 为: {self.token_margin},）"
+            )
+            raise RuntimeError(err_msg)
 
         next()

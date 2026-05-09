@@ -8,7 +8,7 @@ import time
 import uuid
 from logging import getLogger
 
-from aidev_agent.services.config_manager import AgentConfigManager
+from aidev_agent.packages.resource_manager import resource_manager
 from aidev_agent.services.messages_handler import ConsumerPreemptedError
 from django.conf import settings
 from django.http import HttpResponse
@@ -96,7 +96,7 @@ class WxAiBotViewSet(ViewSet):
         try:
             context = ContextGenerator(payload).generate()
             if context.message.event == MsgType.EnterChat.value:
-                agent_config = AgentConfigManager.get_config(settings.BKPAAS_APP_CODE)
+                agent_config = resource_manager().get_agent_config(settings.BKPAAS_APP_CODE)
                 if agent_config.opening_mark:
                     return text_msg(agent_config.opening_mark)
         except Exception as e:

@@ -22,12 +22,11 @@ from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
 from aidev_agent.enums import AgentType, PromptRole
 from aidev_agent.exceptions import AgentException
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
-from aidev_agent.packages.langchain_core.tools import make_mcp_tools
+from aidev_agent.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
 from aidev_agent.services.agent.registry import AgentBuildContext, ChatBuildExtras
-from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.services.common_agent import CommonAgentProtocol, CommonQAAgent
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
-from aidev_agent.services.pydantic_models import AgentOptions, ChatPrompt, ExecuteKwargs
 from aidev_agent.utils.async_utils import async_to_sync_generator
 from aidev_agent.utils.loop import run_coro_sync
 
@@ -58,13 +57,19 @@ class ChatCompletionAgent(BaseModel):
     agent_prompt: str | None = None
     max_token_size: int | None = None
     callbacks: list[BaseCallbackHandler] | None = None
-    agent_cls: type[CommonQAAgent] = CommonQAAgent
+    agent_cls: CommonAgentProtocol = Field(default_factory=CommonQAAgent)
+    """通用 agent 实例（实现 ``CommonAgentProtocol``）；ChatCompletionAgent 在 ``_get_agent`` 阶段
+    通过 ``self.agent_cls.get_agent_executor(...)`` 触发执行器构建。
+    字段名保留为 ``agent_cls`` 避免外部破坏，但语义已是「实例」。"""
     agent_options: AgentOptions = Field(default_factory=AgentOptions)
     messages: list[BaseMessage] = Field(default_factory=list)
     checkpointer: BaseCheckpointSaver | None = None
 
     event_handler: Callable[[BaseEvent], None] | None = None
     mcp_fetch_failures: list[dict] = Field(default_factory=list, description="MCP 工具拉取失败记录，用于流式事件")
+    resource_manager: Any = Field(
+        default=None, exclude=True, description="per-request 资源管理器（含正确 app_code / access_token）"
+    )
 
     IMAGE_FILE_PATTERN: ClassVar[re.Pattern] = re.compile(r"^\!\[.*\]\((http[^)]+/([^/]+?)\))")
     TOOL_EXECUTION_INTERVAL: ClassVar[int] = 10
@@ -93,6 +98,9 @@ class ChatCompletionAgent(BaseModel):
         self.chat_model = builder.build_chat_model()
         self.non_thinking_llm = builder.build_non_thinking_llm()
         self.skills = builder.build_skills()
+        # 先构建 executor_info，供 build_tools / construct_mcp 使用同一凭证源
+        self.executor_info = builder.build_executor_info()
+        self.resource_manager = ctx.resource_manager
         self.tools = builder.build_tools()
         self.mcp_fetch_failures = builder.mcp_fetch_failures
         self.knowledge_bases = builder.build_knowledge_bases()
@@ -100,7 +108,6 @@ class ChatCompletionAgent(BaseModel):
         self.chat_history = builder.build_chat_history(ctx.session_context_data)
         self.agent_options = builder.build_agent_options()
         self.agent_prompt = builder.build_agent_prompt()
-        self.executor_info = builder.build_executor_info()
         self.checkpointer = builder.build_checkpointer()
         self.role_prompt = builder.get_role_prompt()
         self.callbacks = chat.callbacks
@@ -277,6 +284,7 @@ class ChatCompletionAgent(BaseModel):
             executor_info=self.executor_info,
             execute_kwargs=execute_kwargs,
             checkpointer=self.checkpointer if self.checkpointer else MemorySaver(),
+            resource_manager=self.resource_manager,
         )
 
     def _chat_history_to_langchain_messages(self, chat_history: list[ChatPrompt]) -> list[BaseMessage]:
@@ -385,6 +393,7 @@ class ChatAgentBuilder:
         self.ctx = ctx
         self._specific_resources: list[dict] = []
         self._mcp_fetch_failures: list[dict] = []
+        self._executor_info: dict | None = None
         # 装配前先从最后一条 user 消息提取 specific_resources，供 build_tools / build_knowledge_bases 过滤
         self._handle_last_human_message(ctx.session_context_data)
 
@@ -418,6 +427,9 @@ class ChatAgentBuilder:
 
         if chat.auth_headers:
             kwargs["auth_headers"] = chat.auth_headers
+
+        if chat.default_headers:
+            kwargs["default_headers"] = chat.default_headers
 
         return ChatModel.get_setup_instance(**kwargs)
 
@@ -485,7 +497,12 @@ class ChatAgentBuilder:
             mcp_server_config = {each: config.mcp_server_config.get(each) for each in specific_mcps}
         else:
             mcp_server_config = config.mcp_server_config
-        mcp_result = make_mcp_tools(mcp_server_config, config.agent_options, username=self.ctx.username)
+        mcp_result = self.ctx.resource_manager.construct_mcp(
+            mcp_config=mcp_server_config,
+            agent_options=config.agent_options,
+            username=self.ctx.username,
+            executor_info=self._executor_info,
+        )
         self._mcp_fetch_failures = [f.model_dump() for f in mcp_result.fetch_failures]
         logger.info(f"ChatAgentBuilder: mcp_server_config->[{mcp_server_config}]")
         specific_tools = [each.get("code") for each in self._specific_resources if each.get("type") == "tool"]
@@ -509,19 +526,25 @@ class ChatAgentBuilder:
         return self.ctx.agent_config.agent_prompt
 
     def build_executor_info(self) -> dict:
-        """构建执行用户信息"""
+        """构建执行用户信息，包含 access_token / app_code / app_secret 用于沙箱认证和 MCP 调用"""
         info = {"executor": self.ctx.username}
-
-        if self.ctx.username:
-            try:
-                from bkoauth import get_access_token_by_user
-
-                access_token = get_access_token_by_user(self.ctx.username).access_token
-                if access_token:
-                    info["access_token"] = access_token
-            except Exception as e:
-                logger.error(f"Failed to get access token: {e}")
-
+        access_token = self.ctx.resource_manager.resolve_access_token(self.ctx.username)
+        if access_token:
+            info["access_token"] = access_token
+        # 将 resource_manager 的 app_code/app_secret 传入 executor_info，
+        # 用于 PaaS Sandbox API 的应用态认证（平台测试页进程是平台凭证）
+        if self.ctx.resource_manager.app_code:
+            info["app_code"] = self.ctx.resource_manager.app_code
+        if self.ctx.resource_manager.app_secret:
+            info["app_secret"] = self.ctx.resource_manager.app_secret
+        logger.info(
+            f"[credential] build_executor_info: username={self.ctx.username}, "
+            f"access_token={'***' if access_token else 'empty'}, "
+            f"app_code={info.get('app_code', 'empty')}, "
+            f"has_app_secret={bool(info.get('app_secret'))}, "
+            f"rm_type={type(self.ctx.resource_manager).__name__}"
+        )
+        self._executor_info = info
         return info
 
     def build_checkpointer(self) -> BaseCheckpointSaver:
