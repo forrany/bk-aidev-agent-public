@@ -93,6 +93,10 @@ def handle_flow_custom_event(
     """
     value = chunk_json.get("value") or {}
 
+    # 适配数组格式：value 为 list 时取第一个元素
+    if isinstance(value, list):
+        value = value[0] if value else {}
+
     if event_name == CustomMessageType.FLOW_AGENT_START.value:
         _on_flow_start(value, llm_chunk, rabbitmq_client)
     elif event_name == CustomMessageType.FLOW_AGENT_RESULT.value:

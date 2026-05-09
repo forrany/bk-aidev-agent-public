@@ -201,7 +201,7 @@ class FlowAgentCompletionAgent(BaseModel):
             if not self.task_id:
                 start_event = self._make_custom_event(
                     name=CustomMessageType.FLOW_AGENT_START.value,
-                    value={"task_id": str(task_id)},
+                    value=[{"task_id": str(task_id)}],
                 )
                 self._dispatch_event(start_event)
                 yield encoder.encode(start_event)
@@ -209,7 +209,7 @@ class FlowAgentCompletionAgent(BaseModel):
             elif self.resume_from_node:
                 resumed_event = self._make_custom_event(
                     name=CustomMessageType.FLOW_AGENT_RESTART.value,
-                    value={"task_id": str(task_id), "action": self.resume_from_node},
+                    value=[{"task_id": str(task_id), "action": self.resume_from_node}],
                 )
                 self._dispatch_event(resumed_event)
                 yield encoder.encode(resumed_event)
@@ -319,7 +319,7 @@ class FlowAgentCompletionAgent(BaseModel):
 
             result_event = self._make_custom_event(
                 name=CustomMessageType.FLOW_AGENT_RESULT.value,
-                value=task_info,
+                value=[task_info],
             )
             self._dispatch_event(result_event)
             yield encoder.encode(result_event)
@@ -349,7 +349,7 @@ class FlowAgentCompletionAgent(BaseModel):
 
                 end_event = self._make_custom_event(
                     name=CustomMessageType.FLOW_AGENT_END.value,
-                    value=end_value,
+                    value=[end_value],
                 )
                 self._dispatch_event(end_event)
                 yield encoder.encode(end_event)
@@ -473,7 +473,7 @@ class FlowAgentCompletionAgent(BaseModel):
 
         revoke_event = self._make_custom_event(
             name=CustomMessageType.FLOW_AGENT_RESULT.value,
-            value=revoke_info,
+            value=[revoke_info],
         )
         self._dispatch_event(revoke_event)
         yield encoder.encode(revoke_event)

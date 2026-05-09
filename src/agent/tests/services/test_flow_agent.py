@@ -122,21 +122,21 @@ class TestFlowAgentMainFlow:
         # 1) 第一个事件必须是 RUN_STARTED
         assert events[0]["type"] == EventType.RUN_STARTED
 
-        # 2) 紧跟 flow_agent_start，携带 task_id
+        # 2) 紧跟 flow_agent_start，携带 task_id（数组格式）
         start_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_START.value)
         assert len(start_events) == 1
-        assert start_events[0]["value"]["task_id"] == "99999"
+        assert start_events[0]["value"][0]["task_id"] == "99999"
 
         # 3) 3 次轮询产生 3 个 flow_agent_result（RUNNING, RUNNING, FINISHED）
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
         assert len(result_events) == 3
 
-        # 4) flow_agent_end 携带 task_outputs，无 error
+        # 4) flow_agent_end 携带 task_outputs，无 error（数组格式）
         end_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_END.value)
         assert len(end_events) == 1
-        assert end_events[0]["value"]["task_id"] == "99999"
-        assert end_events[0]["value"]["task_outputs"] == [{"key": "output", "value": "ok"}]
-        assert "error" not in end_events[0]["value"]
+        assert end_events[0]["value"][0]["task_id"] == "99999"
+        assert end_events[0]["value"][0]["task_outputs"] == [{"key": "output", "value": "ok"}]
+        assert "error" not in end_events[0]["value"][0]
 
         # 5) 最后一个事件是 RUN_FINISHED
         assert events[-1]["type"] == EventType.RUN_FINISHED
@@ -163,8 +163,8 @@ class TestFlowAgentMainFlow:
 
         end_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_END.value)
         assert len(end_events) == 1
-        assert end_events[0]["value"]["error"] is True
-        assert end_events[0]["value"]["state"] == "FAILED"
+        assert end_events[0]["value"][0]["error"] is True
+        assert end_events[0]["value"][0]["state"] == "FAILED"
 
         # 仍然有完整的 RUN_STARTED → RUN_FINISHED 事件对
         assert events[0]["type"] == EventType.RUN_STARTED
@@ -262,7 +262,7 @@ class TestFlowAgentStop:
 
         # 最后一个 flow_agent_result 应是 revoke 状态（手动构造）
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
-        assert result_events[-1]["value"]["task_state"] == "REVOKED"
+        assert result_events[-1]["value"][0]["task_state"] == "REVOKED"
 
         # 任务已启动后取消 → RUN_FINISHED(runId="cancelled")
         finished_events = _find_events_by_type(events, EventType.RUN_FINISHED)
@@ -314,8 +314,8 @@ class TestFlowAgentStop:
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
         # 最后一个 flow_agent_result 应该是 revoke 状态
         revoke_event = result_events[-1]
-        # value 是 dict，直接访问
-        revoke_value = revoke_event["value"]
+        # value 是 list，取第一个元素
+        revoke_value = revoke_event["value"][0]
         assert revoke_value["task_state"] == "REVOKED"
 
         # nodes 是 dict，RUNNING 节点手动改为 REVOKED
@@ -476,8 +476,8 @@ class TestFlowAgentRetrySkip:
             # 2) 发送 flow_agent_restart，携带 task_id 和 action
             resumed_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESTART.value)
             assert len(resumed_events) == 1
-            assert resumed_events[0]["value"]["task_id"] == "existing_task_001"
-            assert resumed_events[0]["value"]["action"] == action
+            assert resumed_events[0]["value"][0]["task_id"] == "existing_task_001"
+            assert resumed_events[0]["value"][0]["action"] == action
 
             # 3) 正常轮询产生 flow_agent_result 事件
             result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
@@ -486,8 +486,8 @@ class TestFlowAgentRetrySkip:
             # 4) flow_agent_end 正常
             end_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_END.value)
             assert len(end_events) == 1
-            assert end_events[0]["value"]["task_id"] == "existing_task_001"
-            assert "error" not in end_events[0]["value"]
+            assert end_events[0]["value"][0]["task_id"] == "existing_task_001"
+            assert "error" not in end_events[0]["value"][0]
 
             # 5) 完整事件序列
             assert events[0]["type"] == EventType.RUN_STARTED
@@ -548,8 +548,8 @@ class TestFlowAgentRetrySkip:
 
         end_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_END.value)
         assert len(end_events) == 1
-        assert end_events[0]["value"]["error"] is True
-        assert end_events[0]["value"]["state"] == "FAILED"
+        assert end_events[0]["value"][0]["error"] is True
+        assert end_events[0]["value"][0]["state"] == "FAILED"
         assert events[-1]["type"] == EventType.RUN_FINISHED
 
     def test_cancel_after_resume_emits_revoke(self):
@@ -596,11 +596,11 @@ class TestFlowAgentRetrySkip:
         # 应有 flow_agent_restart 事件
         resumed_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESTART.value)
         assert len(resumed_events) == 1
-        assert resumed_events[0]["value"]["action"] == "retry"
+        assert resumed_events[0]["value"][0]["action"] == "retry"
 
         # 最后一个 flow_agent_result 应是 REVOKED
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
-        revoke_value = result_events[-1]["value"]
+        revoke_value = result_events[-1]["value"][0]
         assert revoke_value["task_state"] == "REVOKED"
 
         # RUNNING 节点被改为 REVOKED

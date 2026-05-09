@@ -93,26 +93,26 @@ class TestFlowAgentStrategyExecute:
         mock_inst.execute.return_value = iter(
             [
                 _sse({"type": "RUN_STARTED", "run_id": "r1", "thread_id": "t1"}),
-                _sse({"type": "CUSTOM", "name": "flow_agent_start", "value": {"task_id": "999"}}),
+                _sse({"type": "CUSTOM", "name": "flow_agent_start", "value": [{"task_id": "999"}]}),
                 _sse(
                     {
                         "type": "CUSTOM",
                         "name": "flow_agent_result",
-                        "value": {
-                            "task_state": "RUNNING",
-                            "nodes": {"n1": {"name": "步骤1", "state": "RUNNING", "elapsed_time": 5}},
-                            "statistics": {"total": 1, "state_counts": {"RUNNING": 1}},
-                        },
+            "value": [{
+                "task_state": "RUNNING",
+                "nodes": {"n1": {"name": "步骤1", "state": "RUNNING", "elapsed_time": 5}},
+                "statistics": {"total": 1, "state_counts": {"RUNNING": 1}},
+            }],
                     }
                 ),
                 _sse(
                     {
                         "type": "CUSTOM",
                         "name": "flow_agent_end",
-                        "value": {
-                            "task_id": "999",
-                            "task_outputs": [{"key": "out", "value": "done"}],
-                        },
+            "value": [{
+                "task_id": "999",
+                "task_outputs": [{"key": "out", "value": "done"}],
+            }],
                     }
                 ),
                 _sse({"type": "RUN_FINISHED", "run_id": "r1", "thread_id": "t1"}),
@@ -191,32 +191,32 @@ class TestConsumeFlowStream:
         """
         events = [
             {"type": "RUN_STARTED", "run_id": "r1", "thread_id": "t1"},
-            {"type": "CUSTOM", "name": "flow_agent_start", "value": {"task_id": "123"}},
+            {"type": "CUSTOM", "name": "flow_agent_start", "value": [{"task_id": "123"}]},
             {
                 "type": "CUSTOM",
                 "name": "flow_agent_result",
-                "value": {
+                "value": [{
                     "task_state": "RUNNING",
                     "nodes": {"n1": {"name": "A", "state": "FINISHED", "elapsed_time": 10}},
                     "statistics": {"total": 1, "state_counts": {"FINISHED": 1}},
-                },
+                }],
             },
             {
                 "type": "CUSTOM",
                 "name": "flow_agent_result",
-                "value": {
+                "value": [{
                     "task_state": "RUNNING",
                     "nodes": {},
                     "statistics": {},
-                },
+                }],
             },
             {
                 "type": "CUSTOM",
                 "name": "flow_agent_end",
-                "value": {
+                "value": [{
                     "task_id": "123",
                     "task_outputs": [{"key": "out", "value": "ok"}],
-                },
+                }],
             },
             {"type": "RUN_FINISHED", "run_id": "r1", "thread_id": "t1"},
         ]
@@ -255,8 +255,8 @@ class TestConsumeFlowStream:
 
         def gen():
             yield "data: {broken\n"
-            yield _sse({"type": "CUSTOM", "name": "flow_agent_start", "value": {"task_id": "1"}})
-            yield _sse({"type": "CUSTOM", "name": "flow_agent_end", "value": {"task_id": "1", "task_outputs": {}}})
+            yield _sse({"type": "CUSTOM", "name": "flow_agent_start", "value": [{"task_id": "1"}]})
+            yield _sse({"type": "CUSTOM", "name": "flow_agent_end", "value": [{"task_id": "1", "task_outputs": {}}]})
             yield _sse({"type": "RUN_FINISHED", "run_id": "r1", "thread_id": "t1"})
 
         consume_flow_stream(gen(), "s_1_1000", 1000.0, mock_rabbitmq)
@@ -276,7 +276,7 @@ class TestHandleFlowCustomEvent:
     def test_start_saves_task_id(self, mock_rabbitmq):
         """flow_agent_start: 缓存 task_id，不写 think_content，content 为空"""
         chunk = LlmChunkMsg(stream_id="s_1_1000")
-        handle_flow_custom_event("flow_agent_start", {"value": {"task_id": "42"}}, chunk, mock_rabbitmq)
+    handle_flow_custom_event("flow_agent_start", {"value": [{"task_id": "42"}]}, chunk, mock_rabbitmq)
 
         assert chunk._flow_task_id == "42"
         assert chunk._flow_nodes_initialized is False
@@ -290,7 +290,7 @@ class TestHandleFlowCustomEvent:
         handle_flow_custom_event(
             "flow_agent_result",
             {
-                "value": {
+                "value": [{
                     "task_state": "RUNNING",
                     "nodes": {
                         "n1": {"name": "数据清洗", "state": "FINISHED", "elapsed_time": 90},
@@ -298,7 +298,7 @@ class TestHandleFlowCustomEvent:
                         "n3": {"name": "汇总", "state": "PENDING", "elapsed_time": 0},
                     },
                     "statistics": {"total": 3, "state_counts": {"FINISHED": 1, "RUNNING": 1, "PENDING": 1}},
-                }
+                }]
             },
             chunk,
             mock_rabbitmq,
@@ -335,10 +335,10 @@ class TestHandleFlowCustomEvent:
         handle_flow_custom_event(
             "flow_agent_end",
             {
-                "value": {
+                "value": [{
                     "task_id": "1",
                     "task_outputs": [{"key": "result", "value": "done"}],
-                }
+                }]
             },
             chunk,
             mock_rabbitmq,
@@ -359,11 +359,11 @@ class TestHandleFlowCustomEvent:
         handle_flow_custom_event(
             "flow_agent_end",
             {
-                "value": {
+                "value": [{
                     "task_id": "2",
                     "error": True,
                     "state": "FAILED",
-                }
+                }]
             },
             chunk,
             mock_rabbitmq,
