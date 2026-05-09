@@ -1062,6 +1062,89 @@ def _extract_script_argument(args: list[str]) -> str | None:
     return None
 
 
+# ========== 输出脱敏 ==========
+
+_REDACTED_PLACEHOLDER = "__BKAI_AGENT_REDACTED__"
+
+
+def redact_output(text: str, sensitive_values: list[str]) -> str:
+    """对输出文本进行脱敏处理，将敏感值替换为占位符。
+
+    对输入文本执行精确字符串匹配，将所有出现的敏感值替换为
+    `__BKAI_AGENT_REDACTED__`。仅执行精确匹配，不使用正则表达式。
+
+    Args:
+        text: 待脱敏的输出文本
+        sensitive_values: 需要脱敏的敏感值列表，列表中的每个值
+            都会在文本中被精确匹配并替换
+
+    Returns:
+        脱敏后的文本，敏感值已被替换为 `__BKAI_AGENT_REDACTED__`
+
+    Example:
+        >>> redact_output("token is abc123", ["abc123"])
+        'token is __BKAI_AGENT_REDACTED__'
+        >>> redact_output("no secrets here", ["secret_token"])
+        'no secrets here'
+    """
+    if not sensitive_values:
+        return text
+
+    result = text
+    for value in sensitive_values:
+        if value and value in result:
+            result = result.replace(value, _REDACTED_PLACEHOLDER)
+    return result
+
+
+# ========== 路径验证 ==========
+
+
+def validate_path(path: str, *, allowed_prefixes: list[str] | None = None) -> str:
+    r"""验证并规范化文件路径以确保安全。
+
+    通过防止目录遍历攻击和强制一致格式来确保路径安全可用。
+    所有路径都会被规范化为使用正斜杠并以前导斜杠开头。
+
+    此函数设计用于虚拟文件系统路径，会拒绝 Windows 绝对路径
+    （如 C:/...、F:/...）以保持一致性并防止路径格式歧义。
+
+    Args:
+        path: 要验证和规范化的路径
+        allowed_prefixes: 可选的允许路径前缀列表。如果提供，
+            规范化后的路径必须以其中一个前缀开头
+
+    Returns:
+        规范化的标准路径，避免 a/../../b 这种情况出现
+
+    Raises:
+        ValueError: 当路径包含遍历序列（`..`）、
+            是 Windows 绝对路径（如 C:/...）、或不以允许的前缀开头时抛出
+    """
+
+    # 拒绝 Windows 绝对路径（如 C:\...、D:/...）
+    if re.match(r"^[a-zA-Z]:", path):
+        msg = (
+            f"Windows absolute paths are not supported: {path}. "
+            "Please use virtual paths starting with / (e.g., /workspace/file.txt)"
+        )
+        raise ValueError(msg)
+
+    normalized = os.path.normpath(path)
+    normalized = normalized.replace("\\", "/")
+
+    # 先规范化再检查路径遍历，避免 a/../b 被误拒（normpath 后为安全的 b）
+    if ".." in normalized.split("/"):
+        msg = f"Path traversal not allowed: {path}"
+        raise ValueError(msg)
+
+    if allowed_prefixes is not None and not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
+        msg = f"Path must start with one of {allowed_prefixes}: {path}"
+        raise ValueError(msg)
+
+    return normalized
+
+
 # ========== 公开接口 ==========
 
 
@@ -1199,5 +1282,7 @@ __all__ = [
     "DEFAULT_ALLOWED_SCRIPT_DIRS",
     "validate_command",
     "is_command_allowed",
+    "validate_path",
+    "redact_output",
     "_normalize_command_name",
 ]

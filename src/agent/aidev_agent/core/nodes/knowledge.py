@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any, NotRequired, Optional, TypedDict, cast
 
 from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -32,7 +32,7 @@ from aidev_agent.core.ag_ui.types import ActivityMessage, CustomMessageType
 from aidev_agent.enums import ActivityType
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag, KnowledgeRagRetrieveResult
-from aidev_agent.services.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,7 @@ class BaseKnowledgeNode:
         self,
         llm: BaseChatModel,
         agent_options: AgentOptions,
+        chat_history: list[BaseMessage],
         kb_retriever: BkRetriever | None = None,
     ):
         """初始化知识库检索节点。
@@ -108,6 +109,7 @@ class BaseKnowledgeNode:
         """
         self.llm = llm
         self.agent_options = agent_options
+        self.chat_history = chat_history
         self.kb_retriever = kb_retriever or BkRetriever()
         self.retriever = KnowledgeRag(llm, self.kb_retriever)
 
@@ -166,7 +168,7 @@ class AgentKnowledgeNode(BaseKnowledgeNode):
         )
 
         query = self.get_query(state)
-        ret = self.retriever.retrieve(query, self.agent_options, input=query)
+        ret = self.retriever.retrieve(query, self.agent_options, self.chat_history, input=query)
 
         duration = round(time.time() - t1, 4) * 1000
         result = self.process_result(ret, config, store, duration)
@@ -255,7 +257,7 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
         其他：
             with_scalar_data 参数应该由 agent_options.KnowledgebaseSettings.with_scalar_data 进行调整
         """
-        super().__init__(llm, agent_options, kb_retriever)
+        super().__init__(llm, agent_options, [], kb_retriever)
         self.score_threshold = score_threshold
         self.topk = topk
 
@@ -276,7 +278,7 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
             输出状态
         """
         query = self.get_query(state)
-        ret = self.retriever.retrieve(query, self.agent_options, input=query)
+        ret = self.retriever.retrieve(query, self.agent_options, self.chat_history, input=query)
         # 获取所有 embedding 召回的资源（带细粒度分数）
         knowledge_resources_emb_recalled = ret.get("knowledge_resources_emb_recalled", [])
 
@@ -293,6 +295,7 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
 def make_knowledge_node(
     llm: BaseChatModel,
     agent_options: AgentOptions,
+    chat_history: Optional[list] = None,
 ):
     """构建知识库检索节点。
     Args:
@@ -309,4 +312,5 @@ def make_knowledge_node(
     return AgentKnowledgeNode(
         llm=llm,
         agent_options=agent_options,
+        chat_history=chat_history,
     )

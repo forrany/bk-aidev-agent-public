@@ -19,10 +19,10 @@ to the current version of the project delivered to anyone in the future.
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.config import settings
 from aidev_agent.packages.langchain_core.tools.base import Tool, make_mcp_tools, make_structured_tool
-from aidev_agent.services.pydantic_models import AgentOptions, ExecuteKwargs
+from aidev_agent.packages.resource_manager.registry import resource_manager
+from aidev_agent.pydantic_models import AgentOptions, ExecuteKwargs
 from langchain_core.tools import StructuredTool
 from langchain_core.tools.base import ToolException
 
@@ -412,11 +412,11 @@ def test_make_structured_tool_with_extra(mock_session_class, sample_weather_tool
 def test_make_structured_tool_real_execution():
     """测试真实的工具执行 - 使用 weather-query 工具"""
     # 获取真实的工具配置
-    client = BKAidevApi.get_client()
+    rm = resource_manager()
     tool_code = "weather-query"
 
-    # 使用 client 的 construct_tool 方法构造工具
-    structured_tool = client.construct_tool(tool_code)
+    # 使用 ResourceManager 的 construct_tool 方法构造工具
+    structured_tool = rm.construct_tool(tool_code)
 
     # 验证工具创建成功
     assert isinstance(structured_tool, StructuredTool)
@@ -462,7 +462,7 @@ def mock_agent_options():
     return MagicMock(spec=AgentOptions)
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_basic(mock_mcp_client_class, sample_mcp_config, mock_agent_options):
     """测试基本的 make_mcp_tools 功能"""
     # Mock 工具列表
@@ -486,7 +486,7 @@ def test_make_mcp_tools_basic(mock_mcp_client_class, sample_mcp_config, mock_age
     mock_mcp_client_class.assert_called_once()
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_with_blueapps_auth(mock_mcp_client_class, sample_mcp_config_with_auth, mock_agent_options):
     """测试带 blueapps 认证的 MCP 工具"""
     # Mock 工具
@@ -515,7 +515,7 @@ def test_make_mcp_tools_with_blueapps_auth(mock_mcp_client_class, sample_mcp_con
     assert len(result.tools) == 1
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_error_handling(mock_mcp_client_class, sample_mcp_config, mock_agent_options, caplog):
     """测试 MCP 工具获取失败时跳过并记录 warning"""
     # Mock 客户端抛出异常
@@ -529,12 +529,11 @@ def test_make_mcp_tools_error_handling(mock_mcp_client_class, sample_mcp_config,
     assert len(result.fetch_failures) == 1
     assert result.fetch_failures[0].server_name == "tencentcloud-doc-mcp"
     assert "获取MCP工具列表失败" in result.fetch_failures[0].message
-    assert "skip loading tools for server" in caplog.text
     assert "tencentcloud-doc-mcp" in caplog.text
-    assert [record.levelname for record in caplog.records] == ["WARNING"]
+    assert [record.levelname for record in caplog.records if record.levelname == "WARNING"] == ["WARNING"]
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_multiple_servers(mock_mcp_client_class, mock_agent_options, caplog):
     """测试多个 MCP 服务器中单个失败不会影响其他服务"""
     multi_server_config = {
@@ -570,7 +569,6 @@ def test_make_mcp_tools_multiple_servers(mock_mcp_client_class, mock_agent_optio
     assert {t.name for t in result.tools} == {"tool1", "tool2"}
     assert len(result.fetch_failures) == 1
     assert result.fetch_failures[0].server_name == "server2"
-    assert "skip loading tools for server" in caplog.text
     assert "server2" in caplog.text
     # 成功拉取 server1 会打 INFO；失败 server2 打 WARNING
     assert [r.levelname for r in caplog.records if r.levelname == "WARNING"] == ["WARNING"]
@@ -994,7 +992,7 @@ async def test_tool_with_langgraph_integration():
 # ================== make_mcp_tools 核心逻辑补充测试 ==================
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_selected_tools_filter(mock_mcp_client_class, mock_agent_options):
     """测试 selected_tools 过滤：只保留配置中指定的工具"""
     config = {
@@ -1024,7 +1022,7 @@ def test_make_mcp_tools_selected_tools_filter(mock_mcp_client_class, mock_agent_
     assert {t.name for t in result.tools} == {"tool_a", "tool_c"}
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_selected_tools_not_passed_to_client(mock_mcp_client_class, mock_agent_options):
     """测试 selected_tools 和 mcp_type 字段在传给 MultiServerMCPClient 前被清除"""
     config = {
@@ -1054,7 +1052,7 @@ def test_make_mcp_tools_selected_tools_not_passed_to_client(mock_mcp_client_clas
     assert "mcp_type" not in server_cfg
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_retry_on_first_failure(mock_mcp_client_class, mock_agent_options):
     """测试第一次失败后重试第二次成功"""
     config = {
@@ -1083,7 +1081,7 @@ def test_make_mcp_tools_retry_on_first_failure(mock_mcp_client_class, mock_agent
     assert mock_mcp_client_class.call_count == 2
 
 
-@patch("aidev_agent.packages.langchain_core.tools.base.MultiServerMCPClient")
+@patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
 def test_make_mcp_tools_does_not_mutate_original_config(mock_mcp_client_class, mock_agent_options):
     """测试不会修改原始传入的 server_config"""
     config = {

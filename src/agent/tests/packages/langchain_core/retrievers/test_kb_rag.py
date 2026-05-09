@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.enums import FineGrainedScoreType
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
-from aidev_agent.services.pydantic_models import (
+from aidev_agent.pydantic_models import (
     AgentOptions,
     IntentRecognition,
     KnowledgebaseSettings,
@@ -463,3 +463,133 @@ class TestKnowledgeRag:
 
         with pytest.raises(RuntimeError, match="请至少选择一种召回方式"):
             rag.retrieve(query="test query", agent_options=agent_options)
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")
+    def test_latest_query_classification(self, mock_invoke_decorator, mock_dispatch):
+        """测试 latest_query_classification 方法 - 返回 new"""
+        mock_llm = MagicMock()
+        mock_invoke_func = MagicMock(return_value=create_mock_llm_response("<<<<<new>>>>>"))
+        mock_invoke_decorator.return_value = mock_invoke_func
+
+        rag = KnowledgeRag(llm=mock_llm)
+        agent_options = create_agent_options()
+
+        result = rag.latest_query_classification(
+            agent_options=agent_options,
+            chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
+            query="你好",
+            llm=mock_llm,
+        )
+
+        assert result == "new"
+        mock_invoke_decorator.assert_called_once()
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")
+    def test_latest_query_classification_continue(self, mock_invoke_decorator, mock_dispatch):
+        """测试 latest_query_classification 方法 - 返回 continue"""
+        mock_llm = MagicMock()
+        mock_invoke_func = MagicMock(return_value=create_mock_llm_response("<<<<<continue>>>>>"))
+        mock_invoke_decorator.return_value = mock_invoke_func
+
+        rag = KnowledgeRag(llm=mock_llm)
+        agent_options = create_agent_options()
+
+        result = rag.latest_query_classification(
+            agent_options=agent_options,
+            chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
+            query="那绿屏怎么解决",
+            llm=mock_llm,
+        )
+
+        assert result == "continue"
+        mock_invoke_decorator.assert_called_once()
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")
+    def test_latest_query_classification_finish(self, mock_invoke_decorator, mock_dispatch):
+        """测试 latest_query_classification 方法 - 返回 finish"""
+        mock_llm = MagicMock()
+        mock_invoke_func = MagicMock(return_value=create_mock_llm_response("<<<<<finish>>>>>"))
+        mock_invoke_decorator.return_value = mock_invoke_func
+
+        rag = KnowledgeRag(llm=mock_llm)
+        agent_options = create_agent_options()
+
+        result = rag.latest_query_classification(
+            agent_options=agent_options,
+            chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
+            query="谢谢",
+            llm=mock_llm,
+        )
+
+        assert result == "finish"
+        mock_invoke_decorator.assert_called_once()
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")
+    def test_query_cls_with_resp_or_rewrite(self, mock_invoke_decorator, mock_dispatch):
+        """测试 query_cls_with_resp_or_rewrite 方法 - 返回 new"""
+        mock_llm = MagicMock()
+        mock_invoke_func = MagicMock(return_value=create_mock_llm_response("<<<<<new>>>>>"))
+        mock_invoke_decorator.return_value = mock_invoke_func
+
+        rag = KnowledgeRag(llm=mock_llm)
+        agent_options = create_agent_options()
+
+        result = rag.query_cls_with_resp_or_rewrite(
+            agent_options=agent_options,
+            chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
+            query="你好",
+            llm=mock_llm,
+        )
+
+        assert result == {"query_cls": "new"}
+        mock_invoke_decorator.assert_called_once()
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")
+    def test_query_cls_with_resp_or_rewrite_continue(self, mock_invoke_decorator, mock_dispatch):
+        """测试 query_cls_with_resp_or_rewrite 方法 - 返回 continue"""
+        mock_llm = MagicMock()
+        mock_invoke_func = MagicMock(
+            return_value=create_mock_llm_response("<<<<<continue>>>>>$REWRITTEN_QUERY: 云桌面绿屏解决方法")
+        )
+        mock_invoke_decorator.return_value = mock_invoke_func
+
+        rag = KnowledgeRag(llm=mock_llm)
+        agent_options = create_agent_options()
+
+        result = rag.query_cls_with_resp_or_rewrite(
+            agent_options=agent_options,
+            chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
+            query="那绿屏怎么解决",
+            llm=mock_llm,
+        )
+
+        assert result == {"query_cls": "continue", "rewritten_query": "云桌面绿屏解决方法"}
+        mock_invoke_decorator.assert_called_once()
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")
+    def test_query_cls_with_resp_or_rewrite_finish(self, mock_invoke_decorator, mock_dispatch):
+        """测试 query_cls_with_resp_or_rewrite 方法 - 返回 finish"""
+        mock_llm = MagicMock()
+        mock_invoke_func = MagicMock(
+            return_value=create_mock_llm_response("<<<<<finish>>>>>$RESPONSE: 不客气！很高兴能帮到您。")
+        )
+        mock_invoke_decorator.return_value = mock_invoke_func
+
+        rag = KnowledgeRag(llm=mock_llm)
+        agent_options = create_agent_options()
+
+        result = rag.query_cls_with_resp_or_rewrite(
+            agent_options=agent_options,
+            chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
+            query="谢谢",
+            llm=mock_llm,
+        )
+
+        assert result == {"query_cls": "finish", "response": "不客气！很高兴能帮到您。"}
+        mock_invoke_decorator.assert_called_once()

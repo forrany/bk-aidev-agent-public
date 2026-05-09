@@ -141,12 +141,12 @@ def verify_get_values_result(result):
 class TestChatCompletionAgentExecuteByAgentWrapper:
     """测试 ChatCompletionAgentExecuteByAgentWrapper 包装器"""
 
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.get_agent_config_info")
-    def test_get_values_with_request_local(self, mock_get_agent_config_info, tracer_and_config):
+    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.AgentConfigFetcher")
+    def test_get_values_with_request_local(self, mock_fetcher_class, tracer_and_config):
         """测试 get_values 从 request_local 获取 otel_info"""
         tracer, config, _ = tracer_and_config
 
-        # 模拟 get_agent_config_info 返回值
+        # 模拟 AgentConfigFetcher.get_info() 返回值
         mock_agent_info = {
             "agent_id": "test-agent-123",
             "agent_code": "test_agent",
@@ -156,7 +156,7 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
             "updated_by": "admin",
             "otel_info": {"should_be_removed": True},  # 这个字段应该被移除
         }
-        mock_get_agent_config_info.return_value = mock_agent_info
+        mock_fetcher_class.get_info.return_value = mock_agent_info
 
         # 设置 request_local.otel_info
         request_local.otel_info = {
@@ -193,12 +193,12 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
         # 清理
         delattr(request_local, "otel_info")
 
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.get_agent_config_info")
-    def test_get_values_with_execute_kwargs_param(self, mock_get_agent_config_info, tracer_and_config):
+    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.AgentConfigFetcher")
+    def test_get_values_with_execute_kwargs_param(self, mock_fetcher_class, tracer_and_config):
         """测试 get_values 从 execute_kwargs 参数获取"""
         tracer, config, _ = tracer_and_config
 
-        # 模拟 get_agent_config_info 返回值
+        # 模拟 AgentConfigFetcher.get_info() 返回值
         mock_agent_info = {
             "agent_id": "test-agent-456",
             "agent_code": "test_agent_2",
@@ -208,7 +208,7 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
             "updated_by": "admin",
             "otel_info": {"should_be_removed": True},  # 这个字段应该被移除
         }
-        mock_get_agent_config_info.return_value = mock_agent_info
+        mock_fetcher_class.get_info.return_value = mock_agent_info
 
         # 创建 ExecuteKwargs 对象
         execute_kwargs = ExecuteKwargs(
@@ -241,13 +241,13 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
         assert result["execute_kwargs"].caller_bk_biz_id == 200
         assert result["execute_kwargs"].caller_order_type == "ai_chat"
 
-    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.get_agent_config_info")
+    @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.AgentConfigFetcher")
     @patch("aidev_bkplugin.packages.opentelemetry.instrumentor.BkAidevAgentInjector")
-    def test_wrapper_call(self, mock_injector_class, mock_get_agent_config_info, tracer_and_config):
+    def test_wrapper_call(self, mock_injector_class, mock_fetcher_class, tracer_and_config):
         """测试包装器的完整调用流程"""
         tracer, config, _ = tracer_and_config
 
-        # 模拟 get_agent_config_info 返回值
+        # 模拟 AgentConfigFetcher.get_info() 返回值
         mock_agent_info = {
             "agent_id": "test-agent-789",
             "agent_code": "test_agent_3",
@@ -257,7 +257,7 @@ class TestChatCompletionAgentExecuteByAgentWrapper:
             "updated_by": "admin",
             "otel_info": {},
         }
-        mock_get_agent_config_info.return_value = mock_agent_info
+        mock_fetcher_class.get_info.return_value = mock_agent_info
 
         # 创建 mock injector 实例
         mock_injector = MagicMock()

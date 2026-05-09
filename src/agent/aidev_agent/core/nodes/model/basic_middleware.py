@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pytz
@@ -100,6 +100,26 @@ def get_beijing_now() -> str:
     utc_now = datetime.now(pytz.utc)
     beijing_now = utc_now.astimezone(pytz.timezone("Asia/Shanghai")).strftime("%Y年%m月%d日 %H时%M分%S秒")
     return beijing_now
+
+
+def beijing_to_timestamp(beijing_now):
+    """将北京时间字符串转换为时间戳"""
+    standard_format_str = (
+        beijing_now.replace(" ", "")
+        .replace("年", "-")
+        .replace("月", "-")
+        .replace("日", " ")
+        .replace("时", ":")
+        .replace("分", ":")
+        .replace("秒", "")
+    )
+    timestamp = int(
+        datetime.strptime(standard_format_str.strip(), "%Y-%m-%d %H:%M:%S")
+        .replace(tzinfo=timezone(timedelta(hours=8)))
+        .astimezone(timezone.utc)
+        .timestamp()
+    )
+    return timestamp
 
 
 def get_context_type_from_state(state: Dict[str, Any]) -> str:
@@ -282,6 +302,7 @@ class SpecialVariablesMiddleware:
 
         special_vars = {
             "beijing_now": get_beijing_now(),
+            "timestamp": beijing_to_timestamp(get_beijing_now()),
             "context_type": get_context_type_from_state(ctx.state),
             "context": ctx.state.get("knowledge_content"),
             "qa_context": ctx.state.get("knowledge_qa_content"),
@@ -301,6 +322,28 @@ class SpecialVariablesMiddleware:
                 "tool_names": ",".join([t.name for t in ctx.tools]),
             }
         ctx.variables = {**ctx.variables, **special_vars}
+        next()
+
+
+class SpecialVariablesPostMiddleware:
+    """在工具压缩后执行的变量渲染中间件，只重新渲染agent_scratchpad变量"""
+
+    def __init__(
+        self,
+        *,
+        use_structured_response: bool,
+    ):
+        self.use_structured_response = use_structured_response
+
+    def __call__(self, ctx: ProcessorContext, next: NextFunction) -> None:
+        tool_messages: List[BaseMessage] = ctx.metadata.get("tool_messages", [])
+        # 只重新渲染agent_scratchpad变量
+        if self.use_structured_response:
+            agent_scratchpad: Any = extract_tool_calls_from_messages(tool_messages)
+        else:
+            agent_scratchpad = tool_messages
+
+        ctx.variables["agent_scratchpad"] = agent_scratchpad
         next()
 
 

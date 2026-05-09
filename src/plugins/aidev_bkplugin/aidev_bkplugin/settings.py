@@ -6,9 +6,11 @@ import os
 INSTALLED_APPS = ("aidev_bkplugin",)
 
 # 智能体
-DEFAULT_NAME = "default"
-DEFAULT_AGENT = os.environ.get("DEFAULT_AGENT", "aidev_agent.services.common_agent.CommonQAAgent")
-DEFAULT_CONFIG_MANAGER = os.environ.get("DEFAULT_CONFIG_MANAGER", "aidev_agent.services.config_manager.AgentConfigManager")
+AIDEV_AGENT = os.environ.get("AIDEV_AGENT", "aidev_agent.services.common_agent.CommonQAAgent")
+# 自定义 ResourceManager 实现（继承 ``AgentResourceManager``），通过
+# ``resource_manager.replace_defaults(...)`` 注入到全局工厂；为空则使用 SDK 默认的
+# ``AgentResourceManager``。
+AIDEV_RESOURCE_MANAGER = os.environ.get("AIDEV_RESOURCE_MANAGER", "")
 
 # 客服渠道
 CHAT_GROUP_ENABLED = os.environ.get("CHAT_GROUP_ENABLED") == "1"

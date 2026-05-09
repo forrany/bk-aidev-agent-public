@@ -44,6 +44,12 @@ class CustomEventNames(str, Enum):
     OnToolNodeFinish = "on_tool_node_finish"
 
 
+class SessionPersistenceEventNames(str, Enum):
+    """会话回写用 CustomEvent.name；ChatModelEnd 默认不进入 SSE。"""
+
+    ChatModelEnd = "aidev_session_chat_model_end"
+
+
 State = dict[str, Any]
 
 
@@ -142,6 +148,7 @@ class CustomMessageType(Enum):
     FLOW_AGENT_START = "flow_agent_start"
     FLOW_AGENT_RESULT = "flow_agent_result"
     FLOW_AGENT_END = "flow_agent_end"
+    FLOW_AGENT_RESTART = "flow_agent_restart"
 
 
 class ExtendBaseMessage(BaseModel):

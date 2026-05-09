@@ -7,7 +7,6 @@ in reasoning_content field instead of standard tool_calls field.
 """
 
 import pytest
-
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 
@@ -194,9 +193,7 @@ class TestCreateChatResultReasoningContentFormat:
         message = result.generations[0].message
         print(message)
 
-        assert len(message.tool_calls) > 0, (
-            "After fix: tool_calls should be parsed from reasoning_content"
-        )
+        assert len(message.tool_calls) > 0, "After fix: tool_calls should be parsed from reasoning_content"
         tool_call = message.tool_calls[0]
         assert tool_call["name"] == "read_file"
         assert tool_call["args"]["file_path"] == "/app/scripts/fetch_logs.py"
@@ -218,9 +215,7 @@ class TestCreateChatResultReasoningContentFormat:
         result = chat_model._create_chat_result(kimi_25_response)
         message = result.generations[0].message
 
-        assert len(message.tool_calls) > 0, (
-            "tool_calls must be populated for ReAct routing to work correctly"
-        )
+        assert len(message.tool_calls) > 0, "tool_calls must be populated for ReAct routing to work correctly"
 
 
 class TestCreateChatResultResponseTypes:

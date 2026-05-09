@@ -21,7 +21,7 @@ import logging
 from typing import Any, Collection, Dict, Generator, Iterator, Optional
 
 import orjson
-from aidev_agent.services.pydantic_models import ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from aidev_agent.utils.local import request_local
 from langchain_core.messages import BaseMessage
 from opentelemetry import context as context_api
@@ -32,7 +32,7 @@ from opentelemetry.trace import Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from wrapt import wrap_function_wrapper
 
-from aidev_bkplugin.services.agent import get_agent_config_info
+from aidev_bkplugin.services.agent_config import AgentConfigFetcher
 
 from .callback_handler import BkAidevAgentCallbackHandler, BkAidevAgentInjector
 from .config import OTelConfig, default_config
@@ -78,12 +78,12 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
             tracer = self._otel_service.get_tracer(__name__)
         # 注入 Agent 启动的消息头
         wrap_function_wrapper(
-            module="aidev_agent.services.chat",
+            module="aidev_agent.services.agent.chat",
             name="ChatCompletionAgent._execute",
             wrapper=ChatCompletionAgentExecuteByAgentWrapper(tracer, self._otel_service_config),
         )
         wrap_function_wrapper(
-            module="aidev_agent.services.chat",
+            module="aidev_agent.services.agent.chat",
             name="ChatCompletionAgent._get_agent",
             wrapper=ChatCompletionAgentGetAgentWrapper(tracer, self._otel_service_config),
         )
@@ -120,8 +120,8 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
             bool: 是否成功取消插桩
         """
         self.stop_otel_service()
-        unwrap("aidev_agent.services.chat", "ChatCompletionAgent._execute")
-        unwrap("aidev_agent.services.chat", "ChatCompletionAgent._get_agent")
+        unwrap("aidev_agent.services.agent.chat", "ChatCompletionAgent._execute")
+        unwrap("aidev_agent.services.agent.chat", "ChatCompletionAgent._get_agent")
         unwrap("aidev_agent.core.nodes.knowledge", "AgentKnowledgeNode.__call__")
         try:
             unwrap(_E2B_BACKEND_MODULE, _E2B_ENSURE_SANDBOX)
@@ -327,7 +327,7 @@ class ChatCompletionAgentExecuteByAgentWrapper:
                 if hasattr(execute_kwargs, k) and getattr(execute_kwargs, k) is None:
                     setattr(execute_kwargs, k, v)
         # Agent 相关参数
-        agent_info = get_agent_config_info()  # get_agent_config_info 实现了缓存机制
+        agent_info = AgentConfigFetcher.get_info()
         agent_info.pop("otel_info", None)
         # trace 链路追踪的参数
         parent_trace_context = execute_kwargs.caller_trace_context
@@ -440,6 +440,7 @@ class ChatCompletionAgentGetAgentWrapper:
         agent, cfg = wrapped(*args, **kwargs)
         callbacks = cfg.setdefault("callbacks", [])
         execute_kwargs = kwargs.get("execute_kwargs") or ExecuteKwargs()
+        agent_info = AgentConfigFetcher.get_info()
         callback_handler = BkAidevAgentCallbackHandler(
             tracer=self.tracer,
             parent_trace_context=execute_kwargs.caller_trace_context,
@@ -447,6 +448,11 @@ class ChatCompletionAgentGetAgentWrapper:
             enable_traces=self.config.enable_traces,
             debug=self.config.debug,
             max_attribute_length=self.config.max_attribute_length,
+            agent_id=agent_info.get("agent_id"),
+            agent_code=agent_info.get("agent_code"),
+            agent_name=agent_info.get("agent_name"),
+            session_code=execute_kwargs.session_code,
+            caller_executor=execute_kwargs.caller_executor,
         )
         callbacks.append(callback_handler)
         return agent, cfg

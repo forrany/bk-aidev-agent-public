@@ -11,7 +11,7 @@ import pytest
 from aidev_agent.config import settings
 from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
 from aidev_agent.core.nodes.tool import ToolNodeSettings
-from aidev_agent.services.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool
@@ -651,14 +651,23 @@ class TestReActAgentBuilder:
 
         mock_backend_instance = MagicMock()
         MockBackendCls = MagicMock(return_value=mock_backend_instance)
+        MockBackendCls.__name__ = "MockBackend"
 
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", return_value=MagicMock()),
+            patch(
+                "aidev_agent.core.tools.runtime_tools.provider.RuntimeBackendResolver",
+                create=True,
+            ) as mock_resolver_cls,
             patch(
                 "aidev_agent.core.graphs.react.graph.ReActAgentBuilder._build_graph",
                 return_value=(MagicMock(), {}),
             ),
         ):
+            mock_resolver_instance = MagicMock()
+            mock_resolver_instance._backends = {}
+            mock_resolver_cls.return_value = mock_resolver_instance
+
             builder = (
                 ReActAgentBuilder()
                 .set_llm(llm)
@@ -841,7 +850,7 @@ class TestReActAgentBuilder:
 
     def test_set_bkai_options_maps_fields(self):
         """set_bkai_options 应将 AgentExecutorKwargs 字段映射到 builder 内部状态"""
-        from aidev_agent.services.pydantic_models import AgentExecutorKwargs
+        from aidev_agent.pydantic_models import AgentExecutorKwargs
 
         llm = MagicMock()
         knowledge_llm = MagicMock()
@@ -864,7 +873,7 @@ class TestReActAgentBuilder:
 
     def test_set_bkai_options_non_thinking_llm_str_conversion(self):
         """non_thinking_llm 为 str 时应调用 ChatModel.get_setup_instance 转换"""
-        from aidev_agent.services.pydantic_models import AgentExecutorKwargs
+        from aidev_agent.pydantic_models import AgentExecutorKwargs
 
         mock_instance = MagicMock()
         with patch(
@@ -879,7 +888,7 @@ class TestReActAgentBuilder:
 
     def test_set_bkai_options_non_thinking_llm_basechatmodel(self):
         """non_thinking_llm 为 BaseChatModel 时应直接赋值"""
-        from aidev_agent.services.pydantic_models import AgentExecutorKwargs
+        from aidev_agent.pydantic_models import AgentExecutorKwargs
         from langchain_core.language_models.chat_models import BaseChatModel
 
         mock_llm = MagicMock(spec=BaseChatModel)

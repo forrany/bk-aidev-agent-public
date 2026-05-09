@@ -21,18 +21,18 @@ import copy
 import logging
 import os
 from collections import defaultdict
-from typing import Any, ClassVar, Dict, List, TypedDict
+from typing import Any, ClassVar, Dict, List, Optional, TypedDict
 
 from langchain_core.documents import Document
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from typing_extensions import NotRequired
 
-from aidev_agent.enums import Decision, FineGrainedScoreType
+from aidev_agent.enums import Decision, FineGrainedScoreType, IndependentQueryMode
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.utils import deduplicate_knowledge_chunks, is_structured_data
 from aidev_agent.packages.langgraph.streaming.utils import conditional_dispatch_custom_event
-from aidev_agent.services.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions
 from aidev_agent.utils.decorator import retry, timeit
 
 from .prompts import DEFAULT_INTENT_RECOGNITION_PROMPT_TEMPLATES
@@ -81,6 +81,7 @@ class KnowledgeRagRetrieveResult(TypedDict):
     translated_query: NotRequired[str]
     with_qa_response: NotRequired[bool]
     reference_doc: NotRequired[list]
+    response: NotRequired[str]
 
 
 class KnowledgeRag:
@@ -190,6 +191,34 @@ class KnowledgeRag:
         else:
             return resp_content
 
+    @timeit(message="意图切换检测")
+    @retry(max_retries=5, max_seconds=3600)
+    def latest_query_classification(self, agent_options, chat_history, query, llm, **kwargs):
+        sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
+            "latest_query_classification_sys_prompt_template"
+        )
+        usr_prompt = self.__class__.intent_recognition_prompt_templates.get(
+            "latest_query_classification_usr_prompt_template"
+        ).render(chat_history=chat_history, query=query)
+        messages = [
+            SystemMessage(content=sys_prompt),
+            HumanMessage(content=usr_prompt),
+        ]
+        conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
+        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        resp = invoke_func(messages, **kwargs)
+        conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
+        resp_content = resp.content
+        logger.info(f"=====> <query分类结果>：{resp_content}")
+        if "<<<<<new>>>>>" in resp_content:
+            return "new"
+        elif "<<<<<continue>>>>>" in resp_content:
+            return "continue"
+        elif "<<<<<finish>>>>>" in resp_content:
+            return "finish"
+        else:
+            return "new"  # 其余所有边缘情况默认直接重新开始
+
     @timeit(message="独立查询重写")
     @retry(max_retries=5, max_seconds=3600)
     def query_rewrite_for_independence(self, agent_options, chat_history, query, llm, display=False, **kwargs):
@@ -247,13 +276,111 @@ class KnowledgeRag:
         ]
         conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
         invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
-        resp = invoke_func(messages)
+        resp = invoke_func(messages, **kwargs)
         conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
         if resp_content.strip() == "None":
             return None
         else:
             return resp_content
+
+    @timeit(message="意图切换检测和独立查询重写/直接答复")
+    @retry(max_retries=5, max_seconds=3600)
+    def query_cls_with_resp_or_rewrite(self, agent_options, chat_history, query, llm, **kwargs):
+        sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
+            "query_cls_with_resp_or_rewrite_sys_prompt_template"
+        )
+        usr_prompt = self.__class__.intent_recognition_prompt_templates.get(
+            "query_cls_with_resp_or_rewrite_usr_prompt_template"
+        ).render(chat_history=chat_history, query=query)
+        messages = [
+            SystemMessage(content=sys_prompt),
+            HumanMessage(content=usr_prompt),
+        ]
+        conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
+        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        resp = invoke_func(messages)
+        conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
+        resp_content = resp.content
+        logger.info(f"=====> <query_cls_with_resp_or_rewrite的结果>：{resp_content}")
+        if resp_content.startswith("<<<<<new>>>>>"):
+            return {
+                "query_cls": "new",
+            }
+        elif resp_content.startswith("<<<<<continue>>>>>"):
+            if resp_content.startswith("<<<<<continue>>>>>$REWRITTEN_QUERY: "):
+                rewritten_query = resp_content[len("<<<<<continue>>>>>$REWRITTEN_QUERY: ") :]
+            else:
+                rewritten_query = resp_content[len("<<<<<continue>>>>>") :]
+            return {
+                "query_cls": "continue",
+                "rewritten_query": rewritten_query,
+            }
+        elif resp_content.startswith("<<<<<finish>>>>>"):
+            if resp_content.startswith("<<<<<finish>>>>>$RESPONSE: "):
+                response = resp_content[len("<<<<<finish>>>>>$RESPONSE: ") :]
+            else:
+                response = resp_content[len("<<<<<finish>>>>>") :]
+            return {
+                "query_cls": "finish",
+                "response": response,  # TODO: 后半段stream化
+            }
+        else:
+            return {
+                "query_cls": "new",
+            }  # 其余所有边缘情况默认直接重新开始
+
+    def query_cls_pipeline(self, chat_history, query, llm, agent_options, **kwargs):
+        if agent_options.knowledge_query_options.merge_query_cls_with_resp_or_rewrite:
+            if chat_history:
+                result = self.query_cls_with_resp_or_rewrite(agent_options, chat_history, query, llm, **kwargs)
+                query_cls = result["query_cls"]
+            else:
+                # 如无history，目前处理成相当于开始一个新的话题
+                query_cls = "new"
+
+            if query_cls == "finish":
+                # 如果是结束话题，则直接返回生成的回复
+                # 待实现，目前先用通识知识回答
+                return KnowledgeRagRetrieveResult(
+                    response=result["response"],
+                    decision=Decision.GENERAL_QA,
+                    knowledge_resources_highly_relevant=[],
+                    knowledge_resources_moderately_relevant=[],
+                    knowledge_resources_lowly_relevant=[],
+                )
+            elif query_cls == "continue":
+                # 如果是继续话题，则其实也未必能直接复用上一轮会话的意图识别结果（除了）
+                # 因为例如用户是在RAG意图下，但是改了原本输错的参数，则其实也是需要重新检索资源进行新的具体资源意图判断的
+                # 因此，意图识别结果的复用其实最多到知识类、资源类这种级别的复用
+                independent_query = result["rewritten_query"]
+            elif query_cls == "new":
+                # 如果是新的话题，则独立query即为输入的query
+                independent_query = query
+        else:
+            if chat_history:
+                if agent_options.knowledge_query_options.with_query_cls:
+                    query_cls = self.latest_query_classification(agent_options, chat_history, query, llm, **kwargs)
+                else:
+                    query_cls = "continue"
+            else:
+                query_cls = "new"
+
+            if query_cls == "finish":
+                return KnowledgeRagRetrieveResult(
+                    decision=Decision.GENERAL_QA,
+                    knowledge_resources_highly_relevant=[],
+                    knowledge_resources_moderately_relevant=[],
+                    knowledge_resources_lowly_relevant=[],
+                )
+            elif query_cls == "continue":
+                independent_query = self.query_rewrite_for_independence(
+                    agent_options, chat_history, query, llm, **kwargs
+                )
+            elif query_cls == "new":
+                independent_query = query
+
+        return independent_query
 
     # ====================================================================================================
     # RETRIEVAL 阶段方法
@@ -612,7 +739,9 @@ class KnowledgeRag:
         }
         return state
 
-    def retrieve(self, query: str, agent_options: AgentOptions, **kwargs) -> KnowledgeRagRetrieveResult:
+    def retrieve(
+        self, query: str, agent_options: AgentOptions, chat_history: Optional[list] = None, **kwargs
+    ) -> KnowledgeRagRetrieveResult:
         # 基本校验
         dispatch_rag_event_chunk("开始召回知识")
         if not any(
@@ -638,8 +767,19 @@ class KnowledgeRag:
         # 初始化知识库操作实例，如果没有提供，使用默认的实例
         kb_retriever = kwargs.get("kb_retriever", self.kb_retriever)
         output_state = {}
-
-        query_for_search = query
+        # 过滤chat_history中的消息，只保留HumanMessage和AIMessage类型的消息
+        chat_history = [msg for msg in (chat_history or []) if isinstance(msg, (HumanMessage, AIMessage))]
+        res = raw_input
+        if agent_options.knowledge_query_options.independent_query_mode == IndependentQueryMode.REWRITE:
+            res = self.query_cls_pipeline(chat_history, query, llm, agent_options, **kwargs)
+        elif agent_options.knowledge_query_options.independent_query_mode == IndependentQueryMode.SUM_AND_CONCATE:
+            sum_res = self.sum_chat_history_for_query(agent_options, chat_history, query, llm, **kwargs)
+            if sum_res:
+                res = f"{sum_res}\n{query}"
+        if isinstance(res, dict) and "decision" in res:
+            return res
+        elif isinstance(res, str):
+            query_for_search = res
         # 并发执行多种召回策略
         futures = {}
 

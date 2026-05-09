@@ -4,7 +4,7 @@
 覆盖：
 - 主校验：input/chat_history/session_code/thread_id 至少一项必须存在；chat_history 元素必含 role/content。
 - execute_kwargs：默认 stream=False、显式 stream/version 透传。
-- agent_type：完全由 ``get_agent_config_info`` 决定，不接受用户输入。
+- agent_type：完全由 ``AgentConfigFetcher.get_info()`` 决定，不接受用户输入。
 - thread_id：显式 > execute_kwargs.thread_id > uuid 兜底（仅当 session_code 也为空时）。
 """
 
@@ -12,7 +12,7 @@ import uuid
 from unittest.mock import patch
 
 import pytest
-from aidev_agent.services.pydantic_models import ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from aidev_bkplugin.serializers.chat_completion import ChatCompletionRequestSerializer
 from rest_framework.exceptions import ValidationError
 
@@ -26,14 +26,15 @@ def _stub_build_execute_kwargs():
 
 
 @pytest.fixture(autouse=True)
-def _stub_get_agent_config_info():
-    """get_agent_config_info 走远程 IO + Django cache；测试默认返回 agent_type='common'。
+def _stub_agent_config_fetcher():
+    """``AgentConfigFetcher.get_info`` 走远程 IO + Django cache；测试默认返回 agent_type='common'。
 
-    单测可通过 fixture 直接 ``monkeypatch`` 它的 ``return_value`` / ``side_effect`` 覆写。
+    ``AgentConfigFetcher`` 是 classmethod 风格，patch 类后直接对 ``get_info`` 配置 return_value；
+    单测可断言 ``mock_class.get_info.assert_called_once_with(username=, version=)``。
     """
-    with patch("aidev_bkplugin.serializers.chat_completion.get_agent_config_info") as m:
-        m.return_value = {"agent_type": "common"}
-        yield m
+    with patch("aidev_bkplugin.serializers.chat_completion.AgentConfigFetcher") as mock_class:
+        mock_class.get_info.return_value = {"agent_type": "common"}
+        yield mock_class
 
 
 class TestChatCompletionRequestSerializerValidation:
@@ -105,8 +106,8 @@ class TestChatCompletionRequestSerializerExecuteKwargs:
 class TestChatCompletionRequestSerializerCompatFields:
     """flow / poll / 兼容字段透传校验。"""
 
-    def test_flow_payload_passes_validation(self, _stub_get_agent_config_info):
-        _stub_get_agent_config_info.return_value = {"agent_type": "flow"}
+    def test_flow_payload_passes_validation(self, _stub_agent_config_fetcher):
+        _stub_agent_config_fetcher.get_info.return_value = {"agent_type": "flow"}
         payload = {
             "input": "go",
             "task_id": "task-1",
@@ -132,39 +133,39 @@ class TestChatCompletionRequestSerializerCompatFields:
 
 
 class TestChatCompletionRequestSerializerAgentTypeFromAgentInfo:
-    """agent_type 完全由 get_agent_config_info 决定，不接受用户输入。"""
+    """agent_type 完全由 ``AgentConfigFetcher.get_info()`` 决定，不接受用户输入。"""
 
     def _validated(self, payload: dict, context: dict | None = None) -> dict:
         s = ChatCompletionRequestSerializer(data=payload, context=context or {"username": "u"})
         s.is_valid(raise_exception=True)
         return s.validated_data
 
-    def test_agent_type_taken_from_agent_info(self, _stub_get_agent_config_info):
-        _stub_get_agent_config_info.return_value = {"agent_type": "from-config"}
+    def test_agent_type_taken_from_agent_info(self, _stub_agent_config_fetcher):
+        _stub_agent_config_fetcher.get_info.return_value = {"agent_type": "from-config"}
         data = self._validated({"input": "hi"})
         assert data["agent_type"] == "from-config"
 
-    def test_user_supplied_agent_type_is_ignored(self, _stub_get_agent_config_info):
+    def test_user_supplied_agent_type_is_ignored(self, _stub_agent_config_fetcher):
         # 用户在请求体中传入 agent_type 不会生效（serializer 没有该字段定义，会被 DRF 忽略）。
-        _stub_get_agent_config_info.return_value = {"agent_type": "from-config"}
+        _stub_agent_config_fetcher.get_info.return_value = {"agent_type": "from-config"}
         data = self._validated({"input": "hi", "agent_type": "user-supplied"})
         assert data["agent_type"] == "from-config"
 
-    def test_agent_type_defaults_to_empty_when_agent_info_missing_field(self, _stub_get_agent_config_info):
-        _stub_get_agent_config_info.return_value = {}
+    def test_agent_type_defaults_to_empty_when_agent_info_missing_field(self, _stub_agent_config_fetcher):
+        _stub_agent_config_fetcher.get_info.return_value = {}
         data = self._validated({"input": "hi"})
         assert data["agent_type"] == ""
 
-    def test_get_agent_config_info_called_with_username_and_version(self, _stub_get_agent_config_info):
+    def test_get_info_called_with_username_and_version(self, _stub_agent_config_fetcher):
         self._validated(
             {"input": "hi", "execute_kwargs": {"version": "v2"}},
             context={"username": "alice"},
         )
-        _stub_get_agent_config_info.assert_called_once_with("alice", version="v2")
+        _stub_agent_config_fetcher.get_info.assert_called_once_with(username="alice", version="v2")
 
-    def test_get_agent_config_info_called_with_none_version_by_default(self, _stub_get_agent_config_info):
+    def test_get_info_called_with_none_version_by_default(self, _stub_agent_config_fetcher):
         self._validated({"input": "hi"}, context={"username": "alice"})
-        _stub_get_agent_config_info.assert_called_once_with("alice", version=None)
+        _stub_agent_config_fetcher.get_info.assert_called_once_with(username="alice", version=None)
 
 
 class TestChatCompletionRequestSerializerThreadIdFallback:

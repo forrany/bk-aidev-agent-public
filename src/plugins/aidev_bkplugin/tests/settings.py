@@ -44,9 +44,7 @@ USER_TOKEN_KEY_NAME = "access_token"
 ENABLE_OTEL_TRACE = False
 
 # —— 智能体 SDK 默认 ——
-DEFAULT_NAME = "default"
-DEFAULT_AGENT = "aidev_agent.services.common_agent.CommonQAAgent"
-DEFAULT_CONFIG_MANAGER = "aidev_agent.services.config_manager.AgentConfigManager"
+AIDEV_AGENT = "aidev_agent.services.common_agent.CommonQAAgent"
 
 # —— 客服渠道 ——
 CHAT_GROUP_ENABLED = False

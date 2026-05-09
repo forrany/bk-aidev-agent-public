@@ -6,10 +6,10 @@ import time
 
 import pytest
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
-from aidev_agent.services.chat import ChatCompletionAgent
+from aidev_agent.pydantic_models import ChatPrompt, ExecuteKwargs
+from aidev_agent.services.agent import ChatCompletionAgent
 from aidev_agent.services.messages_handler import EOD_CHUNK, GeneratorStreamingHelper
 from aidev_agent.services.messages_handler.rabbitmq import RabbitMQMessageHandler
-from aidev_agent.services.pydantic_models import ChatPrompt, ExecuteKwargs
 from aidev_agent.utils.async_utils import async_to_sync_generator
 
 # 标记：所有测试均需要 RabbitMQ

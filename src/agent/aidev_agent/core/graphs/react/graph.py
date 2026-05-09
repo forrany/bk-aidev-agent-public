@@ -48,15 +48,15 @@ from aidev_agent.enums import Decision
 from aidev_agent.packages.langchain_core.models import ChatModel
 from aidev_agent.packages.langchain_core.models.utils import is_model_without_function_calling
 from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
-from aidev_agent.services.pydantic_models import AgentExecutorKwargs, AgentOptions
+from aidev_agent.pydantic_models import AgentExecutorKwargs, AgentOptions
 
 if TYPE_CHECKING:
     from langchain_core.runnables import Runnable
     from langgraph.store.base import BaseStore
 
-from aidev_agent.api.bk_aidev import BKAidevApi
 from aidev_agent.core.tools.skill.bkai_provider import BKAiProvider
 from aidev_agent.core.tools.skill.types import SkillOptions, SkillProvider
+from aidev_agent.packages.resource_manager.registry import resource_manager
 
 ResponseT = TypeVar("ResponseT")
 
@@ -374,10 +374,12 @@ class ReActAgentBuilder:
         # Skills（从配置链路传入的关联技能配置 list）
         if options.skills is not None and options.skills:
             self.set_enable_skills(True)
+            # 优先使用 per-request resource_manager（含调试Agent自己的app_code / access_token），
+            _rm = options.resource_manager or resource_manager()
             self.add_skill_sources(
                 [
                     BKAiProvider(
-                        client=BKAidevApi.get_client(),
+                        client=_rm,
                         related_skills=options.skills,
                     )
                 ]
@@ -450,13 +452,14 @@ class ReActAgentBuilder:
 
         return options
 
-    def _prepare_agent_knowledge_node(self, *, knowledge_llm, agent_options):
+    def _prepare_agent_knowledge_node(self, *, knowledge_llm, agent_options, chat_history):
         knowledge_query_options = agent_options.knowledge_query_options
         has_knowledge = knowledge_query_options.knowledge_bases or knowledge_query_options.knowledge_items
         if has_knowledge:
             return make_knowledge_node(
                 llm=knowledge_llm,
                 agent_options=agent_options,
+                chat_history=chat_history,
             )
         return None
 
@@ -502,7 +505,16 @@ class ReActAgentBuilder:
             else default_node_options.role_prompt
         )
         use_general_knowledge_on_miss = knowledge_query_options.is_response_when_no_knowledgebase_match
-
+        token_limit = (
+            knowledge_query_options.llm_token_limit
+            if knowledge_query_options.llm_token_limit is not None
+            else default_node_options.token_limit
+        )
+        token_margin = (
+            knowledge_query_options.token_limit_margin
+            if knowledge_query_options.token_limit_margin is not None
+            else default_node_options.token_margin
+        )
         node_options = ModelNodeSettings(
             use_structured_response=use_structured_response,
             enable_query_clarification=enable_query_clarification,
@@ -510,6 +522,8 @@ class ReActAgentBuilder:
             role_prompt=role_prompt,
             use_general_knowledge_on_miss=use_general_knowledge_on_miss,
             tool_output_compress_thrd=agent_options.intent_recognition_options.tool_output_compress_thrd,
+            token_limit=token_limit,
+            token_margin=token_margin,
         )
 
         if self._enable_skills and self._skill_registry is not None:
@@ -602,6 +616,13 @@ class ReActAgentBuilder:
             backend_cls = self._runtime_types[skill_runtime]
             extractor = self._runtime_param_with_skill.get(skill_runtime)
             params = extractor(skill, self._executor_info or {}) if extractor is not None else {}
+            logger.info(
+                f"[credential] skill_runtime={skill_runtime}, skill_name={skill_name}, "
+                f"executor_info_keys={list((self._executor_info or {}).keys())}, "
+                f"has_app_code={bool((self._executor_info or {}).get('app_code'))}, "
+                f"has_access_token={bool((self._executor_info or {}).get('access_token'))}, "
+                f"backend_cls={backend_cls.__name__}"
+            )
             skill_backend = backend_cls(**params)
             # 注册这个 backend
             resolver.register_runtime(
@@ -795,8 +816,14 @@ class ReActAgentBuilder:
 
         callbacks = list(self._callbacks or [])
         non_thinking_llm = self._non_thinking_llm or self._llm
-        use_structured_response = bool(is_model_without_function_calling(self._llm) and self._extra_tools)
-
+        if (
+            self._agent_options
+            and self._agent_options.intent_recognition_options
+            and self._agent_options.intent_recognition_options.agent_type
+        ):
+            use_structured_response = bool("deepseek" in self._agent_options.intent_recognition_options.agent_type)
+        else:
+            use_structured_response = bool(is_model_without_function_calling(self._llm) and self._extra_tools)
         # 统一处理 agent_options
         prepared_agent_options = self._prepare_agent_options(
             self._agent_options,
@@ -844,6 +871,7 @@ class ReActAgentBuilder:
         knowledge_node = self._prepare_agent_knowledge_node(
             knowledge_llm=self._knowledge_llm,
             agent_options=prepared_agent_options,
+            chat_history=self._chat_history,
         )
 
         # 统一处理 model_node

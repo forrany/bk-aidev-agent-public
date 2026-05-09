@@ -5,7 +5,7 @@
 from logging import getLogger
 
 from aidev_agent.utils.local import request_local
-from aidev_bkplugin.services.agent import run_bkplugin_invoke
+from aidev_bkplugin.services.agent_execution import AgentExecutor
 from bk_plugin_framework.kit import (
     Context,
     ContextRequire,
@@ -83,7 +83,7 @@ class CommonAgent(Plugin):
             execute_kwargs["session_code"] = inputs.session_code
         if execute_kwargs.get("caller_bk_biz_id"):
             execute_kwargs["caller_bk_biz_id"] = int(execute_kwargs["caller_bk_biz_id"])
-        result = run_bkplugin_invoke(
+        result = AgentExecutor.run_bkplugin_invoke(
             inputs.chat_history or [],
             execute_kwargs,
             inputs.input or "",

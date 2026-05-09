@@ -15,7 +15,6 @@ from aidev_agent.core.tools.runtime_tools.provider import (
     DEFAULT_READ_LIMIT,
     DEFAULT_READ_OFFSET,
     RuntimeBackendResolver,
-    _validate_path,
     get_client_tools_with_runtime,
     get_edit_file_tool,
     get_execute_tool,
@@ -25,6 +24,7 @@ from aidev_agent.core.tools.runtime_tools.provider import (
     get_read_file_tool,
     get_write_file_tool,
 )
+from aidev_agent.core.tools.runtime_tools.security import validate_path
 from aidev_agent.core.tools.runtime_tools.types import ExecuteResult
 
 
@@ -49,53 +49,54 @@ def _schema_properties(tool) -> dict:
 
 
 class TestValidatePath:
-    """Test _validate_path function."""
+    """Test validate_path function."""
 
     def test_validate_path_simple(self):
-        """Test validating simple path."""
-        result = _validate_path("foo/bar")
-        assert result == "/foo/bar"
+        """Test validating simple path (relative paths kept as-is)."""
+        result = validate_path("foo/bar")
+        assert result == "foo/bar"
 
     def test_validate_path_with_leading_slash(self):
         """Test validating path with leading slash."""
-        result = _validate_path("/foo/bar")
+        result = validate_path("/foo/bar")
         assert result == "/foo/bar"
 
     def test_validate_path_normalizes(self):
         """Test that path is normalized."""
-        result = _validate_path("/./foo//bar")
+        result = validate_path("/./foo//bar")
         assert result == "/foo/bar"
 
     def test_validate_path_prevents_traversal(self):
         """Test that path traversal is prevented."""
         with pytest.raises(ValueError, match="Path traversal not allowed"):
-            _validate_path("../etc/passwd")
+            validate_path("../etc/passwd")
 
         with pytest.raises(ValueError, match="Path traversal not allowed"):
-            _validate_path("foo/../../etc/passwd")
+            validate_path("foo/../../etc/passwd")
 
-    def test_validate_path_prevents_home(self):
-        """Test that home directory access is prevented."""
-        with pytest.raises(ValueError, match="Path traversal not allowed"):
-            _validate_path("~/.bashrc")
+    def test_validate_path_allows_tilde(self):
+        """Test that tilde paths are passed through without expansion (SEC-03)."""
+        # ~ 路径不做本地展开，由沙箱环境解析
+        result = validate_path("~/.bashrc")
+        assert result == "~/.bashrc"
 
     def test_validate_path_windows_absolute(self):
         """Test that Windows absolute paths are rejected."""
         with pytest.raises(ValueError, match="Windows absolute paths are not supported"):
-            _validate_path("C:/Users/file.txt")
+            validate_path("C:/Users/file.txt")
 
         with pytest.raises(ValueError, match="Windows absolute paths are not supported"):
-            _validate_path("D:\\Users\\file.txt")
+            validate_path("D:\\Users\\file.txt")
 
     def test_validate_path_with_allowed_prefixes(self):
         """Test validating path with allowed prefixes."""
-        result = _validate_path("/data/file.txt", allowed_prefixes=["/data/", "/workspace/"])
+        result = validate_path("/data/file.txt", allowed_prefixes=["/data/", "/workspace/"])
         assert result == "/data/file.txt"
 
     def test_validate_path_not_in_allowed_prefixes(self):
         """Test that paths outside allowed prefixes are rejected."""
         with pytest.raises(ValueError, match="must start with one of"):
-            _validate_path("/etc/file.txt", allowed_prefixes=["/data/", "/workspace/"])
+            validate_path("/etc/file.txt", allowed_prefixes=["/data/", "/workspace/"])
 
 
 class TestRuntimeBackendResolver:
@@ -323,7 +324,7 @@ class TestWriteFileToolGenerator:
             tmppath = Path(tmpdir)
             (tmppath / "test.txt").write_text("old content")
 
-            backend = FilesystemBackend(root_dir=tmpdir)
+            backend = FilesystemBackend(root_dir=tmpdir, virtual_mode=True)
             provider = _local_provider(backend)
             tool = get_write_file_tool(provider)
 
@@ -763,3 +764,84 @@ class TestToolIntegration:
 
             assert "hello universe" in result
             assert "hello python" in result
+
+
+class TestOutputRedaction:
+    """测试工具返回值脱敏功能。"""
+
+    def test_ls_tool_redacts_sensitive_value(self):
+        """ls 工具应脱敏输出中的敏感值。"""
+        from aidev_agent.config import settings
+
+        original = settings.SBX_SENSITIVE_VALUES
+        settings.SBX_SENSITIVE_VALUES = ["secret_dir"]
+        try:
+            with TemporaryDirectory() as tmpdir:
+                tmppath = Path(tmpdir)
+                (tmppath / "secret_dir").mkdir()
+
+                backend = FilesystemBackend(root_dir=tmpdir, virtual_mode=True)
+                provider = RuntimeBackendResolver(default_runtime="local").register_runtime("local", backend)
+                tool = get_ls_tool(provider)
+
+                result = tool.invoke({"path": "/", "target_runtime": "local"})
+                assert "secret_dir" not in result
+                assert "__BKAI_AGENT_REDACTED__" in result
+        finally:
+            settings.SBX_SENSITIVE_VALUES = original
+
+    def test_ls_tool_redacts_error_string_from_resolve(self):
+        """ls 工具在 resolve_backend 返回字符串时也应脱敏。"""
+        from aidev_agent.config import settings
+
+        original = settings.SBX_SENSITIVE_VALUES
+        settings.SBX_SENSITIVE_VALUES = ["secret_runtime"]
+        try:
+            with TemporaryDirectory() as tmpdir:
+                backend = FilesystemBackend(root_dir=tmpdir, virtual_mode=True)
+                provider = RuntimeBackendResolver(default_runtime="local").register_runtime("local", backend)
+                tool = get_ls_tool(provider)
+
+                # 传入不存在的 runtime，resolve_backend 返回错误字符串
+                result = tool.invoke({"path": "/", "target_runtime": "secret_runtime"})
+                assert "secret_runtime" not in result
+                assert "__BKAI_AGENT_REDACTED__" in result
+        finally:
+            settings.SBX_SENSITIVE_VALUES = original
+
+
+class TestEmptyOutputHint:
+    """测试空输出友好提示功能。"""
+
+    def test_ls_empty_result_returns_hint(self):
+        """ls 工具空结果应返回友好提示。"""
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir, virtual_mode=True)
+            provider = RuntimeBackendResolver(default_runtime="local").register_runtime("local", backend)
+            tool = get_ls_tool(provider)
+
+            # 列出不存在的目录，结果为空列表
+            result = tool.invoke({"path": "/nonexistent", "target_runtime": "local"})
+            assert "[harness]" in result
+
+    def test_execute_empty_output_returns_hint(self):
+        """execute 工具空输出应返回友好提示。"""
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            provider = RuntimeBackendResolver(default_runtime="local").register_runtime("local", backend)
+            tool = get_execute_tool(provider, enable_security=False)
+
+            # true 命令无输出
+            result = tool.invoke({"command": "true", "target_runtime": "local"})
+            assert "[harness]" in result
+
+    def test_non_empty_output_no_hint(self):
+        """非空输出不应包含提示。"""
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            provider = RuntimeBackendResolver(default_runtime="local").register_runtime("local", backend)
+            tool = get_execute_tool(provider, enable_security=False)
+
+            result = tool.invoke({"command": "echo hello", "target_runtime": "local"})
+            assert "[harness]" not in result
+            assert "hello" in result

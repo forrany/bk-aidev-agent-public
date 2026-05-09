@@ -13,7 +13,7 @@ import asyncio
 from typing import AsyncGenerator
 
 from aidev_agent.utils import Empty
-from aidev_agent.utils.loop import close_thread_loop, get_event_loop
+from aidev_agent.utils.loop import get_event_loop
 
 
 async def async_generator_with_timeout(
@@ -58,13 +58,10 @@ def async_to_sync_generator(async_gen):
     # 提交异步任务到指定循环
     asyncio.run_coroutine_threadsafe(consume_async(), loop)
 
-    try:
-        while True:
-            item = loop.run_until_complete(data_queue.get())
-            if item is None:
-                if error is not None:
-                    raise error
-                break
-            yield item
-    finally:
-        close_thread_loop()
+    while True:
+        item = loop.run_until_complete(data_queue.get())
+        if item is None:
+            if error is not None:
+                raise error
+            break
+        yield item
