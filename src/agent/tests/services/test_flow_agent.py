@@ -262,7 +262,7 @@ class TestFlowAgentStop:
 
         # 最后一个 flow_agent_result 应是 revoke 状态（手动构造）
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
-        assert result_events[-1]["value"][0]["task_state"] == "REVOKED"
+        assert result_events[-1]["value"]["task_state"] == "REVOKED"
 
         # 任务已启动后取消 → RUN_FINISHED(runId="cancelled")
         finished_events = _find_events_by_type(events, EventType.RUN_FINISHED)
@@ -314,8 +314,8 @@ class TestFlowAgentStop:
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
         # 最后一个 flow_agent_result 应该是 revoke 状态
         revoke_event = result_events[-1]
-        # value 是 list，取第一个元素
-        revoke_value = revoke_event["value"][0]
+        # value 是 dict，直接访问
+        revoke_value = revoke_event["value"]
         assert revoke_value["task_state"] == "REVOKED"
 
         # nodes 是 dict，RUNNING 节点手动改为 REVOKED
@@ -600,7 +600,7 @@ class TestFlowAgentRetrySkip:
 
         # 最后一个 flow_agent_result 应是 REVOKED
         result_events = _find_custom_events(events, CustomMessageType.FLOW_AGENT_RESULT.value)
-        revoke_value = result_events[-1]["value"][0]
+        revoke_value = result_events[-1]["value"]
         assert revoke_value["task_state"] == "REVOKED"
 
         # RUNNING 节点被改为 REVOKED

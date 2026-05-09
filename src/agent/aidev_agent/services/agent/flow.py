@@ -319,7 +319,7 @@ class FlowAgentCompletionAgent(BaseModel):
 
             result_event = self._make_custom_event(
                 name=CustomMessageType.FLOW_AGENT_RESULT.value,
-                value=[task_info],
+                value=task_info,
             )
             self._dispatch_event(result_event)
             yield encoder.encode(result_event)
@@ -473,7 +473,7 @@ class FlowAgentCompletionAgent(BaseModel):
 
         revoke_event = self._make_custom_event(
             name=CustomMessageType.FLOW_AGENT_RESULT.value,
-            value=[revoke_info],
+            value=revoke_info,
         )
         self._dispatch_event(revoke_event)
         yield encoder.encode(revoke_event)
