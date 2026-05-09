@@ -107,6 +107,15 @@ def mock_ops():
     return MockOps()
 
 
+@pytest.fixture(autouse=True)
+def _mock_paas_client(monkeypatch):
+    """自动 mock BkPaaSSandboxApi.get_client_by_username，避免 Django settings 依赖。"""
+    monkeypatch.setattr(
+        "aidev_agent.api.paas_client.BkPaaSSandboxApi.get_client_by_username",
+        lambda bk_username: MagicMock(),
+    )
+
+
 @pytest.fixture()
 def backend(mock_ops, monkeypatch):
     """创建 PaasSandboxBackend 实例，并将其所有 HTTP 方法替换为 mock_ops 的实现。"""

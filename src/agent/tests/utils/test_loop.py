@@ -120,7 +120,7 @@ async def test_async_context():
     assert result == 14
 
 
-def test_run_coro_sync_closes_worker_thread_loop():
+def test_run_coro_sync_preserves_worker_thread_loop():
     from aidev_agent.utils.loop import _thread_local
 
     def _f():
@@ -132,4 +132,4 @@ def test_run_coro_sync_closes_worker_thread_loop():
         result, has_loop = pool.submit(_f).result()
 
     assert result == 10
-    assert has_loop is False
+    assert has_loop is True

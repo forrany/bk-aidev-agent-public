@@ -656,7 +656,7 @@ class TestReActAgentBuilder:
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", return_value=MagicMock()),
             patch(
-                "aidev_agent.core.tools.runtime_tools.RuntimeBackendResolver",
+                "aidev_agent.core.tools.runtime_tools.provider.RuntimeBackendResolver",
                 create=True,
             ) as mock_resolver_cls,
             patch(

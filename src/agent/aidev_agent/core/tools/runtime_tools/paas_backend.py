@@ -445,7 +445,7 @@ class PaasSandboxBackend:
         调用后会将内部沙箱 ID 置为 None，以便后续操作重新创建沙箱。
         """
 
-        if self._sandbox_id is None:
+        if getattr(self, "_sandbox_id", None) is None:
             return
 
         try:
@@ -489,6 +489,7 @@ class PaasSandboxBackend:
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """读取文件内容（带行号）。"""
 
+        file_path = self._resolve_path(file_path)
         qfile = shlex.quote(file_path)
 
         # 1) 存在性检查
