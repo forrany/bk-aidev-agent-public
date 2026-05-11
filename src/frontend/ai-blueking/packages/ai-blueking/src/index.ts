@@ -73,3 +73,6 @@ export { AGUIProtocol, useChatHelper } from '@blueking/chat-helper';
 
 // MessageContentType 从 chat-x 导出
 export { MessageContentType, RenderMode } from '@blueking/chat-x';
+
+// ==================== 工具函数 ====================
+export { parseCustomBlocks, type ContentBlock, type CustomBlock, type TextBlock } from './utils';

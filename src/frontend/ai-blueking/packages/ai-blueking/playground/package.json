@@ -10,7 +10,9 @@
   "dependencies": {
     "@blueking/ai-blueking": "workspace:*",
     "bkui-vue": "2.0.2-beta.81",
+    "echarts": "^6.0.0",
     "vue": "^3.5.24",
+    "vue-echarts": "^8.0.1",
     "vue-router": "^5.0.3"
   },
   "devDependencies": {

@@ -61,6 +61,12 @@ const router = createRouter({
       component: () => import('./views/ErrorHandlingView.vue'),
       meta: { title: '错误处理', group: 'example' },
     },
+    {
+      path: '/examples/custom-message-slot',
+      name: 'CustomMessageSlot',
+      component: () => import('./views/CustomMessageSlotView.vue'),
+      meta: { title: '自定义消息渲染', group: 'example' },
+    },
   ],
 });
 

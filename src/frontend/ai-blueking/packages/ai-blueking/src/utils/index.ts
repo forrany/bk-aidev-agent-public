@@ -8,6 +8,7 @@
  */
 
 export * from './message-utils';
+export * from './parse-custom-blocks';
 
 /**
  * 获取 cookie

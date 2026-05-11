@@ -42,7 +42,16 @@
       @update:model-value="handleUpdateModelValue"
     >
       <template #message="{ message, messageToolsStatus }">
+        <!-- 消费方提供了 #message slot 时，优先使用消费方的渲染 -->
+        <slot
+          v-if="slots.message"
+          name="message"
+          :message="message"
+          :message-tools-status="messageToolsStatus"
+        />
+        <!-- 否则使用默认的 MessageRender -->
         <MessageRender
+          v-else
           :message="message"
           :message-tools-status="messageToolsStatus"
           :on-action="tool => handleUserAction(tool, message)"
@@ -66,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, nextTick, ref, shallowRef } from 'vue';
+  import { computed, nextTick, ref, shallowRef, useSlots } from 'vue';
 
   import { ChatContainer, ChatInput, MessageRender } from '@blueking/chat-x';
   import { RenderMode } from '@blueking/chat-x';
@@ -84,7 +93,7 @@
   import type { IChatHelper } from '../types';
   import type { ChatBotEmits, ChatBotExpose, ChatBotProps } from './types';
   import type { ISupportUpload } from '@blueking/chat-helper';
-  import type { CustomBkFlowTab, IAiSlashMenuItem, Shortcut } from '@blueking/chat-x';
+  import type { CustomBkFlowTab, IAiSlashMenuItem, Message, MessageToolsStatus, Shortcut } from '@blueking/chat-x';
 
   const props = withDefaults(defineProps<ChatBotProps>(), {
     chatHelper: undefined,
@@ -99,8 +108,10 @@
   });
 
   const emit = defineEmits<ChatBotEmits>();
+  const slots = useSlots();
   defineSlots<{
     codeHeader?: (props: { language: string; token: unknown[] }) => unknown;
+    message?: (props: { message: Message; messageToolsStatus?: MessageToolsStatus }) => unknown;
   }>();
 
   // ==================== Template Refs ====================
