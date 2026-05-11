@@ -1,9 +1,9 @@
 ---
 name: ai-blueking-dev
-description: 蓝鲸 AI 小鲸组件开发指南。基于 @blueking/chat-x（UI 组件）和 @blueking/chat-helper（业务 SDK）开发 AI 聊天应用、智能体、对话界面。涵盖 ChatBot 独立使用、AIBlueking 完整集成、流式响应、快捷指令、划词选择等。触发场景：开发 AI 小鲸、集成 AI Agent、使用 chat-x/chat-helper、构建 AI 对话 UI、实现流式聊天。
+description: 蓝鲸 AI 小鲸组件开发指南。基于 @blueking/chat-x（UI 组件）和 @blueking/chat-helper（业务 SDK）开发 AI 聊天应用、智能体、对话界面。涵盖 ChatBot 独立使用、AIBlueking 完整集成、流式响应、快捷指令、划词选择、自定义消息渲染（图表/表单/iframe）等。触发场景：开发 AI 小鲸、集成 AI Agent、使用 chat-x/chat-helper、构建 AI 对话 UI、实现流式聊天、自定义消息组件渲染。
 metadata:
   author: blueking
-  version: '4.4'
+  version: '4.5'
 ---
 
 # AI 小鲸组件开发指南
@@ -15,6 +15,7 @@ metadata:
 - 使用 `ChatBot`、`AIBlueking`、`ChatContainer`、`MessageContainer` 等组件
 - 实现流式响应、会话管理、快捷指令
 - 基于 `ai-blueking` 组件进行二次开发
+- 自定义消息渲染（`parseCustomBlocks`、`custom-component` 代码块、`#message` 插槽自定义组件）
 
 ## 架构概览
 
@@ -259,6 +260,24 @@ render(h2) {
 - 插槽内容应保持简洁（推荐单行），避免破坏 Header 高度（48px）和拖拽交互
 - 插槽内容不可见时（如条件渲染）不影响 Header 布局
 
+### 自定义消息渲染 (v2.1.4+)
+
+AI 输出中嵌入图表、表单、iframe 等任意自定义组件。核心流程：
+
+1. AI 回复中使用 ` ```custom-component ` 代码块输出 JSON 数据
+2. `parseCustomBlocks()`（从 `@blueking/ai-blueking` 导出）解析为 `ContentBlock[]`
+3. `CustomMessageRenderer` 根据 `block.data.type` 分发到业务组件
+
+```vue
+<ChatBot :url="apiUrl">
+  <template #message="{ message }">
+    <CustomMessageRenderer :message="message" />
+  </template>
+</ChatBot>
+```
+
+> 完整实现代码（ChartWidget / IframeWidget / FormWidget / 扩展指南 / Prompt 指南）见 [自定义消息渲染](references/custom-message-rendering.md)。
+
 ## 参考资源
 
 - [ChatBot 组件 API](references/chatbot-api.md) — Props / Events / Slots / Expose、两种模式区别、初始化流程
@@ -268,4 +287,5 @@ render(h2) {
 - [集成模式与示例](references/integration-patterns.md) — 各场景完整代码示例、包导出、常见任务速查
 - [内部开发模式](references/development-patterns.md) — Manager 使用、工具操作处理、文件上传、chatHelper 进阶用法
 - [测试指南](references/testing.md) — 测试配置、Mock 工厂、withSetup 模式、编写示例
+- [自定义消息渲染](references/custom-message-rendering.md) — 图表/表单/iframe 自定义组件、parseCustomBlocks、扩展指南
 - [常见问题](references/faq.md) — FAQ 和问题排查
