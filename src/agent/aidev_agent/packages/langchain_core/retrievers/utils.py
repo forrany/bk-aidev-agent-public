@@ -77,21 +77,12 @@ def filter_and_select_topk(items, score_threshold, topk):
     return sorted_items[:topk]
 
 
-def invoke_decorator(agent_options: AgentOptions, invoke_func, llm):
+def invoke_decorator(invoke_func, llm):
     def wrapper(*args, **kwargs):
-        nonlocal llm
         # 根据 https://huggingface.co/deepseek-ai/DeepSeek-R1#usage-recommendations 的建议：
         # Avoid adding a system prompt; all instructions should be contained within the user prompt.
         # NOTE: 目前假设只有第 1 个 message 才可能是 SystemMessage
-        if global_llm_model_name := agent_options.intent_recognition_options.non_thinking_llm:
-            global_llm = ChatModel.get_setup_instance(
-                model=global_llm_model_name,
-                streaming=True,
-            )
-            invoke_func_to_use = global_llm.invoke
-            llm = global_llm
-        else:
-            invoke_func_to_use = invoke_func
+        invoke_func_to_use = invoke_func
 
         if (
             is_deepseek_r1_series_models(llm)

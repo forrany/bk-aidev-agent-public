@@ -145,7 +145,7 @@ class KnowledgeRag:
 
     @timeit(message="用户提问关键词提取")
     @retry(max_retries=5, max_seconds=3600)
-    def extract_query_keywords(self, agent_options, query, llm, **kwargs):
+    def extract_query_keywords(self, query, llm, **kwargs):
         """
         对应 intent_recognition.py 第271-289行的 extract_query_keywords 方法
         """
@@ -160,7 +160,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         extracted_keywords = resp_content.strip().split("\n")
@@ -170,7 +170,7 @@ class KnowledgeRag:
 
     @timeit(message="用户提问翻译")
     @retry(max_retries=5, max_seconds=3600)
-    def query_translation(self, agent_options, query, llm, **kwargs):
+    def query_translation(self, query, llm, **kwargs):
         """
         对应 intent_recognition.py 第293-310行的 query_translation 方法
         """
@@ -183,7 +183,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         logger.info(f"=====> <query_translation的结果>：{resp_content}")
@@ -194,7 +194,7 @@ class KnowledgeRag:
 
     @timeit(message="意图切换检测")
     @retry(max_retries=5, max_seconds=3600)
-    def latest_query_classification(self, agent_options, chat_history, query, llm, **kwargs):
+    def latest_query_classification(self, chat_history, query, llm, **kwargs):
         sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
             "latest_query_classification_sys_prompt_template"
         )
@@ -206,7 +206,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages, **kwargs)
         conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -222,7 +222,7 @@ class KnowledgeRag:
 
     @timeit(message="独立查询重写")
     @retry(max_retries=5, max_seconds=3600)
-    def query_rewrite_for_independence(self, agent_options, chat_history, query, llm, display=False, **kwargs):
+    def query_rewrite_for_independence(self, chat_history, query, llm, display=False, **kwargs):
         """
         对应 intent_recognition.py 第342-377行的 query_rewrite_for_independence 方法
         :param display: 是否将独立查询重写的结果也展示在前端
@@ -243,7 +243,7 @@ class KnowledgeRag:
                 {"custom_return_chunk": "结合历史对话信息，您似乎是想问："},
                 **kwargs,
             )
-            invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+            invoke_func = invoke_decorator(llm.invoke, llm)
             resp = invoke_func(messages, **kwargs)
             conditional_dispatch_custom_event(
                 "custom_event",
@@ -253,7 +253,7 @@ class KnowledgeRag:
         else:
             # 包在这 2 行 conditional_dispatch_custom_event 代码之间的 LLM 输出不会在前端展示
             conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-            invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+            invoke_func = invoke_decorator(llm.invoke, llm)
             resp = invoke_func(messages, **kwargs)
             conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -262,7 +262,7 @@ class KnowledgeRag:
 
     @timeit(message="独立查询重写，依据上下文总结")
     @retry(max_retries=5, max_seconds=3600)
-    def sum_chat_history_for_query(self, agent_options, chat_history, query, llm, **kwargs):
+    def sum_chat_history_for_query(self, chat_history, query, llm, **kwargs):
         if not chat_history:
             return None
         sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
@@ -276,7 +276,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages, **kwargs)
         conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -287,7 +287,7 @@ class KnowledgeRag:
 
     @timeit(message="意图切换检测和独立查询重写/直接答复")
     @retry(max_retries=5, max_seconds=3600)
-    def query_cls_with_resp_or_rewrite(self, agent_options, chat_history, query, llm, **kwargs):
+    def query_cls_with_resp_or_rewrite(self, chat_history, query, llm, **kwargs):
         sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
             "query_cls_with_resp_or_rewrite_sys_prompt_template"
         )
@@ -299,7 +299,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -334,7 +334,7 @@ class KnowledgeRag:
     def query_cls_pipeline(self, chat_history, query, llm, agent_options, **kwargs):
         if agent_options.knowledge_query_options.merge_query_cls_with_resp_or_rewrite:
             if chat_history:
-                result = self.query_cls_with_resp_or_rewrite(agent_options, chat_history, query, llm, **kwargs)
+                result = self.query_cls_with_resp_or_rewrite(chat_history, query, llm, **kwargs)
                 query_cls = result["query_cls"]
             else:
                 # 如无history，目前处理成相当于开始一个新的话题
@@ -361,7 +361,7 @@ class KnowledgeRag:
         else:
             if chat_history:
                 if agent_options.knowledge_query_options.with_query_cls:
-                    query_cls = self.latest_query_classification(agent_options, chat_history, query, llm, **kwargs)
+                    query_cls = self.latest_query_classification(chat_history, query, llm, **kwargs)
                 else:
                     query_cls = "continue"
             else:
@@ -376,7 +376,7 @@ class KnowledgeRag:
                 )
             elif query_cls == "continue":
                 independent_query = self.query_rewrite_for_independence(
-                    agent_options, chat_history, query, llm, **kwargs
+                    chat_history, query, llm, **kwargs
                 )
             elif query_cls == "new":
                 independent_query = query
@@ -473,7 +473,6 @@ class KnowledgeRag:
         if fine_grained_score_type == FineGrainedScoreType.LLM:
             # NOTE: 如果 FineGrainedScoreType 为 LLM，则因为当前只有是/否相关的判断，因此分数只有 1.0 或 0.0
             fine_grained_scores = self.llm_relevance_determiner_parallel(
-                agent_options,
                 (
                     kwargs.get("translated_query", query_for_search)
                     if agent_options.knowledge_query_options.use_independent_query_in_scores
@@ -546,7 +545,7 @@ class KnowledgeRag:
         )
 
     @retry(max_retries=5, max_seconds=3600)
-    def llm_relevance_determiner(self, agent_options, query, doc, llm, **kwargs):
+    def llm_relevance_determiner(self, query, doc, llm, **kwargs):
         """
         对应 intent_recognition.py 第595-638行的 llm_relevance_determiner 方法
         """
@@ -596,19 +595,19 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         return not resp_content.startswith("0")  # 用0来判断，减少误删
 
     @timeit(message="使用LLM并发进行query和召回文档相关性判断")
-    def llm_relevance_determiner_parallel(self, agent_options, query, fusion_docs, llm, **kwargs):
+    def llm_relevance_determiner_parallel(self, query, fusion_docs, llm, **kwargs):
         """
         对应 intent_recognition.py 第641-653行的 llm_relevance_determiner_parallel 方法
         """
         try:
             futures = [
-                knowledge_bk_executor.submit(self.llm_relevance_determiner, agent_options, query, doc, llm, **kwargs)
+                knowledge_bk_executor.submit(self.llm_relevance_determiner, query, doc, llm, **kwargs)
                 for doc in fusion_docs
             ]
             results = [1.0 if future.result() else 0.0 for future in futures]
@@ -620,7 +619,7 @@ class KnowledgeRag:
         return results
 
     @retry(max_retries=5, max_seconds=3600)
-    def llm_context_compressor(self, agent_options, provided_chat_history, query, candidate_context, llm, **kwargs):
+    def llm_context_compressor(self, provided_chat_history, query, candidate_context, llm, **kwargs):
         """
         对应 intent_recognition.py 第656-690行的 llm_context_compressor 方法
         """
@@ -651,7 +650,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         # 如果触发了混元的特殊回复，则不进行压缩
@@ -660,7 +659,7 @@ class KnowledgeRag:
         return resp_content
 
     @timeit(message="使用LLM并发进行知识库内容压缩总结")
-    def llm_context_compressor_parallel(self, agent_options, provided_chat_history, query, context, llm, **kwargs):
+    def llm_context_compressor_parallel(self, provided_chat_history, query, context, llm, **kwargs):
         """
         对应 intent_recognition.py 第693-706行的 llm_context_compressor_parallel 方法
         """
@@ -668,7 +667,6 @@ class KnowledgeRag:
             futures = [
                 knowledge_bk_executor.submit(
                     self.llm_context_compressor,
-                    agent_options,
                     provided_chat_history,
                     query,
                     candidate_context,
@@ -774,7 +772,7 @@ class KnowledgeRag:
         if agent_options.knowledge_query_options.independent_query_mode == IndependentQueryMode.REWRITE:
             res = self.query_cls_pipeline(chat_history, query, llm, agent_options, **kwargs)
         elif agent_options.knowledge_query_options.independent_query_mode == IndependentQueryMode.SUM_AND_CONCATE:
-            sum_res = self.sum_chat_history_for_query(agent_options, chat_history, query, llm, **kwargs)
+            sum_res = self.sum_chat_history_for_query(chat_history, query, llm, **kwargs)
             if sum_res:
                 res = f"{sum_res}\n{query}"
         if isinstance(res, dict) and "decision" in res:

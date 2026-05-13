@@ -97,7 +97,7 @@ class TestKnowledgeRag:
         rag = KnowledgeRag(llm=mock_llm)
         agent_options = create_agent_options()
 
-        result = rag.extract_query_keywords(agent_options=agent_options, query="什么是蓝鲸智云平台", llm=mock_llm)
+        result = rag.extract_query_keywords(query="什么是蓝鲸智云平台", llm=mock_llm)
 
         assert isinstance(result, list)
         assert len(result) == 3
@@ -114,7 +114,7 @@ class TestKnowledgeRag:
         rag = KnowledgeRag(llm=mock_llm)
         agent_options = create_agent_options()
 
-        result = rag.query_translation(agent_options=agent_options, query="blueking platform", llm=mock_llm)
+        result = rag.query_translation(query="blueking platform", llm=mock_llm)
 
         assert result == "蓝鲸智云平台"
         mock_invoke_func.assert_called_once()
@@ -129,7 +129,7 @@ class TestKnowledgeRag:
         rag = KnowledgeRag(llm=mock_llm)
         agent_options = create_agent_options()
 
-        result = rag.query_translation(agent_options=agent_options, query="蓝鲸智云平台", llm=mock_llm)
+        result = rag.query_translation(query="蓝鲸智云平台", llm=mock_llm)
 
         assert result is None
 
@@ -145,7 +145,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.query_rewrite_for_independence(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='我的手机号xxx存在经常被无故停机的问题')]",
             query="手机号123也是",
             llm=mock_llm,
@@ -167,7 +166,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.sum_chat_history_for_query(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='我的手机号经常被停机')]",
             query="为什么",
             llm=mock_llm,
@@ -184,7 +182,7 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.sum_chat_history_for_query(
-            agent_options=agent_options, chat_history="", query="什么是蓝鲸", llm=mock_llm
+            chat_history="", query="什么是蓝鲸", llm=mock_llm
         )
 
         assert result is None
@@ -262,7 +260,7 @@ class TestKnowledgeRag:
         doc = Document(page_content="蓝鲸是腾讯开发的运维平台", metadata={})
 
         result = rag.llm_relevance_determiner(
-            agent_options=agent_options, query="什么是蓝鲸", doc=doc, llm=mock_llm, input="什么是蓝鲸"
+            query="什么是蓝鲸", doc=doc, llm=mock_llm, input="什么是蓝鲸"
         )
 
         assert result is True
@@ -288,7 +286,7 @@ class TestKnowledgeRag:
         ]
 
         result = rag.llm_relevance_determiner_parallel(
-            agent_options=agent_options, query="test query", fusion_docs=docs, llm=mock_llm
+            query="test query", fusion_docs=docs, llm=mock_llm
         )
 
         assert result == [1.0, 0.0]
@@ -304,7 +302,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.llm_context_compressor(
-            agent_options=agent_options,
             provided_chat_history="[]",
             query="什么是蓝鲸",
             candidate_context="蓝鲸是腾讯开发的运维平台，具有很多功能...",
@@ -323,7 +320,6 @@ class TestKnowledgeRag:
 
         with pytest.raises(ValueError, match="不支持的知识库知识压缩方式"):
             rag.llm_context_compressor(
-                agent_options=agent_options,
                 provided_chat_history="[]",
                 query="test",
                 candidate_context="content",
@@ -347,7 +343,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.llm_context_compressor_parallel(
-            agent_options=agent_options,
             provided_chat_history="[]",
             query="test",
             context=["内容1", "内容2"],
@@ -402,8 +397,19 @@ class TestKnowledgeRag:
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
 
-        knowledge_settings = KnowledgebaseSettings(qa_response_kb_ids=[100])
-        agent_options = AgentOptions(knowledge_query_options=knowledge_settings)
+        knowledge_settings = KnowledgebaseSettings(
+            knowledge_bases=[],
+            with_index_specific_search=True,
+            with_rrf=False,
+            knowledge_resource_reject_threshold=(0.3, 0.7),
+            qa_response_kb_ids=[100],
+        )
+        intent_settings = IntentRecognition(
+            with_index_specific_search_init=False,
+            with_index_specific_search_translation=False,
+            with_index_specific_search_keywords=False,
+        )
+        agent_options = AgentOptions(knowledge_query_options=knowledge_settings, intent_recognition_options=intent_settings)
 
         # 新的方法签名直接接收文档列表
         docs_list = [
@@ -504,7 +510,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.latest_query_classification(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="你好",
             llm=mock_llm,
@@ -525,7 +530,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.latest_query_classification(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="那绿屏怎么解决",
             llm=mock_llm,
@@ -546,7 +550,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.latest_query_classification(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="谢谢",
             llm=mock_llm,
@@ -567,7 +570,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.query_cls_with_resp_or_rewrite(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="你好",
             llm=mock_llm,
@@ -590,7 +592,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.query_cls_with_resp_or_rewrite(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="那绿屏怎么解决",
             llm=mock_llm,
@@ -613,7 +614,6 @@ class TestKnowledgeRag:
         agent_options = create_agent_options()
 
         result = rag.query_cls_with_resp_or_rewrite(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="谢谢",
             llm=mock_llm,
