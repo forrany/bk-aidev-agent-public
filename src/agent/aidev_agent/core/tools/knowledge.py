@@ -26,11 +26,10 @@ from pydantic import BaseModel
 
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
+from aidev_agent.pydantic_models import KnowledgeSettings
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
-
-    from aidev_agent.pydantic_models import AgentOptions
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ class KnowledgeRetrievalInput(BaseModel):
 
 def make_knowledge_retrieval_tool(
     llm: BaseChatModel,
-    agent_options: AgentOptions,
+    knowledge_query_options: KnowledgeSettings,
     chat_history: Optional[list] = None,
 ) -> Optional[StructuredTool]:
     """构建知识库检索工具。
@@ -53,21 +52,18 @@ def make_knowledge_retrieval_tool(
 
     Args:
         llm: 语言模型，用于知识库检索中的相关性判断和内容处理
-        agent_options: Agent 配置选项，包含知识库配置 (knowledge_bases, knowledge_items)
+        knowledge_query_options: 知识库检索配置
 
     Returns:
         StructuredTool 实例，如果未配置知识库则返回 None
 
     Example:
-        >>> tool = make_knowledge_retrieval_tool(llm, agent_options)
+        >>> tool = make_knowledge_retrieval_tool(llm, knowledge_query_options)
         >>> if tool:
         ...     result = tool.invoke({"query": "如何部署蓝鲸平台？"})
     """
     # 如果没有配置知识库，返回 None
-    if (
-        not agent_options.knowledge_query_options.knowledge_bases
-        and not agent_options.knowledge_query_options.knowledge_items
-    ):
+    if not knowledge_query_options.knowledge_bases and not knowledge_query_options.knowledge_items:
         return None
 
     def knowledge_retrieval(query: str) -> list:
@@ -84,7 +80,7 @@ def make_knowledge_retrieval_tool(
         retriever = KnowledgeRag(llm, kb_retriever)
 
         # 执行知识库检索
-        ret = retriever.retrieve(query, agent_options, input=query, chat_history=chat_history)
+        ret = retriever.retrieve(query, knowledge_query_options, input=query, chat_history=chat_history)
         return ret.get("knowledge_content", [])
 
     return StructuredTool.from_function(

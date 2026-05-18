@@ -105,7 +105,6 @@ class SkillsPromptMiddleware:
     """将 Agent Skills 发现信息注入到 system prompt 中（模板管道）。"""
 
     registry: SkillRegistry
-    skill_sources: list[str]
     enable_runtime_tool: bool = False
 
     def __call__(self, ctx: ProcessorContext, next: NextFunction) -> None:

@@ -34,7 +34,6 @@ from requests.exceptions import JSONDecodeError
 from typing_extensions import Annotated
 
 from aidev_agent.config import settings
-from aidev_agent.pydantic_models import AgentOptions
 
 from .enums import FieldType, FuncType
 from .exceptions import ToolValidationError
@@ -547,7 +546,7 @@ class McpToolsResult(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: str | None = None) -> McpToolsResult:
+def make_mcp_tools(server_config: dict, username: str | None = None) -> McpToolsResult:
     """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
 
     .. deprecated::
@@ -559,7 +558,6 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
 
     return resource_manager().construct_mcp(
         mcp_config=server_config,
-        agent_options=agent_options,
         username=username,
     )
 
@@ -567,9 +565,8 @@ def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: s
 class MCPExceptionWrapper:
     """可序列化的MCP异常处理包装器"""
 
-    def __init__(self, coro, agent_options):
+    def __init__(self, coro):
         self.coro = coro
-        self.agent_options = agent_options
         functools.update_wrapper(self, coro)
         # 预编译正则表达式并存储为编译后的模式对象字典
         self.compiled_pattern_to_retry_guide = {
@@ -585,9 +582,7 @@ class MCPExceptionWrapper:
             error_detail = self.extract_error_message(str(err))
             # 尝试获取重试引导
             retry_guide = self.get_mcp_tool_retry_guide(error_detail)
-            if retry_guide:
-                self.agent_options.knowledge_query_options.mcp_tool_retry_guide.append(retry_guide)
-            return (f"[ERROR] MCP工具调用失败: {error_detail}", None)
+            return (f"[ERROR] MCP工具调用失败: {error_detail} {retry_guide or ''}", None)
         except BaseExceptionGroup as err:
             # 提取所有非 ExceptionGroup 的底层异常
             all_errors = list(_extract_all_non_group_exceptions(err))

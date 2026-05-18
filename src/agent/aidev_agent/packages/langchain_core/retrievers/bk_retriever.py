@@ -7,6 +7,7 @@ from langchain_core.retrievers import BaseRetriever
 
 from aidev_agent.packages.langchain_core.retrievers.protocol import Filter, ScalarFilter, VectorFilter
 from aidev_agent.packages.resource_manager.registry import resource_manager
+from aidev_agent.pydantic_models import KnowledgeSettings
 from aidev_agent.utils.decorator import timeit
 from aidev_agent.utils.module_loading import import_string
 
@@ -169,7 +170,7 @@ class BkRetriever(BaseRetriever):
         knowledge_bases: list[dict],
         query,
         topk,
-        agent_options,
+        knowledge_query_options: KnowledgeSettings,
         resource_type="knowledge",
         **kwargs,
     ):
@@ -188,8 +189,8 @@ class BkRetriever(BaseRetriever):
             "query": query,
             "topk": topk,
             "index_query_kwargs": index_query_kwargs,
-            "knowledge_template_id": agent_options.knowledge_query_options.knowledge_template_id,
-            "with_scalar_data": agent_options.knowledge_query_options.with_scalar_data,
+            "knowledge_template_id": knowledge_query_options.knowledge_template_id,
+            "with_scalar_data": knowledge_query_options.with_scalar_data,
             "raw": True,  # 知识库查询接口集成了本文件中的重排逻辑，设置为True防止循环重排。下同
             "type": "index_specific",
         }
@@ -202,7 +203,7 @@ class BkRetriever(BaseRetriever):
         knowledge_bases: list[dict],
         extracted_keywords,
         topk,
-        agent_options,
+        knowledge_query_options: KnowledgeSettings,
         **kwargs,
     ):
         """
@@ -216,7 +217,7 @@ class BkRetriever(BaseRetriever):
                 query="\n\n".join(extracted_keywords),
                 topk=topk,
                 disable_timeit=True,
-                agent_options=agent_options,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
         else:
@@ -224,7 +225,13 @@ class BkRetriever(BaseRetriever):
 
     @timeit(message="知识库检索（index_specific方式，使用翻译后的中文）")
     def search_knowledge_index_specific_translation(
-        self, knowledge_items: list[dict], knowledge_bases: list[dict], translated_query, topk, agent_options, **kwargs
+        self,
+        knowledge_items: list[dict],
+        knowledge_bases: list[dict],
+        translated_query,
+        topk,
+        knowledge_query_options: KnowledgeSettings,
+        **kwargs,
     ):
         """
         对应 intent_recognition.py 第218-233行的 search_knowledge_index_specific_translation 方法
@@ -237,7 +244,7 @@ class BkRetriever(BaseRetriever):
                 query=translated_query,
                 topk=topk,
                 disable_timeit=True,
-                agent_options=agent_options,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
         else:

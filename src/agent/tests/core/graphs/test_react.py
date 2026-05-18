@@ -11,8 +11,8 @@ import pytest
 from aidev_agent.config import settings
 from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
 from aidev_agent.core.nodes.tool import ToolNodeSettings
-from aidev_agent.pydantic_models import AgentOptions
 from langchain.agents.middleware.types import AgentMiddleware
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool
 
@@ -116,33 +116,16 @@ class TestReActAgentBuilder:
 
     def test_set_non_thinking_llm(self):
         builder = ReActAgentBuilder()
-        llm = MagicMock()
+        llm = MagicMock(spec=BaseChatModel)
         result = builder.set_non_thinking_llm(llm)
         assert builder._non_thinking_llm is llm
         assert result is builder
 
-    def test_set_support_vision(self):
-        builder = ReActAgentBuilder()
-        result = builder.set_support_vision(True)
-        assert builder._support_vision is True
-        assert result is builder
 
     def test_set_llm_token_limit(self):
         builder = ReActAgentBuilder()
         result = builder.set_llm_token_limit(50000)
         assert builder._llm_token_limit == 50000
-        assert result is builder
-
-    def test_set_role_prompt(self):
-        builder = ReActAgentBuilder()
-        result = builder.set_role_prompt("You are helpful")
-        assert builder._role_prompt == "You are helpful"
-        assert result is builder
-
-    def test_set_prefix(self):
-        builder = ReActAgentBuilder()
-        result = builder.set_prefix("prefix text")
-        assert builder._prefix == "prefix text"
         assert result is builder
 
     def test_set_suffix(self):
@@ -294,13 +277,6 @@ class TestReActAgentBuilder:
         assert builder._enable_security_runtime is False
         assert builder._debug is True
 
-    def test_set_agent_options(self):
-        builder = ReActAgentBuilder()
-        opts = AgentOptions()
-        result = builder.set_agent_options(opts)
-        assert builder._agent_options is opts
-        assert result is builder
-
     def test_set_callbacks(self):
         builder = ReActAgentBuilder()
         cb = [MagicMock()]
@@ -334,13 +310,6 @@ class TestReActAgentBuilder:
         mw = [CustomMiddlewareWithWrap()]
         result = builder.set_langchain_middleware(mw)
         assert builder._langchain_middleware is mw
-        assert result is builder
-
-    def test_set_intent_recognition_kwargs(self):
-        builder = ReActAgentBuilder()
-        kwargs = {"tool_output_compress_thrd": 3000}
-        result = builder.set_intent_recognition_kwargs(kwargs)
-        assert builder._intent_recognition_kwargs is kwargs
         assert result is builder
 
     def test_set_state_schema(self):
@@ -384,16 +353,8 @@ class TestReActAgentBuilder:
     def test_chained_setters(self):
         """验证多个 setter 可以链式调用"""
         llm = MagicMock()
-        builder = (
-            ReActAgentBuilder()
-            .set_llm(llm)
-            .set_role_prompt("role")
-            .set_support_vision(True)
-            .set_debug(True)
-            .set_name("chain-test")
-        )
+        builder = ReActAgentBuilder().set_llm(llm).set_support_vision(True).set_debug(True).set_name("chain-test")
         assert builder._llm is llm
-        assert builder._role_prompt == "role"
         assert builder._support_vision is True
         assert builder._debug is True
         assert builder._name == "chain-test"
@@ -421,6 +382,15 @@ class TestReActAgentBuilder:
             ),
             pytest.raises(ValueError, match="knowledge_llm"),
         ):
+            builder.build()
+
+    def test_build_raises_when_knowledge_query_options_not_knowledgebase_settings(self):
+        """knowledge_query_options 不是 KnowledgeSettings 类型时应抛出 ValueError"""
+        llm = MagicMock()
+        llm.model_name = "gpt-4o"
+        builder = ReActAgentBuilder().set_llm(llm)
+        builder._knowledge_query_options = {"knowledge_bases": [{"id": "kb1"}]}
+        with pytest.raises(ValueError, match="knowledge_query_options 必须为 KnowledgeSettings"):
             builder.build()
 
     def test_build_extra_tools_passed_to_prepare_agent_tools(self):
@@ -597,17 +567,14 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            (
-                ReActAgentBuilder()
-                .set_llm(llm)
-                .set_knowledge_llm(knowledge_llm)
-                .set_knowledge_bases([{"id": "kb1"}])
-                .build()
+            builder = (
+                ReActAgentBuilder().set_llm(llm).set_knowledge_llm(knowledge_llm).set_knowledge_bases([{"id": "kb1"}])
             )
+            builder.build()
             mock_make_kn.assert_called_once()
 
     def test_build_model_node_receives_correct_params(self):
-        """build() 应将正确的参数传给 _prepare_agent_model_node"""
+        """build() 应将正确的 llm 和 non_thinking_llm 传给 _prepare_agent_model_node"""
         llm = MagicMock()
         llm.model_name = "test-model"
 
@@ -621,11 +588,10 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            ReActAgentBuilder().set_llm(llm).set_enable_query_clarification(True).build()
+            ReActAgentBuilder().set_llm(llm).build()
 
             kwargs = mock_model_node.call_args.kwargs
             assert kwargs["llm"] is llm
-            assert kwargs["enable_query_clarification"] is True
 
     def test_build_skill_runtime_registers_backend(self, tmp_path, monkeypatch):
         """skill 的 runtime 匹配已注册类型时，应为该 skill 创建并注册独立 backend"""
@@ -781,39 +747,7 @@ class TestReActAgentBuilder:
         assert ReActAgentBuilder._should_continue({"messages": []}) == "end"
 
     # ----------------------------------------------------------------
-    # B (continued). _prepare_agent_options 测试
-    # ----------------------------------------------------------------
-
-    def test_prepare_agent_options_default(self):
-        """agent_options=None 时应创建默认 AgentOptions"""
-        builder = ReActAgentBuilder()
-        result = builder._prepare_agent_options(None)
-        assert isinstance(result, AgentOptions)
-
-    def test_prepare_agent_options_applies_ir_kwargs(self):
-        """intent_recognition_kwargs 应正确覆盖 agent_options 的值"""
-        builder = ReActAgentBuilder()
-        result = builder._prepare_agent_options(
-            None,
-            intent_recognition_kwargs={
-                "tool_output_compress_thrd": 3000,
-                "token_limit_margin": 200,
-                "max_tool_output_len": 800,
-            },
-        )
-        assert result.intent_recognition_options.tool_output_compress_thrd == 3000
-        assert result.knowledge_query_options.token_limit_margin == 200
-        assert result.intent_recognition_options.max_tool_output_len == 800
-
-    def test_prepare_agent_options_sets_knowledge(self):
-        builder = ReActAgentBuilder()
-        kb = [{"id": "1"}]
-        ki = [{"id": "2"}]
-        result = builder._prepare_agent_options(None, knowledge_bases=kb, knowledge_items=ki, role_prompt="rp")
-        assert result.knowledge_query_options.knowledge_bases == kb
-        assert result.knowledge_query_options.knowledge_items == ki
-        assert result.knowledge_query_options.role_prompt == "rp"
-
+    # B (continued). _prepare_store 测试
     # ----------------------------------------------------------------
     # B (continued). _prepare_store 测试
     # ----------------------------------------------------------------
@@ -845,31 +779,14 @@ class TestReActAgentBuilder:
         opts = AgentExecutorKwargs(
             llm=llm,
             knowledge_llm=knowledge_llm,
-            role_prompt="test role",
             callbacks=cb,
         )
         builder = ReActAgentBuilder()
         result = builder.set_bkai_options(opts)
         assert builder._llm is llm
         assert builder._knowledge_llm is knowledge_llm
-        assert builder._role_prompt == "test role"
         assert builder._callbacks == cb
         assert result is builder
-
-    def test_set_bkai_options_non_thinking_llm_str_conversion(self):
-        """non_thinking_llm 为 str 时应调用 ChatModel.get_setup_instance 转换"""
-        from aidev_agent.pydantic_models import AgentExecutorKwargs
-
-        mock_instance = MagicMock()
-        with patch(
-            "aidev_agent.core.graphs.react.graph.ChatModel.get_setup_instance",
-            return_value=mock_instance,
-        ) as mock_get:
-            opts = AgentExecutorKwargs(llm=MagicMock(), non_thinking_llm="gpt-4o-mini")
-            builder = ReActAgentBuilder()
-            builder.set_bkai_options(opts)
-            mock_get.assert_called_once_with(model="gpt-4o-mini")
-            assert builder._non_thinking_llm is mock_instance
 
     def test_set_bkai_options_non_thinking_llm_basechatmodel(self):
         """non_thinking_llm 为 BaseChatModel 时应直接赋值"""
@@ -979,7 +896,6 @@ class TestReActAgentBuilder:
         assert isinstance(graph.agent, AgentStreamAdapter)
         # cfg 应包含 configurable
         assert "configurable" in cfg
-        assert "agent_options" in cfg["configurable"]
         assert "debug" in cfg["configurable"]
 
     def test_build_with_callbacks_in_config(self):

@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.packages.langchain_core.models.mock import MockChatModel
-from aidev_agent.pydantic_models import AgentConfig, AgentOptions
+from aidev_agent.pydantic_models import AgentConfig
 from aidev_agent.services.agent import (
     AgentBuildContext,
     AgentInstanceFactory,
@@ -39,7 +39,6 @@ def _make_agent_config(agent_code: str = "agent-x", **overrides) -> AgentConfig:
         agent_name=agent_code,
         chat_model="mock-llm",
         non_thinking_llm="mock-llm",
-        agent_options=AgentOptions(),
     )
     base.update(overrides)
     return AgentConfig(**base)
@@ -169,8 +168,7 @@ def _patch_chat_builder(knowledges=None):
     builder_mock.build_knowledge_bases.return_value = [{"id": "kb1"}]
     builder_mock.build_knowledge_items.return_value = knowledges or [{"id": "ki1"}, {"id": "ki2"}]
     builder_mock.build_chat_history.return_value = []
-    builder_mock.build_agent_options.return_value = AgentOptions()
-    builder_mock.build_agent_prompt.return_value = "prompt"
+    builder_mock.build_knowledge_query_options.return_value = None
     builder_mock.build_executor_info.return_value = {"executor": "u"}
     builder_mock.build_checkpointer.return_value = MemorySaver()
     builder_mock.get_role_prompt.return_value = "role"

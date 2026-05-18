@@ -308,7 +308,6 @@ def build_model_node(
             use_structured_response=use_structured_response,
             use_general_knowledge_on_miss=node_options.use_general_knowledge_on_miss,
             rejection_message=node_options.rejection_message,
-            role_prompt=node_options.role_prompt,
             enable_parallel_tool_calls=enable_parallel_tool_calls,
         ),
     )

@@ -11,16 +11,19 @@ from aidev_agent.enums import PromptRole
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.models.mock import MockChatModel, MockResponse
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
+from aidev_agent.packages.resource_manager.base import BaseResourceManager
 from aidev_agent.pydantic_models import (
-    AgentOptions,
+    AgentConfig,
     ChatPrompt,
     ExecuteKwargs,
-    IntentRecognition,
+    KnowledgeSettings,
+    ModelContextSettings,
 )
 from aidev_agent.services.agent import ChatCompletionAgent
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler.streaming_helper import GeneratorStreamingHelper
 from aidev_agent.utils.event import RunId
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import ToolException, tool
 
 
@@ -601,7 +604,7 @@ class TestCommonAgentChatStreaming:
                 chat_history=[
                     ChatPrompt(role="user", content="云桌面黑屏怎么处理?"),
                 ],
-                knowledge_bases=[knowledgebase],
+                knowledge_query_options=KnowledgeSettings(knowledge_bases=[knowledgebase]),
             )
             results = []
             for each in agent.execute(ExecuteKwargs(stream=True)):
@@ -750,7 +753,7 @@ class TestCommonAgentChatStreamingLive:
             chat_history=[
                 ChatPrompt(role="user", content="云桌面黑屏怎么处理?"),
             ],
-            knowledge_bases=[knowledgebase],
+            knowledge_query_options=KnowledgeSettings(knowledge_bases=[knowledgebase]),
         )
         with open("text.log", "w") as fo:
             result = agent.execute(ExecuteKwargs(stream=True))
@@ -765,11 +768,6 @@ class TestCommonAgentChatStreamingLive:
                 ChatPrompt(role="user", content="今天广州天气怎么样?"),
             ],
             tools=[get_weather],
-            agent_options=AgentOptions(
-                intent_recognition_options=IntentRecognition(
-                    agent_type="openai",
-                ),
-            ),
         )
         with open("text.log", "w") as fo:
             result = agent.execute(ExecuteKwargs(stream=True, legacy_streaming=True))
@@ -790,12 +788,7 @@ class TestCommonAgentChatStreamingLive:
             chat_history=[
                 ChatPrompt(role="user", content="云桌面黑屏怎么处理?"),
             ],
-            knowledge_bases=[knowledgebase],
-            agent_options=AgentOptions(
-                intent_recognition_options=IntentRecognition(
-                    agent_type="deepseek_r1",
-                ),
-            ),
+            knowledge_query_options=KnowledgeSettings(knowledge_bases=[knowledgebase]),
         )
         with open("text.log", "w") as fo:
             result = agent.execute(ExecuteKwargs(stream=True, legacy_streaming=True))
@@ -810,11 +803,6 @@ class TestCommonAgentChatStreamingLive:
                 ChatPrompt(role="user", content="今天广州天气怎么样?"),
             ],
             tools=[get_weather],
-            agent_options=AgentOptions(
-                intent_recognition_options=IntentRecognition(
-                    agent_type="openai",
-                ),
-            ),
         )
         with open("text.log", "w") as fo:
             result = agent.execute(ExecuteKwargs(stream=True))
@@ -849,11 +837,6 @@ class TestCommonAgentChatStreamingWithAgentLegacyStreaming:
                 ChatPrompt(id="3", role="assistant", content="Hello, how can I help you?"),
                 ChatPrompt(id="4", role="user", content="复述一下上下文的内容"),
             ],
-            agent_options=AgentOptions(
-                intent_recognition_options=IntentRecognition(
-                    agent_type="openai",
-                ),
-            ),
         )
         results = []
         for each in agent.execute(ExecuteKwargs(stream=True, legacy_streaming=True)):
@@ -886,11 +869,7 @@ class TestCommonAgentChatStreamingWithAgentLegacyStreaming:
                 ChatPrompt(id="3", role="assistant", content="Hello, how can I help you?"),
                 ChatPrompt(id="4", role="user", content="复述一下上下文的内容"),
             ],
-            agent_options=AgentOptions(
-                intent_recognition_options=IntentRecognition(
-                    agent_type="deepseek",
-                ),
-            ),
+            model_context_options=ModelContextSettings(llm_code_agent_type="deepseek"),
         )
         results = []
         for each in agent.execute(ExecuteKwargs(stream=True, legacy_streaming=True)):
@@ -1443,3 +1422,384 @@ class TestSessionWriterCancelUnit:
     def test_constants_consistency(self):
         """PAUSED_CONTENT_MESSAGE 和 RunId.CANCELLED_MESSAGE 应一致为"用户已取消" """
         assert BaseSessionWriter.PAUSED_CONTENT_MESSAGE == RunId.CANCELLED_MESSAGE == "用户已取消"
+
+
+# ---------------------------------------------------------------------------
+# TestAgentFactory2Chat: 验证 AgentFactory → ChatBuilder → ChatCompletionAgent
+# 字段映射正确性
+# ---------------------------------------------------------------------------
+
+
+def _build_factory_raw(**overrides) -> dict:
+    """构造完整的平台原始数据，模拟 retrieve_agent_config 返回值。"""
+    raw = {
+        "agent_name": "Factory Test Agent",
+        "conversation_settings": {
+            "opening_remark": "Hello!",
+            "commands": [],
+        },
+        "prompt_setting": {
+            "content": [{"role": "system", "content": "你是一个翻译助手"}],
+            "llm_code": "test-llm-v1",
+            "non_thinking_llm": "test-llm-lite",
+            "llm_token_limit": 28000,
+            "max_tokens": 20480,
+            "tool_output_compress_thrd": 4096,
+            "support_upload": {"vision": True},
+            "temperature": 0.7,
+        },
+        "intent_recognition": {
+            "agent_type": "deepseek_r1",
+            "knowledges": [],
+        },
+        "knowledgebase_settings": {
+            "knowledgebases": [10, 20],
+            "retriever_code": "default_retriever",
+            "query_function": "semantic",
+            "document_fragment_count": 0,
+            "knowledge_resource_fine_grained_score_type": "LLM",
+            "knowledge_resource_reject_threshold": [0.5, 0.68],
+            "independent_query_mode": "REWRITE",
+            "polish": False,
+            "origin": True,
+            "knowledge_template_id": 1,
+            "is_response_when_no_knowledgebase_match": True,
+            "rejection_message": "抱歉，无法回答",
+        },
+        "related_tools": ["tool-a", "tool-b"],
+        "related_skills": [{"skill_id": "s1"}],
+        "mcp_server_config": {"mcpServers": {}},
+    }
+    raw.update(overrides)
+    return raw
+
+
+class _FactoryStubRM(BaseResourceManager):
+    """Stub resource_manager，mock retrieve_agent_config 和其他 retrieve/construct 方法。"""
+
+    def __init__(self, raw=None):
+        super().__init__(app_code="test-code", app_secret="test-secret")
+        self._raw = raw or _build_factory_raw()
+
+    def retrieve_agent_config(self, agent_code, version=None, **kwargs):
+        return self._raw
+
+    def get_client(self, **kwargs):
+        return MagicMock()
+
+    def retrieve_knowledgebase(self, id, **kwargs):
+        return {"id": id, "name": f"kb-{id}"}
+
+    def retrieve_knowledge(self, id, **kwargs):
+        return {"id": id, "name": f"knowledge-{id}"}
+
+    def construct_tool(self, tool_code, **kwargs):
+        mock_tool = MagicMock()
+        mock_tool.name = tool_code
+        return mock_tool
+
+    def construct_mcp(self, mcp_config, username=None, executor_info=None, **kwargs):
+        from aidev_agent.packages.langchain_core.tools.base import McpToolsResult
+
+        return McpToolsResult(tools=[], fetch_failures=[])
+
+    def resolve_access_token(self, username=None):
+        return "test-token"
+
+
+def _build_legacy_agent_config() -> AgentConfig:
+    """构造外部旧 resource_manager 可能返回的旧版 AgentConfig。"""
+    return AgentConfig.model_validate(
+        {
+            "agent_code": "legacy-agent",
+            "agent_name": "Legacy Agent",
+            "chat_model": "test-llm-v1",
+            "non_thinking_llm": "test-llm-lite",
+            "role_prompts": [{"role": "system", "content": "legacy role"}],
+            "knowledgebase_ids": [10],
+            "knowledge_ids": [100],
+            "tool_codes": [],
+            "mcp_server_config": {},
+            "related_skills": [],
+            "model_context_options_data": {},
+            "knowledge_query_options_data": {},
+            "agent_options": {
+                "intent_recognition_options": {
+                    "agent_type": "deepseek_r1",
+                    "tool_output_compress_thrd": 4096,
+                    "with_index_specific_search_init": False,
+                },
+                "knowledge_query_options": {
+                    "llm_token_limit": 28000,
+                    "document_fragment_count": 3,
+                    "knowledge_resource_rough_recall_topk": 99,
+                    "rejection_message": "旧拒答",
+                },
+            },
+        }
+    )
+
+
+class TestAgentFactory2Chat:
+    """验证 AgentFactory 使用 ChatBuilder 后 ChatCompletionAgent 各字段被正确赋值。"""
+
+    @staticmethod
+    def _build_agent(raw=None):
+        """通过 AgentInstanceFactory.build_agent 构建并返回 ChatCompletionAgent。"""
+        from aidev_agent.enums import AgentBuildType
+        from aidev_agent.enums import AgentType as AT
+        from aidev_agent.services.agent.factory import AgentInstanceFactory
+
+        rm = _FactoryStubRM(raw=raw or _build_factory_raw())
+        with patch.object(ChatModel, "get_setup_instance", return_value=MagicMock()):
+            agent = AgentInstanceFactory.build_agent(
+                agent_code="test-agent",
+                agent_type=AT.CHAT,
+                build_type=AgentBuildType.DIRECT,
+                resource_manager=rm,
+            )
+
+        return agent
+
+    def test_legacy_agent_config_fallback_options_for_builder(self):
+        """外部旧 AgentConfig 仅返回 agent_options 时，Builder 应迁移出新配置。"""
+        from aidev_agent.enums import AgentType as AT
+        from aidev_agent.services.agent.chat import ChatAgentBuilder
+        from aidev_agent.services.agent.registry import AgentBuildContext
+
+        ctx = AgentBuildContext(
+            agent_code="legacy-agent",
+            agent_type=AT.CHAT,
+            resource_manager=_FactoryStubRM(),
+            agent_config=_build_legacy_agent_config(),
+        )
+        builder = ChatAgentBuilder(ctx)
+
+        mcs = builder.build_model_context_options()
+        kq = builder.build_knowledge_query_options()
+
+        assert isinstance(mcs, ModelContextSettings)
+        assert mcs.llm_code_agent_type == "deepseek_r1"
+        assert mcs.tool_output_compress_thrd == 4096
+        assert mcs.llm_token_limit == 28000
+        assert kq.knowledge_resource_rough_recall_topk == 3
+        assert kq.rejection_message == "旧拒答"
+        assert kq.with_index_specific_search_init is False
+
+    def test_get_agent_uses_migrated_legacy_agent_options(self):
+        """migration_v1 后，_get_agent 应向下传新配置且不传旧字段。"""
+        agent_cls = MagicMock()
+        agent_cls.get_agent_executor.return_value = (MagicMock(), {})
+        legacy_config = _build_legacy_agent_config()
+        agent = ChatCompletionAgent(
+            chat_model=MockChatModel(responses=["hi"]),
+            chat_model_non_thinking=MockChatModel(responses=["hi"]),
+            agent_cls=agent_cls,
+            agent_options=legacy_config.agent_options,
+            knowledge_bases=[{"id": 10}],
+            knowledges=[{"id": 100}],
+        )
+        agent.migration_v1()
+
+        agent._get_agent([HumanMessage(content="hi")], execute_kwargs=ExecuteKwargs())
+
+        kwargs = agent_cls.get_agent_executor.call_args.kwargs
+        assert "agent_options" not in kwargs
+        assert kwargs["model_context_options"].llm_code_agent_type == "deepseek_r1"
+        assert kwargs["model_context_options"].llm_token_limit == 28000
+        assert kwargs["knowledge_query_options"].knowledge_resource_rough_recall_topk == 3
+        assert kwargs["knowledge_query_options"].knowledge_bases == [{"id": 10}]
+        assert kwargs["knowledge_query_options"].knowledge_items == [{"id": 100}]
+
+    def test_execute_migration_v1_handles_legacy_non_thinking_llm_and_agent_options(self):
+        """execute 入口应迁移旧 non_thinking_llm 与旧 agent_options。"""
+        legacy_config = _build_legacy_agent_config()
+        migrated_non_thinking = MockChatModel(responses=["non-thinking"])
+        agent = ChatCompletionAgent(
+            chat_model=MockChatModel(responses=["hi"]),
+            non_thinking_llm="legacy-lite",
+            agent_options=legacy_config.agent_options,
+            messages=[HumanMessage(content="hi")],
+        )
+
+        with (
+            patch.object(ChatModel, "get_setup_instance", return_value=migrated_non_thinking) as mock_setup,
+            patch.object(agent, "_execute", return_value="ok") as mock_execute,
+        ):
+            result = agent.execute(ExecuteKwargs())
+
+        assert result == "ok"
+        mock_setup.assert_called_once_with(model="legacy-lite")
+        assert agent.chat_model_non_thinking is migrated_non_thinking
+        assert agent.model_context_options.llm_code_agent_type == "deepseek_r1"
+        assert agent.knowledge_query_options.knowledge_resource_rough_recall_topk == 3
+        mock_execute.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "prompt_content, expected_role, expected_content",
+        [
+            # collection 类型：hidden-system → 转为 system
+            (
+                [{"role": "hidden-system", "content": "你是一个专业的中英文翻译官"}],
+                "system",
+                "你是一个专业的中英文翻译官",
+            ),
+            # user_define 类型：system 保持不变
+            (
+                [{"role": "system", "content": "你是一个人工智能助手"}],
+                "system",
+                "你是一个人工智能助手",
+            ),
+        ],
+    )
+    def test_chat_history_with_role_prompt(self, prompt_content, expected_role, expected_content):
+        """role_prompts 中的 hidden-system / system 角色应被正确拼接到 chat_history 头部"""
+        raw = _build_factory_raw()
+        raw["prompt_setting"]["content"] = prompt_content
+        agent = self._build_agent(raw=raw)
+        # chat_history 头部应为 role_history 中的系统提示词
+        assert len(agent.chat_history) >= 1
+        first = agent.chat_history[0]
+        assert first.role == expected_role
+        assert first.content == expected_content
+
+    def test_chat_model_from_llm_code(self):
+        """prompt_setting.llm_code → chat_model（通过 ChatModel.get_setup_instance），同时验证 model_name 和 temperature"""
+        captured_calls = []
+
+        def _capture_setup_instance(**kwargs):
+            captured_calls.append(kwargs)
+            mock_model = MagicMock()
+            mock_model.model_name = kwargs.get("model", "")
+            return mock_model
+
+        from aidev_agent.enums import AgentBuildType
+        from aidev_agent.enums import AgentType as AT
+        from aidev_agent.services.agent.factory import AgentInstanceFactory
+
+        rm = _FactoryStubRM(raw=_build_factory_raw())
+        with patch.object(ChatModel, "get_setup_instance", side_effect=_capture_setup_instance):
+            agent = AgentInstanceFactory.build_agent(
+                agent_code="test-agent",
+                agent_type=AT.CHAT,
+                build_type=AgentBuildType.DIRECT,
+                resource_manager=rm,
+            )
+
+        assert agent.chat_model is not None
+        # 第一次调用是 build_chat_model
+        assert captured_calls[0]["model"] == "test-llm-v1"
+        assert captured_calls[0]["temperature"] == 0.7
+        assert captured_calls[0]["max_tokens"] == 20480
+        assert agent.model_name == "test-llm-v1"
+
+    def test_chat_model_non_thinking_from_prompt_setting(self):
+        """prompt_setting.non_thinking_llm → chat_model_non_thinking（通过 ChatModel.get_setup_instance）"""
+        captured_calls = []
+
+        def _capture_setup_instance(**kwargs):
+            captured_calls.append(kwargs)
+            mock_model = MagicMock()
+            mock_model.model_name = kwargs.get("model", "")
+            return mock_model
+
+        from aidev_agent.enums import AgentBuildType
+        from aidev_agent.enums import AgentType as AT
+        from aidev_agent.services.agent.factory import AgentInstanceFactory
+
+        rm = _FactoryStubRM(raw=_build_factory_raw())
+        with patch.object(ChatModel, "get_setup_instance", side_effect=_capture_setup_instance):
+            agent = AgentInstanceFactory.build_agent(
+                agent_code="test-agent",
+                agent_type=AT.CHAT,
+                build_type=AgentBuildType.DIRECT,
+                resource_manager=rm,
+            )
+
+        assert agent.chat_model_non_thinking is not None
+        # 第二次调用是 build_chat_model_non_thinking
+        assert captured_calls[1]["model"] == "test-llm-lite"
+
+    def test_chat_model_non_thinking_fallback_to_chat_model(self):
+        """non_thinking_llm 未配置时回退到 llm_code，chat_model_non_thinking 使用主模型"""
+        captured_calls = []
+
+        def _capture_setup_instance(**kwargs):
+            captured_calls.append(kwargs)
+            mock_model = MagicMock()
+            mock_model.model_name = kwargs.get("model", "")
+            return mock_model
+
+        from aidev_agent.enums import AgentBuildType
+        from aidev_agent.enums import AgentType as AT
+        from aidev_agent.services.agent.factory import AgentInstanceFactory
+
+        raw = _build_factory_raw()
+        raw["prompt_setting"].pop("non_thinking_llm", None)
+        rm = _FactoryStubRM(raw=raw)
+        with patch.object(ChatModel, "get_setup_instance", side_effect=_capture_setup_instance):
+            agent = AgentInstanceFactory.build_agent(
+                agent_code="test-agent",
+                agent_type=AT.CHAT,
+                build_type=AgentBuildType.DIRECT,
+                resource_manager=rm,
+            )
+
+        # non_thinking_llm 回退到 llm_code，所以 chat_model_non_thinking 使用主模型
+        assert agent.chat_model_non_thinking is not None
+        assert captured_calls[1]["model"] == "test-llm-v1"
+
+    def test_model_context_options_fields(self):
+        """llm_token_limit / max_tokens / tool_output_compress_thrd → model_context_options"""
+        agent = self._build_agent()
+        mcs = agent.model_context_options
+        assert isinstance(mcs, ModelContextSettings)
+        assert mcs.llm_token_limit == 28000
+        assert mcs.tool_output_compress_thrd == 4096
+
+    def test_intent_recognition_agent_type_to_llm_code_agent_type(self):
+        """intent_recognition.agent_type → model_context_options.llm_code_agent_type"""
+        agent = self._build_agent()
+        assert agent.model_context_options.llm_code_agent_type == "deepseek_r1"
+
+    def test_support_vision_from_support_upload(self):
+        """prompt_setting.support_upload.vision → support_vision"""
+        agent = self._build_agent()
+        assert agent.support_vision is True
+
+    def test_support_vision_false(self):
+        """support_upload.vision=False 时 support_vision 为 False"""
+        raw = _build_factory_raw()
+        raw["prompt_setting"]["support_upload"] = {"vision": False}
+        agent = self._build_agent(raw=raw)
+        assert agent.support_vision is False
+
+    def test_knowledge_query_options_from_knowledgebase_settings(self):
+        """knowledgebase_settings 相关配置 → knowledge_query_options，document_fragment_count=0 不映射 rough_recall_topk"""
+        agent = self._build_agent()
+        kq = agent.knowledge_query_options
+        assert isinstance(kq, KnowledgeSettings)
+        assert kq.is_response_when_no_knowledgebase_match is True
+        assert kq.rejection_message == "抱歉，无法回答"
+        assert kq.knowledge_resource_fine_grained_score_type.value == "LLM"
+        assert kq.knowledge_resource_reject_threshold == (0.5, 0.68)
+        assert kq.independent_query_mode.value == "REWRITE"
+        assert kq.knowledge_template_id == 1
+        assert kq.knowledge_resource_rough_recall_topk == KnowledgeSettings().knowledge_resource_rough_recall_topk
+
+    def test_knowledge_bases_populated(self):
+        """knowledgebase_settings.knowledgebases → knowledge_bases（_get_agent 时合并到 knowledge_query_options）"""
+        agent = self._build_agent()
+        assert len(agent.knowledge_bases) == 2
+        assert agent.knowledge_bases[0]["id"] == 10
+        assert agent.knowledge_bases[1]["id"] == 20
+
+    def test_related_skills(self):
+        """related_skills → skills"""
+        agent = self._build_agent()
+        assert agent.skills == [{"skill_id": "s1"}]
+
+    def test_tools_from_related_tools(self):
+        """related_tools → tools"""
+        agent = self._build_agent()
+        assert len(agent.tools) == 2

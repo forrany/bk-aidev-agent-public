@@ -22,7 +22,7 @@ import pytest
 from aidev_agent.config import settings
 from aidev_agent.packages.langchain_core.tools.base import Tool, make_mcp_tools, make_structured_tool
 from aidev_agent.packages.resource_manager.registry import resource_manager
-from aidev_agent.pydantic_models import AgentOptions, ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from langchain_core.tools import StructuredTool
 from langchain_core.tools.base import ToolException
 
@@ -456,14 +456,8 @@ def sample_mcp_config_with_auth():
     }
 
 
-@pytest.fixture
-def mock_agent_options():
-    """Mock AgentOptions 对象"""
-    return MagicMock(spec=AgentOptions)
-
-
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_basic(mock_mcp_client_class, sample_mcp_config, mock_agent_options):
+def test_make_mcp_tools_basic(mock_mcp_client_class, sample_mcp_config):
     """测试基本的 make_mcp_tools 功能"""
     # Mock 工具列表
     mock_tool = MagicMock(spec=StructuredTool)
@@ -477,7 +471,7 @@ def test_make_mcp_tools_basic(mock_mcp_client_class, sample_mcp_config, mock_age
     mock_client.get_tools = AsyncMock(return_value=[mock_tool])
     mock_mcp_client_class.return_value = mock_client
 
-    result = make_mcp_tools(sample_mcp_config, mock_agent_options)
+    result = make_mcp_tools(sample_mcp_config)
 
     assert len(result.tools) == 1
     assert result.tools[0].name == "test-mcp-tool"
@@ -487,7 +481,7 @@ def test_make_mcp_tools_basic(mock_mcp_client_class, sample_mcp_config, mock_age
 
 
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_with_blueapps_auth(mock_mcp_client_class, sample_mcp_config_with_auth, mock_agent_options):
+def test_make_mcp_tools_with_blueapps_auth(mock_mcp_client_class, sample_mcp_config_with_auth):
     """测试带 blueapps 认证的 MCP 工具"""
     # Mock 工具
     mock_tool = MagicMock(spec=StructuredTool)
@@ -500,7 +494,7 @@ def test_make_mcp_tools_with_blueapps_auth(mock_mcp_client_class, sample_mcp_con
     mock_client.get_tools = AsyncMock(return_value=[mock_tool])
     mock_mcp_client_class.return_value = mock_client
 
-    result = make_mcp_tools(sample_mcp_config_with_auth, mock_agent_options)
+    result = make_mcp_tools(sample_mcp_config_with_auth)
 
     # 验证认证信息被添加到配置中
     # MultiServerMCPClient 在异步函数内部被调用，需要检查 mock 的调用参数
@@ -516,14 +510,14 @@ def test_make_mcp_tools_with_blueapps_auth(mock_mcp_client_class, sample_mcp_con
 
 
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_error_handling(mock_mcp_client_class, sample_mcp_config, mock_agent_options, caplog):
+def test_make_mcp_tools_error_handling(mock_mcp_client_class, sample_mcp_config, caplog):
     """测试 MCP 工具获取失败时跳过并记录 warning"""
     # Mock 客户端抛出异常
     mock_client = MagicMock()
     mock_client.get_tools = AsyncMock(side_effect=Exception("Connection failed"))
     mock_mcp_client_class.return_value = mock_client
 
-    result = make_mcp_tools(sample_mcp_config, mock_agent_options)
+    result = make_mcp_tools(sample_mcp_config)
 
     assert result.tools == []
     assert len(result.fetch_failures) == 1
@@ -534,7 +528,7 @@ def test_make_mcp_tools_error_handling(mock_mcp_client_class, sample_mcp_config,
 
 
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_multiple_servers(mock_mcp_client_class, mock_agent_options, caplog):
+def test_make_mcp_tools_multiple_servers(mock_mcp_client_class, caplog):
     """测试多个 MCP 服务器中单个失败不会影响其他服务"""
     multi_server_config = {
         "server1": {"url": "http://server1.com/mcp", "transport": "streamable_http"},
@@ -563,7 +557,7 @@ def test_make_mcp_tools_multiple_servers(mock_mcp_client_class, mock_agent_optio
     mock_client.get_tools = AsyncMock(side_effect=mock_get_tools)
     mock_mcp_client_class.return_value = mock_client
 
-    result = make_mcp_tools(multi_server_config, mock_agent_options)
+    result = make_mcp_tools(multi_server_config)
 
     assert len(result.tools) == 2
     assert {t.name for t in result.tools} == {"tool1", "tool2"}
@@ -993,7 +987,7 @@ async def test_tool_with_langgraph_integration():
 
 
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_selected_tools_filter(mock_mcp_client_class, mock_agent_options):
+def test_make_mcp_tools_selected_tools_filter(mock_mcp_client_class):
     """测试 selected_tools 过滤：只保留配置中指定的工具"""
     config = {
         "server1": {
@@ -1016,14 +1010,14 @@ def test_make_mcp_tools_selected_tools_filter(mock_mcp_client_class, mock_agent_
     mock_client.get_tools = AsyncMock(return_value=tools)
     mock_mcp_client_class.return_value = mock_client
 
-    result = make_mcp_tools(config, mock_agent_options)
+    result = make_mcp_tools(config)
 
     assert len(result.tools) == 2
     assert {t.name for t in result.tools} == {"tool_a", "tool_c"}
 
 
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_selected_tools_not_passed_to_client(mock_mcp_client_class, mock_agent_options):
+def test_make_mcp_tools_selected_tools_not_passed_to_client(mock_mcp_client_class):
     """测试 selected_tools 和 mcp_type 字段在传给 MultiServerMCPClient 前被清除"""
     config = {
         "server1": {
@@ -1043,7 +1037,7 @@ def test_make_mcp_tools_selected_tools_not_passed_to_client(mock_mcp_client_clas
     mock_client.get_tools = AsyncMock(return_value=[mock_tool])
     mock_mcp_client_class.return_value = mock_client
 
-    make_mcp_tools(config, mock_agent_options)
+    make_mcp_tools(config)
 
     # 验证传给 MultiServerMCPClient 的配置中不包含 selected_tools 和 mcp_type
     call_args = mock_mcp_client_class.call_args[0][0]
@@ -1053,7 +1047,7 @@ def test_make_mcp_tools_selected_tools_not_passed_to_client(mock_mcp_client_clas
 
 
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_retry_on_first_failure(mock_mcp_client_class, mock_agent_options):
+def test_make_mcp_tools_retry_on_first_failure(mock_mcp_client_class):
     """测试第一次失败后重试第二次成功"""
     config = {
         "server1": {"url": "http://server1.com/mcp", "transport": "streamable_http"},
@@ -1071,7 +1065,7 @@ def test_make_mcp_tools_retry_on_first_failure(mock_mcp_client_class, mock_agent
     mock_client_ok.get_tools = AsyncMock(return_value=[mock_tool])
     mock_mcp_client_class.side_effect = [mock_client_fail, mock_client_ok]
 
-    result = make_mcp_tools(config, mock_agent_options)
+    result = make_mcp_tools(config)
 
     # 重试后应该成功，无失败记录
     assert len(result.tools) == 1
@@ -1082,7 +1076,7 @@ def test_make_mcp_tools_retry_on_first_failure(mock_mcp_client_class, mock_agent
 
 
 @patch("aidev_agent.packages.resource_manager.base.MultiServerMCPClient")
-def test_make_mcp_tools_does_not_mutate_original_config(mock_mcp_client_class, mock_agent_options):
+def test_make_mcp_tools_does_not_mutate_original_config(mock_mcp_client_class):
     """测试不会修改原始传入的 server_config"""
     config = {
         "server1": {
@@ -1106,7 +1100,7 @@ def test_make_mcp_tools_does_not_mutate_original_config(mock_mcp_client_class, m
     mock_client.get_tools = AsyncMock(return_value=[mock_tool])
     mock_mcp_client_class.return_value = mock_client
 
-    make_mcp_tools(config, mock_agent_options)
+    make_mcp_tools(config)
 
     # 原始配置不应被修改
     assert config == original_config

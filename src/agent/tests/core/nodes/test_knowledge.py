@@ -14,7 +14,7 @@ from aidev_agent.core.nodes.knowledge import (
     make_knowledge_node,
 )
 from aidev_agent.enums import Decision
-from aidev_agent.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import AgentOptions, KnowledgebaseSettings, KnowledgeSettings
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.store.memory import InMemoryStore
@@ -38,6 +38,25 @@ class KnowledgeState(TypedDict, total=False):
 
 
 # ============================================================================
+# pytest fixtures
+# ============================================================================
+
+
+@pytest.fixture()
+def mock_llm():
+    """创建 mock 的 LLM"""
+    llm = MagicMock()
+    llm.invoke = MagicMock(return_value=MagicMock(content="mocked response"))
+    return llm
+
+
+@pytest.fixture()
+def mock_knowledge_settings():
+    """创建 mock 的 KnowledgeSettings"""
+    return KnowledgeSettings()
+
+
+# ============================================================================
 # 辅助函数
 # ============================================================================
 
@@ -53,18 +72,6 @@ def run_knowledge_node_in_graph(knowledge_node, state: dict) -> dict:
     compiled = graph.compile(store=store)
     result = compiled.invoke(state)
     return result
-
-
-def create_mock_llm():
-    """创建 mock 的 LLM"""
-    mock_llm = MagicMock()
-    mock_llm.invoke = MagicMock(return_value=MagicMock(content="mocked response"))
-    return mock_llm
-
-
-def create_mock_agent_options():
-    """创建 mock 的 AgentOptions"""
-    return AgentOptions()
 
 
 def create_mock_retrieve_result(
@@ -171,16 +178,13 @@ class TestFilterAndSelectTopk:
 class TestAgentKnowledgeNodeInGraph:
     """测试 AgentKnowledgeNode 在 Graph 中的执行"""
 
-    def test_returns_agent_knowledge_node(self):
+    def test_returns_agent_knowledge_node(self, mock_llm, mock_knowledge_settings):
         """测试 make_knowledge_node 返回 AgentKnowledgeNode 实例"""
-        mock_llm = create_mock_llm()
-        mock_options = create_mock_agent_options()
-
-        node = make_knowledge_node(llm=mock_llm, agent_options=mock_options)
+        node = make_knowledge_node(llm=mock_llm, knowledge_query_options=mock_knowledge_settings)
 
         assert isinstance(node, AgentKnowledgeNode)
         assert node.llm is mock_llm
-        assert node.agent_options is mock_options
+        assert node.knowledge_query_options is mock_knowledge_settings
         # 测试返回的节点有 retriever 属性
         assert hasattr(node, "retriever")
         assert node.retriever is not None
@@ -190,7 +194,7 @@ class TestAgentKnowledgeNodeInGraph:
 
     @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
     @patch("aidev_agent.core.nodes.knowledge.dispatch_custom_event")
-    def test_state_return_with_input(self, mock_dispatch, mock_rag_class):
+    def test_state_return_with_input(self, mock_dispatch, mock_rag_class, mock_llm, mock_knowledge_settings):
         """测试使用 query 字段时的 state 返回"""
         # 配置 mock
         mock_rag_instance = MagicMock()
@@ -207,9 +211,7 @@ class TestAgentKnowledgeNodeInGraph:
         )
         mock_rag_class.return_value = mock_rag_instance
 
-        mock_llm = create_mock_llm()
-        mock_options = create_mock_agent_options()
-        node = AgentKnowledgeNode(llm=mock_llm, agent_options=mock_options, chat_history=[])
+        node = AgentKnowledgeNode(llm=mock_llm, knowledge_query_options=mock_knowledge_settings, chat_history=[])
 
         # 验证 query 作为参数调用
         result = run_knowledge_node_in_graph(node, {"query": "test query"})
@@ -249,27 +251,93 @@ class TestAgentKnowledgeNodeInGraph:
 class TestAidevKnowledgeNode:
     """测试 AidevKnowledgeNode"""
 
-    def test_init_with_params(self):
+    def test_init_with_params(self, mock_llm, mock_knowledge_settings):
         """测试默认参数初始化"""
-        mock_llm = create_mock_llm()
-        mock_options = create_mock_agent_options()
-
-        node = AidevKnowledgeNode(llm=mock_llm, agent_options=mock_options)
+        node = AidevKnowledgeNode(llm=mock_llm, knowledge_query_options=mock_knowledge_settings)
 
         assert node.score_threshold is None
         assert node.topk == 20
         # 测试自定义参数初始化
         node = AidevKnowledgeNode(
             llm=mock_llm,
-            agent_options=mock_options,
+            knowledge_query_options=mock_knowledge_settings,
             score_threshold=0.5,
             topk=10,
         )
         assert node.score_threshold == 0.5
         assert node.topk == 10
 
+    @staticmethod
+    def _build_agent_options_from_mock_query_request() -> AgentOptions:
+        """按 AIDev 产品页旧入口构造 AgentOptions，相关依赖字段用 mock 代替。"""
+        knowledge_index_service = MagicMock()
+        knowledge_index_service.get_knowledge_base_index_config.side_effect = lambda i: {"index": f"kb-{i}"}
+        knowledge_item_service = MagicMock()
+        knowledge_item_service.get_knowledge_index_configs.side_effect = lambda i: [{"index": f"ki-{i}"}]
+
+        query_parameters = MagicMock()
+        query_parameters.knowledge_resource_reject_threshold = (0.3, 0.7)
+        query_parameters.topk = 5
+        query_parameters.knowledge_template_id = 9
+        query_parameters.rejection_message = "拒答文案"
+
+        query_request = MagicMock()
+        query_request.knowledge_base_ids = [1, 2]
+        query_request.knowledge_item_ids = [3]
+        query_request.with_scalar_data = False
+        query_request.query_record.query_parameters = query_parameters
+
+        return AgentOptions(
+            knowledge_query_options=KnowledgebaseSettings(
+                knowledge_bases=[
+                    {"id": i, "index_config": knowledge_index_service.get_knowledge_base_index_config(i)}
+                    for i in query_request.knowledge_base_ids
+                ],
+                knowledge_items=[
+                    {"id": i, "index_config": knowledge_item_service.get_knowledge_index_configs(i)}
+                    for i in query_request.knowledge_item_ids
+                ],
+                knowledge_resource_reject_threshold=(0, 0)
+                if query_request.with_scalar_data
+                else query_request.query_record.query_parameters.knowledge_resource_reject_threshold,
+                topk=query_request.query_record.query_parameters.topk,
+                knowledge_template_id=query_request.query_record.query_parameters.knowledge_template_id,
+                force_process_by_agent=True,
+                with_scalar_data=query_request.with_scalar_data,
+                rejection_message=query_request.query_record.query_parameters.rejection_message,
+            )
+        )
+
+    def test_init_migrates_from_legacy_agent_options(self, mock_llm):
+        """knowledge_query_options 未传入时，应从产品页旧版 agent_options 迁移。"""
+        agent_options = self._build_agent_options_from_mock_query_request()
+
+        node = AidevKnowledgeNode(
+            llm=mock_llm,
+            agent_options=agent_options,
+            score_threshold=agent_options.knowledge_query_options.knowledge_resource_reject_threshold[0],
+            topk=agent_options.knowledge_query_options.model_extra["topk"],
+        )
+
+        assert node.score_threshold == 0.3
+        assert node.topk == 5
+        assert node.knowledge_query_options.knowledge_bases == [
+            {"id": 1, "index_config": {"index": "kb-1"}},
+            {"id": 2, "index_config": {"index": "kb-2"}},
+        ]
+        assert node.knowledge_query_options.knowledge_items == [{"id": 3, "index_config": [{"index": "ki-3"}]}]
+        assert node.knowledge_query_options.knowledge_resource_reject_threshold == (0.3, 0.7)
+        assert node.knowledge_query_options.knowledge_resource_rough_recall_topk == 5
+        assert node.knowledge_query_options.knowledge_template_id == 9
+        assert node.knowledge_query_options.rejection_message == "拒答文案"
+
+    def test_init_raises_without_knowledge_query_options_or_agent_options(self, mock_llm):
+        """knowledge_query_options 和 agent_options 均未传入时应抛出异常。"""
+        with pytest.raises(ValueError, match="knowledge_query_options is required"):
+            AidevKnowledgeNode(llm=mock_llm)
+
     @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
-    def test_call_returns_retrieved_docs(self, mock_rag_class):
+    def test_call_returns_retrieved_docs(self, mock_rag_class, mock_llm, mock_knowledge_settings):
         """测试 __call__ 返回 retrieved_docs"""
         mock_rag_instance = MagicMock()
         mock_rag_instance.retrieve.return_value = create_mock_retrieve_result(
@@ -281,11 +349,9 @@ class TestAidevKnowledgeNode:
         )
         mock_rag_class.return_value = mock_rag_instance
 
-        mock_llm = create_mock_llm()
-        mock_options = create_mock_agent_options()
         node = AidevKnowledgeNode(
             llm=mock_llm,
-            agent_options=mock_options,
+            knowledge_query_options=mock_knowledge_settings,
             score_threshold=0.6,
             topk=10,
         )
@@ -299,7 +365,7 @@ class TestAidevKnowledgeNode:
         assert result["retrieved_docs"][1]["metadata"]["fine_grained_score"] == 0.7
 
     @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
-    def test_call_with_topk_limit(self, mock_rag_class):
+    def test_call_with_topk_limit(self, mock_rag_class, mock_llm, mock_knowledge_settings):
         """测试 __call__ 的 topk 限制"""
         mock_rag_instance = MagicMock()
         mock_rag_instance.retrieve.return_value = create_mock_retrieve_result(
@@ -312,11 +378,9 @@ class TestAidevKnowledgeNode:
         )
         mock_rag_class.return_value = mock_rag_instance
 
-        mock_llm = create_mock_llm()
-        mock_options = create_mock_agent_options()
         node = AidevKnowledgeNode(
             llm=mock_llm,
-            agent_options=mock_options,
+            knowledge_query_options=mock_knowledge_settings,
             topk=2,
         )
 
@@ -328,15 +392,13 @@ class TestAidevKnowledgeNode:
         assert len(result["retrieved_docs"]) == 2
 
     @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
-    def test_get_query_priority(self, mock_rag_class):
+    def test_get_query_priority(self, mock_rag_class, mock_llm, mock_knowledge_settings):
         """测试 get_query 的优先级: query > input > messages"""
         mock_rag_instance = MagicMock()
         mock_rag_instance.retrieve.return_value = create_mock_retrieve_result()
         mock_rag_class.return_value = mock_rag_instance
 
-        mock_llm = create_mock_llm()
-        mock_options = create_mock_agent_options()
-        node = AidevKnowledgeNode(llm=mock_llm, agent_options=mock_options)
+        node = AidevKnowledgeNode(llm=mock_llm, knowledge_query_options=mock_knowledge_settings)
 
         # 测试 query 优先级最高
         state: KnowledgeInputState = {
@@ -364,33 +426,33 @@ class TestAidevKnowledgeNode:
             ([{"type": "image_url", "image_url": {"url": "https://example.com/test.png"}}], ""),
         ],
     )
-    def test_get_query_normalizes_multimodal_content(self, mock_rag_class, content, expected):
+    def test_get_query_normalizes_multimodal_content(
+        self, mock_rag_class, mock_llm, mock_knowledge_settings, content, expected
+    ):
         """测试多模态 content 会归一化为知识库可检索文本"""
         mock_rag_class.return_value = MagicMock()
-        node = AidevKnowledgeNode(llm=create_mock_llm(), agent_options=create_mock_agent_options())
+        node = AidevKnowledgeNode(llm=mock_llm, knowledge_query_options=mock_knowledge_settings)
 
         assert node.get_query({"messages": [HumanMessage(content=content)]}) == expected
 
     @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
-    def test_get_query_ignores_single_image_content(self, mock_rag_class):
-        """测试单个图片 content 不会作为知识库检索文本"""
+    def test_get_query_stringifies_non_text_query_dict(self, mock_rag_class, mock_llm, mock_knowledge_settings):
+        """测试 query 字段传入非文本字典时会按通用归一化逻辑转为字符串。"""
         mock_rag_class.return_value = MagicMock()
-        node = AidevKnowledgeNode(llm=create_mock_llm(), agent_options=create_mock_agent_options())
+        node = AidevKnowledgeNode(llm=mock_llm, knowledge_query_options=mock_knowledge_settings)
 
         query = [{"type": "image_url", "image_url": {"url": "https://example.com/test.png"}}]
 
         assert node.get_query({"query": query}) == ""
 
     @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
-    def test_empty_query_fallback(self, mock_rag_class):
+    def test_empty_query_fallback(self, mock_rag_class, mock_llm, mock_knowledge_settings):
         """测试空查询回退"""
         mock_rag_instance = MagicMock()
         mock_rag_instance.retrieve.return_value = create_mock_retrieve_result()
         mock_rag_class.return_value = mock_rag_instance
 
-        mock_llm = create_mock_llm()
-        mock_options = create_mock_agent_options()
-        node = AidevKnowledgeNode(llm=mock_llm, agent_options=mock_options)
+        node = AidevKnowledgeNode(llm=mock_llm, knowledge_query_options=mock_knowledge_settings)
 
         # 空 state
         state: KnowledgeInputState = {}

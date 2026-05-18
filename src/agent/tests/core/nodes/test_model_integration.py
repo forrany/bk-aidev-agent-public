@@ -77,7 +77,6 @@ class TestBuildModelNodeIntegration:
                 use_structured_response=False,
                 enable_query_clarification=False,
                 rejection_message="抱歉，我无法回答这个问题。",
-                role_prompt="You are a helpful assistant.",
                 use_general_knowledge_on_miss=True,
             ),
         }
@@ -130,7 +129,6 @@ class TestBuildModelNodeIntegration:
             use_structured_response=True,
             enable_query_clarification=False,
             rejection_message="抱歉，我无法回答这个问题。",
-            role_prompt="You are a helpful assistant.",
             use_general_knowledge_on_miss=True,
         )
 
@@ -231,7 +229,6 @@ class TestBuildModelNodeIntegration:
             use_structured_response=False,
             enable_query_clarification=False,
             rejection_message="抱歉，我无法回答这个问题。",
-            role_prompt="You are a helpful assistant with access to knowledge base.",
             use_general_knowledge_on_miss=True,
         )
 
@@ -270,7 +267,6 @@ class TestBuildModelNodeIntegration:
             use_structured_response=False,
             enable_query_clarification=False,
             rejection_message="抱歉，我无法回答这个问题。",
-            role_prompt="You are a helpful assistant.",
             use_general_knowledge_on_miss=False,
         )
 
@@ -352,7 +348,6 @@ class TestBuildModelNodeIntegration:
             use_structured_response=False,
             enable_query_clarification=False,
             rejection_message="抱歉，我无法回答这个问题。",
-            role_prompt="You are a helpful assistant that can analyze images.",
             use_general_knowledge_on_miss=True,
         )
 
@@ -396,7 +391,6 @@ class TestBuildModelNodeIntegration:
             use_structured_response=False,
             enable_query_clarification=False,
             rejection_message="抱歉，我无法回答这个问题。",
-            role_prompt="You are a helpful assistant that can analyze images.",
             use_general_knowledge_on_miss=True,
         )
 

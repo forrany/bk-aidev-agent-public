@@ -33,7 +33,7 @@ from aidev_agent.packages.langchain_core.tools.base import (
     McpToolsResult,
     _extract_mcp_tools_error_detail,
 )
-from aidev_agent.pydantic_models import AgentConfig, AgentOptions, IntentRecognition, KnowledgebaseSettings
+from aidev_agent.pydantic_models import AgentConfig
 from aidev_agent.utils.loop import run_coro_sync
 
 try:
@@ -140,10 +140,7 @@ class BaseResourceManager(abc.ABC):
         - 透传 ``version`` 给 ``retrieve_agent_config``；为 ``None`` 时由后端返回最新版。
         - 取回失败统一抛 ``ValueError``，与历史 ``AgentConfigManager.get_config`` 行为对齐。
         - 装配规则（与历史一致）：
-          * ``KnowledgebaseSettings``：未设置 ``is_response_when_no_knowledgebase_match`` 且无 ``rejection_message``
-            时回填默认拒答文案；
-          * ``prompt_setting`` 中 ``llm_token_limit`` 合并到 ``KnowledgebaseSettings``；
-          * ``prompt_setting`` 中 ``tool_output_compress_thrd`` 合并到 ``IntentRecognition``；
+          * ``prompt_setting`` / ``knowledgebase_settings`` / ``intent_recognition`` → ``model_context_options_data``；
           * ``conversation_settings.commands`` → ``command_agent_mapping``。
         """
         try:
@@ -151,24 +148,40 @@ class BaseResourceManager(abc.ABC):
         except Exception as e:
             raise ValueError(f"Failed to retrieve agent config: {e}")
 
+        # 模型上下文相关的配置
         prompt_setting = res.get("prompt_setting", {}) or {}
         role_prompts = prompt_setting.get("content")
         knowledgebase_settings_data = res.get("knowledgebase_settings") or {}
         intent_recognition_data = res.get("intent_recognition") or {}
 
-        if not knowledgebase_settings_data.get(
-            "is_response_when_no_knowledgebase_match"
-        ) and not knowledgebase_settings_data.get("rejection_message"):
-            knowledgebase_settings_data["rejection_message"] = (
-                KnowledgebaseSettings().model_validate({}).rejection_message
+        # 构建知识库查询相关配置，由于历史原因，有一部分值在平台保存在 intent_recognition_data 中
+        # 这一部分现在需要移动到 knowledge_query_options_data 中
+        knowledge_query_options_data = dict(knowledgebase_settings_data)
+        for key in (
+            "with_index_specific_search_init",
+            "with_index_specific_search_translation",
+            "with_index_specific_search_keywords",
+        ):
+            if key in intent_recognition_data:
+                knowledge_query_options_data[key] = intent_recognition_data[key]
+
+        # 平台字段映射：document_fragment_count > 0 时映射为 knowledge_resource_rough_recall_topk
+        if (
+            "document_fragment_count" in knowledge_query_options_data
+            and knowledge_query_options_data["document_fragment_count"] > 0
+        ):
+            knowledge_query_options_data["knowledge_resource_rough_recall_topk"] = knowledge_query_options_data.pop(
+                "document_fragment_count"
             )
 
-        if prompt_setting.get("llm_token_limit") is not None:
-            knowledgebase_settings_data["llm_token_limit"] = prompt_setting.get("llm_token_limit")
-        if prompt_setting.get("tool_output_compress_thrd") is not None:
-            intent_recognition_data["tool_output_compress_thrd"] = prompt_setting.get("tool_output_compress_thrd")
-        if prompt_setting.get("non_thinking_llm") is not None:
-            intent_recognition_data["non_thinking_llm"] = prompt_setting.get("non_thinking_llm")
+        # 平台可能返回空字符串 rejection_message，pop 掉以使用 Pydantic 默认值
+        if knowledge_query_options_data.get("rejection_message") == "":
+            knowledge_query_options_data.pop("rejection_message")
+
+        # 构建模型上下文需要的值，主要来源是 prompt_setting
+        model_context_options_data = dict(prompt_setting)
+        if intent_recognition_data.get("agent_type"):
+            model_context_options_data["llm_code_agent_type"] = intent_recognition_data["agent_type"]
 
         conversation_settings = res.get("conversation_settings", {}) or {}
         return AgentConfig(
@@ -176,16 +189,15 @@ class BaseResourceManager(abc.ABC):
             agent_name=res["agent_name"],
             chat_model=prompt_setting.get("llm_code", ""),
             non_thinking_llm=prompt_setting.get("non_thinking_llm") or prompt_setting.get("llm_code", ""),
-            role_prompts=role_prompts or None,
+            role_prompts=role_prompts,
             knowledgebase_ids=res["knowledgebase_settings"]["knowledgebases"],
             tool_codes=res["related_tools"],
-            opening_mark=conversation_settings.get("opening_remark") or None,
+            opening_mark=conversation_settings.get("opening_remark"),
             mcp_server_config=res.get("mcp_server_config", {}).get("mcpServers", {}),
             related_skills=res.get("related_skills"),
-            agent_options=AgentOptions(
-                intent_recognition_options=IntentRecognition.model_validate(intent_recognition_data),
-                knowledge_query_options=KnowledgebaseSettings.model_validate(knowledgebase_settings_data),
-            ),
+            agent_options=None,
+            model_context_options_data=model_context_options_data,
+            knowledge_query_options_data=knowledge_query_options_data,
             command_agent_mapping={
                 each["id"]: each["agent_code"] for each in conversation_settings.get("commands", [])
             },
@@ -222,7 +234,6 @@ class BaseResourceManager(abc.ABC):
     def construct_mcp(
         self,
         mcp_config: dict,
-        agent_options: Any = None,
         username: str = None,
         executor_info: dict | None = None,
         **kwargs,
@@ -233,7 +244,6 @@ class BaseResourceManager(abc.ABC):
         支持凭证处理、selected_tools 过滤、异常处理等功能。
 
         :param mcp_config: MCP 客户端配置字典，格式为 ``{"server_name": {"url": ..., "transport": ...}}``
-        :param agent_options: Agent 选项，用于异常处理
         :param username: 用户名，用于 BLUEAPPS 认证
         :param executor_info: 执行用户信息（含 app_code/app_secret/access_token），
             优先用于 MCP 凭证注入，与 skill sandbox 保持一致
@@ -305,8 +315,7 @@ class BaseResourceManager(abc.ABC):
                         f"cost={time.monotonic() - _start:.2f}s"
                     )
                     for each in tools:
-                        if agent_options:
-                            each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
+                        each.coroutine = MCPExceptionWrapper(each.coroutine)
                         if not each.metadata:
                             each.metadata = {}
                         each.metadata["mcp_name"] = server_name

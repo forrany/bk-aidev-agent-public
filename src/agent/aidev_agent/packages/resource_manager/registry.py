@@ -81,7 +81,7 @@ class ResourceManagerProtocol(Protocol):
         """
         ...
 
-    def construct_mcp(self, mcp_config: dict, agent_options: Any = None, username: str = None, **kwargs) -> Any:
+    def construct_mcp(self, mcp_config: dict, username: str = None, **kwargs) -> Any:
         """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
 
         使用 ``langchain_mcp_adapters`` 连接 MCP 服务器并获取工具列表。
