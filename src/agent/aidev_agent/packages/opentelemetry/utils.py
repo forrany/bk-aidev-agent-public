@@ -23,7 +23,7 @@ import logging
 import os
 import traceback
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List
 
 from opentelemetry import context as context_api
 from opentelemetry import trace
@@ -175,3 +175,156 @@ def get_env_bool(key: str, default: bool) -> bool:
     if value is None:
         return default
     return value.lower() in ("true", "1", "yes")
+
+
+def get_otel_endpoints_base_config() -> Dict[str, int]:
+    """
+    获取 OTEL Endpoint 批处理基础配置（从环境变量读取，供各端点共享）。
+
+    Returns:
+        Dict[str, int]: 包含 batch_max_queue_size / batch_schedule_delay_millis /
+                        batch_export_timeout_millis / batch_max_export_batch_size
+    """
+    return {
+        "batch_max_queue_size": int(os.getenv("BKAI_AGENT_BATCH_MAX_QUEUE_SIZE", "2048")),
+        "batch_schedule_delay_millis": int(os.getenv("BKAI_AGENT_BATCH_SCHEDULE_DELAY_MILLIS", "5000")),
+        "batch_export_timeout_millis": int(os.getenv("BKAI_AGENT_BATCH_EXPORT_TIMEOUT_MILLIS", "30000")),
+        "batch_max_export_batch_size": int(os.getenv("BKAI_AGENT_BATCH_MAX_EXPORT_BATCH_SIZE", "512")),
+    }
+
+
+def get_otel_endpoint_by_agent_info(*, agent_info: dict | None = None) -> List[Dict[str, Any]]:
+    """
+    从 agent_info 中获取 OTEL Endpoint 配置。
+
+    返回值可直接用于 endpoints.extend()。
+
+    Args:
+        agent_info: agent 配置信息字典，从中获取 otel_url 和 otel_token
+
+    Returns:
+        List[Dict[str, Any]]: 端点配置列表（0 或 1 个元素）
+    """
+    if not agent_info:
+        return []
+
+    otel_info = agent_info.get("otel_info")
+    if not otel_info:
+        return []
+
+    url = otel_info.get("otel_url")
+    token = otel_info.get("otel_token")
+    if not url or not token:
+        return []
+
+    config: Dict[str, Any] = {
+        "url": url,
+        "token": token,
+        "exporter_type": ExporterType(os.getenv("BKAI_AGENT_OTEL_EXPORTER_TYPE", "grpc").lower()),
+    }
+    config.update(get_otel_endpoints_base_config())
+    return [config]
+
+
+def get_otel_endpoint_by_json_str(endpoints_str: str | None = None) -> List[Dict[str, Any]]:
+    """
+    从 BKAI_AGENT_OTEL_ENDPOINTS 环境变量或传入字符串解析 OTEL Endpoint 配置。
+
+    当 endpoints_str 为 None 时，自动从 BKAI_AGENT_OTEL_ENDPOINTS 环境变量读取。
+    返回值可直接用于 endpoints.extend()。
+
+    支持三种格式:
+    1. 单个URL: "http://localhost:4317"
+    2. 多个URL(逗号分隔): "http://host1:4317,http://host2:4317"
+    3. JSON格式(支持独立配置):
+       '[{"url": "http://host1:4317", "token": "xxx", "exporter_type": "grpc"},
+         {"url": "http://host2:4318", "token": "yyy", "exporter_type": "http"}]'
+
+    Returns:
+        List[Dict[str, Any]]: 端点配置列表
+    """
+    if endpoints_str is None:
+        endpoints_str = os.getenv("BKAI_AGENT_OTEL_ENDPOINTS", "")
+
+    if not endpoints_str or endpoints_str.strip() == "":
+        return []
+
+    endpoints_str = endpoints_str.strip()
+
+    # 尝试解析为 JSON
+    if endpoints_str.startswith("["):
+        try:
+            parsed = json.loads(endpoints_str)
+            if not isinstance(parsed, list):
+                raise ValueError("JSON format must be a list of endpoint configs")
+
+            base_config = get_otel_endpoints_base_config()
+            result = []
+            for idx, endpoint in enumerate(parsed):
+                if not isinstance(endpoint, dict):
+                    raise ValueError(f"Endpoint {idx} must be a dict")
+                if "url" not in endpoint:
+                    raise ValueError(f"Endpoint {idx} missing 'url' field")
+
+                # 规范化配置：端点配置覆盖基础配置
+                config: Dict[str, Any] = {
+                    "url": endpoint["url"],
+                    "token": endpoint.get("token", os.getenv("BKAI_AGENT_OTEL_TOKEN", "")),
+                    "exporter_type": ExporterType(endpoint.get("exporter_type", "grpc").lower()),
+                }
+                config.update(base_config)
+                # 端点级别覆盖
+                for key in (
+                    "batch_max_queue_size",
+                    "batch_schedule_delay_millis",
+                    "batch_export_timeout_millis",
+                    "batch_max_export_batch_size",
+                ):
+                    if key in endpoint:
+                        config[key] = endpoint[key]
+                result.append(config)
+
+            return result
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format for BKAI_AGENT_OTEL_ENDPOINTS: {e}")
+
+    # 简单格式: 单个URL 或 逗号分隔的多个URL
+    urls = [url.strip() for url in endpoints_str.split(",") if url.strip()]
+    base_config = get_otel_endpoints_base_config()
+    default_token = os.getenv("BKAI_AGENT_OTEL_TOKEN", "")
+    default_exporter_type = ExporterType(os.getenv("BKAI_AGENT_OTEL_EXPORTER_TYPE", "grpc").lower())
+
+    return [
+        {
+            "url": url,
+            "token": default_token,
+            "exporter_type": default_exporter_type,
+            **base_config,
+        }
+        for url in urls
+    ]
+
+
+def get_otel_endpoint_by_env() -> List[Dict[str, Any]]:
+    """
+    从 OTEL_GRPC_URL + OTEL_BK_DATA_TOKEN 环境变量获取 OTEL Endpoint 配置。
+
+    需要 BKAI_AGENT_APM_OTEL_ENABLED=true 才会启用。
+    返回值可直接用于 endpoints.extend()。
+
+    Returns:
+        List[Dict[str, Any]]: 端点配置列表（0 或 1 个元素）
+    """
+    otel_enable = get_env_bool("BKAI_AGENT_APM_OTEL_ENABLED", False)
+    otel_grpc_url = os.getenv("OTEL_GRPC_URL", "")
+    otel_bk_data_token = os.getenv("OTEL_BK_DATA_TOKEN", "")
+    if not (otel_enable and otel_grpc_url and otel_bk_data_token):
+        return []
+
+    config: Dict[str, Any] = {
+        "url": otel_grpc_url,
+        "token": otel_bk_data_token,
+        "exporter_type": ExporterType.GRPC,  # OTEL_GRPC_URL 固定使用 GRPC
+    }
+    config.update(get_otel_endpoints_base_config())
+    return [config]
