@@ -487,13 +487,16 @@ class ReActAgentBuilder:
         Returns:
             model_node: 模型节点
         """
+        default_node_options = ModelNodeSettings()
+        knowledge_query_options = agent_options.knowledge_query_options
         # 处理 enable_query_clarification 的默认值
         if enable_query_clarification is None:
-            model_name = getattr(llm, "model_name", "")
-            enable_query_clarification = model_name == "gpt-4o" or "deepseek" in model_name or "qwq" in model_name
+            enable_query_clarification = (  
+                knowledge_query_options.enable_query_clarification
+                if knowledge_query_options.enable_query_clarification is not None
+                else default_node_options.enable_query_clarification
+            )
         # 从 agent_options 获取配置
-        knowledge_query_options = agent_options.knowledge_query_options
-        default_node_options = ModelNodeSettings()
         rejection_message = (
             knowledge_query_options.rejection_message
             if knowledge_query_options.rejection_message is not None

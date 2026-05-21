@@ -292,7 +292,10 @@ class KnowledgebaseSettings(BaseModel):
         default=int(os.getenv("TOKEN_LIMIT_MARGIN", "100")), description=("上下文最大Token限制边界")
     )
     llm_token_limit: int = Field(default=int(os.getenv("LLM_TOKEN_LIMIT", "36000")), description=("LLM最大Token限制"))
-
+    enable_query_clarification: bool = Field(
+        default=os.getenv("ENABLE_QUERY_CLARIFICATION", "true").lower() == "true",
+        description="当用户查询模糊时是否启用查询澄清",
+    )
 
 class AgentOptions(BaseModel):
     # agent 执行选项

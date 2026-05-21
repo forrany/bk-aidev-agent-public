@@ -311,7 +311,6 @@ class SpecialVariablesMiddleware:
             "chat_history": history_non_system_messages,
             "history_system_prompt": history_system_prompt,
             "rejection_response": self.rejection_message,
-            "role_prompt": self.role_prompt,
             "agent_scratchpad": agent_scratchpad,
             "enable_parallel_tool_calls": self.enable_parallel_tool_calls,
         }
