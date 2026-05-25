@@ -1,22 +1,20 @@
 # -*- coding: utf-8 -*-
-"""执行 ``ChatCompletionAgent`` 与流式写回。
+"""HTTP Chat API 执行辅助。
 
-- ``build_execute_kwargs``：纯函数；``ExecuteKwargs`` 字段兜底 + OTel trace context 注入。
-  与 executor 实例无关，由 serializer 在校验阶段直接调用，因此保留为模块级。
-- ``AgentExecutor``：执行 + 自动写回 AI 回复 / 流式包装；
-  端到端流程入口（``run_bkplugin_invoke`` / ``run_chat_completion_with_thread_id``）以
-  ``@classmethod`` 形式归在本类下，内部装配 ``AgentBuilder + AgentExecutor + SessionManager``。
+- ``build_execute_kwargs``：入参标准化（serializer / 插件共用）。
+- ``AgentExecutor``：同步执行 + SSE 聚合写回（``wrap_generator``，供 builtin view 使用）。
+- 标准运维插件 1.0 / 2.0 编排见 ``agent_bkplugin``。
 """
 
 from __future__ import annotations
 
 import json
-import uuid
 from logging import getLogger
 
 from aidev_agent.enums import ChatContentStatus, PromptRole, StreamEventType
-from aidev_agent.pydantic_models import ChatPrompt, ExecuteKwargs
+from aidev_agent.pydantic_models import ExecuteKwargs
 from aidev_agent.services.agent import ChatCompletionAgent
+from aidev_agent.services.event_handlers.base import BaseSessionWriter
 
 # OpenTelemetry 是可选 extras（pip install aidev-bkplugin[opentelemetry]）。
 # 未安装时 trace context 注入降级为 no-op，其余流程不受影响。
@@ -28,7 +26,6 @@ except ImportError:
     TraceContextTextMapPropagator = None
 
 from .agent_builder import AgentBuilder
-from .agent_config import AgentConfigFetcher
 from .agent_session import SessionManager
 
 logger = getLogger(__name__)
@@ -67,15 +64,58 @@ class AgentExecutor:
         agent_instance: ChatCompletionAgent,
         execute_kwargs: ExecuteKwargs,
         session_code: str,
+        *,
+        turn_id: str = "",
     ):
         if execute_kwargs.stream:
             generator = agent_instance.execute(execute_kwargs)
-            return self.wrap_generator(generator, session_code)
+            event_handler = getattr(agent_instance, "event_handler", None)
+            # AG-UI 流式由 BaseSessionWriter 按事件落库；legacy 流式在 wrap_generator 结束时汇总写回
+            if isinstance(event_handler, BaseSessionWriter) and not execute_kwargs.legacy_streaming:
+                return generator
+            return self.wrap_generator(generator, session_code, turn_id=turn_id)
         result = agent_instance.execute(execute_kwargs)
-        self.session_manager.save_ai_response(session_code, result)
+        # 非流式 ainvoke 不经过 AG-UI 事件分发，必须显式写回 assistant
+        self.session_manager.save_ai_response(session_code, result, turn_id=turn_id)
         return result
 
-    def wrap_generator(self, generator, session_code: str):
+    @classmethod
+    def run_agent_to_completion(
+        cls,
+        agent_instance: ChatCompletionAgent,
+        execute_kwargs: ExecuteKwargs,
+        session_code: str,
+        session_manager: SessionManager,
+        *,
+        turn_id: str = "",
+    ):
+        """执行 agent 直至结束；AG-UI 流式负责事件落库并收尾会话状态。"""
+        handler = getattr(agent_instance, "event_handler", None)
+        if execute_kwargs.stream and isinstance(handler, BaseSessionWriter):
+            if turn_id:
+                handler.turn_id = turn_id
+            if hasattr(handler, "set_streaming_started"):
+                handler.set_streaming_started()
+        try:
+            out = cls(session_manager).execute_with_save(
+                agent_instance,
+                execute_kwargs,
+                session_code,
+                turn_id=turn_id,
+            )
+            if execute_kwargs.stream:
+                for _ in out:
+                    pass
+            return out
+        finally:
+            if (
+                execute_kwargs.stream
+                and isinstance(handler, BaseSessionWriter)
+                and hasattr(handler, "set_streaming_finished")
+            ):
+                handler.set_streaming_finished()
+
+    def wrap_generator(self, generator, session_code: str, *, turn_id: str = ""):
         """SSE 数据格式约定：
 
         - ``event=think``：思考过程
@@ -154,6 +194,7 @@ class AgentExecutor:
                     role=PromptRole.AI.value,
                     content="".join(final_content_parts),
                     status=ChatContentStatus.ERROR.value if has_error else ChatContentStatus.SUCCESS.value,
+                    turn_id=turn_id,
                 )
 
     @classmethod
@@ -205,36 +246,6 @@ class AgentExecutor:
         return html_content
 
     @classmethod
-    def run_bkplugin_invoke(
-        cls,
-        chat_history: list[dict],
-        execute_kwargs: dict,
-        input: str | None = None,
-        username: str | None = None,
-    ):
-        """模板 ``versions/assistant.py`` 的入口；非流式执行，并把 role_prompts / input 拼回 history。"""
-        execute_kwargs = build_execute_kwargs(execute_kwargs, username)
-        execute_kwargs.stream = False
-        chat_history = (
-            [ChatPrompt(role=each["role"], content=each["content"]) for each in chat_history] if chat_history else []
-        )
-        role_contents = AgentConfigFetcher.get_role_info(username=username)
-        if role_contents:
-            chat_history = role_contents + chat_history
-        if input:
-            if chat_history:
-                chat_history.append(ChatPrompt(role="user", content=input))
-            else:
-                chat_history = [ChatPrompt(role="user", content=input)]
-        builder = AgentBuilder(username=username or "")
-        agent_instance, _ = builder.by_thread_id_with_chat_history(
-            thread_id=execute_kwargs.session_code or str(uuid.uuid4()),
-            chat_history=chat_history,
-            version=execute_kwargs.version,
-        )
-        return agent_instance.execute(execute_kwargs)
-
-    @classmethod
     def run_chat_completion_with_thread_id(
         cls,
         thread_id: str,
@@ -257,10 +268,20 @@ class AgentExecutor:
             save_content=save_content,
             version=execute_kwargs.version,
         )
+        turn_id = builder.turn_id
         execute_kwargs.session_code = session_code
+        if hasattr(execute_kwargs, "turn_id"):
+            execute_kwargs.turn_id = turn_id
+        handler = getattr(agent_instance, "event_handler", None)
+        if execute_kwargs.stream and isinstance(handler, BaseSessionWriter):
+            if turn_id:
+                handler.turn_id = turn_id
+            if hasattr(handler, "set_streaming_started"):
+                handler.set_streaming_started()
         result = cls(builder.session_manager).execute_with_save(
             agent_instance,
             execute_kwargs,
             session_code,
+            turn_id=turn_id,
         )
         return result, session_code

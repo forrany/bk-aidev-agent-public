@@ -9,16 +9,18 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from logging import getLogger
 from typing import Iterable
 
-from aidev_agent.enums import PromptRole
+from aidev_agent.enums import ChatContentStatus, PromptRole, SessionsStatus
 from aidev_agent.packages.resource_manager import resource_manager
 from aidev_agent.pydantic_models import ChatPrompt
 from bkapi_client_core.exceptions import HTTPResponseError
 from django.conf import settings
 
 from ..constants import AGUI_PROTOCOL_VERSION
+from ..enums import PluginPollTaskState
 
 logger = getLogger(__name__)
 
@@ -83,21 +85,44 @@ class SessionManager:
         *,
         extra: dict | None = None,
         status: str = "success",
+        turn_id: str = "",
     ) -> dict:
         """保存单条会话内容到 BKAidev；返回后端 ``data`` 字段。"""
+        if role == PromptRole.USER.value and not turn_id:
+            turn_id = uuid.uuid4().hex
         data: dict = {"session_code": session_code, "role": role, "content": content, "status": status}
         if extra:
             data["extra"] = extra
+        if turn_id:
+            data["property"] = {"turn_id": turn_id}
         client = self._client()
         result = client.api.create_chat_session_content(json=data, headers=self._user_headers())
-        return result.get("data", {})
+        saved = result.get("data", {})
+        if turn_id:
+            saved.setdefault("property", {}).setdefault("turn_id", turn_id)
+        return saved
+
+    def update_session_status(self, session_code: str, status: str) -> None:
+        """更新会话状态，用于标准运维插件后台任务兜底结束态。"""
+        self._client().api.update_chat_session(
+            path_params={"session_code": session_code},
+            json={"status": status},
+            headers=self._user_headers(),
+        )
+
+    def retrieve_session(self, session_code: str) -> dict:
+        result = self._client().api.retrieve_chat_session(
+            path_params={"session_code": session_code},
+            headers=self._user_headers(),
+        )
+        return result.get("data") or {}
 
     def save_chat_history(self, session_code: str, chat_history: Iterable[ChatPrompt] | None) -> None:
-        """按顺序持久化 ``chat_history`` 中的每条 prompt；空列表 / None 直接返回。"""
+        """按顺序持久化 ``chat_history``；不带 ``turn_id``（历史回放 / 批量同步场景）。"""
         for prompt in chat_history or []:
             self.save_content(session_code=session_code, role=prompt.role, content=prompt.content)
 
-    def save_ai_response(self, session_code: str, result: dict) -> None:
+    def save_ai_response(self, session_code: str, result: dict, *, turn_id: str = "") -> None:
         """从非流式 LLM 响应中提取 ``choices[0].delta.content`` 并写回；空内容跳过。"""
         content = ""
         if "choices" in result and result["choices"]:
@@ -105,4 +130,81 @@ class SessionManager:
             content = delta.get("content", "")
 
         if content:
-            self.save_content(session_code=session_code, role=PromptRole.AI.value, content=content)
+            self.save_content(session_code=session_code, role=PromptRole.AI.value, content=content, turn_id=turn_id)
+
+    def list_session_contents(self, session_code: str) -> list[dict]:
+        result = self._client().api.get_chat_session_contents(
+            params={"session_code": session_code},
+            headers=self._user_headers(),
+        )
+        return result.get("data") or []
+
+    def prepare_session_turn(
+        self,
+        thread_id: str,
+        *,
+        input_text: str = "",
+        turn_id: str = "",
+    ) -> tuple[str, str]:
+        """取/建 session，必要时落库本轮 user，返回 ``session_code`` 与 ``turn_id``。"""
+        session_code = self.get_or_create_by_thread_id(thread_id)
+        if input_text:
+            saved = self.save_content(
+                session_code=session_code,
+                role=PromptRole.USER.value,
+                content=input_text,
+                turn_id=turn_id,
+            )
+            turn_id = ((saved.get("property") or {}).get("turn_id") if isinstance(saved, dict) else "") or turn_id
+        elif not turn_id:
+            # 用户消息已由前端/SDK 落库、本轮无 input 时，继承最近一条 user 的 turn_id
+            for item in reversed(self.list_session_contents(session_code)):
+                if item.get("role") != PromptRole.USER.value:
+                    continue
+                turn_id = (item.get("property") or {}).get("turn_id") or ""
+                if turn_id:
+                    break
+        return session_code, turn_id or uuid.uuid4().hex
+
+    def save_stream_failure(self, session_code: str, error_message: str, *, turn_id: str = "") -> None:
+        self.save_content(
+            session_code=session_code,
+            role=PromptRole.ASSISTANT.value,
+            content=error_message,
+            status=ChatContentStatus.ERROR.value,
+            turn_id=turn_id,
+        )
+        self.update_session_status(session_code, SessionsStatus.FAILED.value)
+
+    def poll_task_state(self, session_code: str, *, turn_id: str = "") -> tuple[PluginPollTaskState, str]:
+        """查询本轮 Agent 是否结束。返回 (state, detail)。
+
+        插件 2.0 以 ``session.status`` 判断单轮会话状态。
+        """
+        status = str(self.retrieve_session(session_code).get("status") or "")
+        if status in (SessionsStatus.PENDING.value, SessionsStatus.RUNNING.value):
+            return PluginPollTaskState.RUNNING, ""
+        if status in (SessionsStatus.FAILED.value, SessionsStatus.CANCELLED.value):
+            return PluginPollTaskState.FAILED, "Agent 执行失败"
+        if status == SessionsStatus.FINISHED.value:
+            return PluginPollTaskState.SUCCESS, self._last_assistant_output(
+                self.list_session_contents(session_code),
+                turn_id=turn_id,
+            )
+        return PluginPollTaskState.RUNNING, ""
+
+    @staticmethod
+    def _last_assistant_output(items: list[dict], *, turn_id: str = "") -> str:
+        """取最后一条有内容的 assistant/ai；有 ``turn_id`` 时仅取同轮消息。"""
+        assistant_roles = (PromptRole.ASSISTANT.value, PromptRole.AI.value)
+        for item in reversed(items):
+            if item.get("role") not in assistant_roles:
+                continue
+            if turn_id and (item.get("property") or {}).get("turn_id") != turn_id:
+                continue
+            if item.get("status") not in (ChatContentStatus.COMPLETE.value, ChatContentStatus.SUCCESS.value):
+                continue
+            text = str(item.get("content") or "").strip()
+            if text:
+                return text
+        return ""
