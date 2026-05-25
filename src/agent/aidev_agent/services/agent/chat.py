@@ -212,6 +212,8 @@ class ChatCompletionAgent(BaseModel):
             return cancel_checker
 
         if isinstance(self.event_handler, BaseSessionWriter):
+            if execute_kwargs.turn_id:
+                self.event_handler.turn_id = execute_kwargs.turn_id
             self.event_handler.set_tools(self.tools)
         agui_entry = AidevAGUIAgent(
             name="test_agui_agent",
@@ -441,15 +443,20 @@ class ChatAgentBuilder:
     def build_chat_history(self, session_context_data: List[dict]) -> List[ChatPrompt]:
         """构建聊天历史"""
         config = self.ctx.agent_config
-        role_history = (
-            [
-                ChatPrompt(role=each["role"].replace("hidden-", ""), content=each["content"])
-                for each in config.role_prompts
-                if each.get("role") in ["user", "assistant", "hidden-user", "hidden-assistant", "hidden-system"]
-            ]
-            if config.role_prompts
-            else []
-        )
+        role_prompt_roles = {
+            PromptRole.USER.value,
+            PromptRole.ASSISTANT.value,
+            PromptRole.SYSTEM.value,
+            PromptRole.PAUSE.value,
+            "hidden-user",
+            "hidden-assistant",
+            "hidden-system",
+        }
+        role_history = [
+            ChatPrompt(role=each["role"].replace("hidden-", ""), content=each["content"])
+            for each in (config.role_prompts or [])
+            if each.get("content") and each.get("role") in role_prompt_roles
+        ]
 
         chat_history = [
             ChatPrompt.model_validate(each)
@@ -587,8 +594,9 @@ class ChatAgentBuilder:
                 f"ChatAgentBuilder: handling last human message with resources in session_context_data->[{item}]"
             )
             if item.get("role") == PromptRole.USER.value:
-                if item.get("extra", {}).get("resources"):
-                    self._specific_resources = item.get("extra", {}).get("resources")
+                extra = item.get("extra") or {}
+                if extra.get("resources"):
+                    self._specific_resources = extra.get("resources")
                 break
 
     def _filter_unmatched_tool_calls(self, chat_history: List[ChatPrompt]) -> List[ChatPrompt]:

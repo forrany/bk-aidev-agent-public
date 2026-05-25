@@ -11,11 +11,9 @@ from typing import Any
 from aidev_agent.enums import AgentType
 from aidev_bkplugin.enums import PluginPollTaskState
 from aidev_bkplugin.services import (
-    BkpluginAgentRunner,
-    normalize_execute_kwargs,
+    build_bkplugin_runner_from_plugin,
     poll_bkplugin_agent,
     record_plugin_poll_failure,
-    resolve_executor_username,
 )
 from bk_plugin_framework.constants import State
 from bk_plugin_framework.kit import (
@@ -30,33 +28,6 @@ from bk_plugin_framework.kit import (
 
 logger = getLogger(__name__)
 POLL_INTERVAL_SECONDS = 5
-
-
-def _resolve_execute_kwargs(inputs, context: Context) -> tuple[str | None, dict]:
-    username = resolve_executor_username(context.data.executor)
-    execute_kwargs = normalize_execute_kwargs(
-        inputs.execute_kwargs,
-        session_code=inputs.session_code,
-    )
-    return username, execute_kwargs
-
-
-def _build_outputs(inputs, session_code: str, output: str = "") -> dict:
-    return {
-        "output": output,
-        "input": inputs.input or "",
-        "session_code": session_code,
-        "intermediate_steps": [],
-        "chat_history": inputs.chat_history or [],
-    }
-
-
-def _extract_output(result) -> str:
-    if isinstance(result, str):
-        return result
-    if not isinstance(result, dict):
-        return str(result or "")
-    return result["choices"][0]["delta"]["content"]
 
 
 class CommonInputsFormMixin:
@@ -130,17 +101,15 @@ class CommonAgent(Plugin):
         pass
 
     def execute(self, inputs: Inputs, context: Context):
-        username, execute_kwargs = _resolve_execute_kwargs(inputs, context)
-        agent = BkpluginAgentRunner.create(
-            chat_history=inputs.chat_history or [],
-            execute_kwargs=execute_kwargs,
-            input_text=inputs.input or "",
-            username=username,
-            plugin_context=inputs.context or [],
-            stream=False,
-        )
-        result = agent.execute()
-        context.outputs = _build_outputs(inputs, result.session_code, _extract_output(result.result))
+        runner = build_bkplugin_runner_from_plugin(inputs, context)
+        output = runner.execute()
+        context.outputs = {
+            "output": output,
+            "input": inputs.input or "",
+            "session_code": runner.session_code,
+            "intermediate_steps": [],
+            "chat_history": inputs.chat_history or [],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -169,17 +138,8 @@ class CommonAgentSSE(Plugin):
 
     def _start_stream(self, inputs: Inputs, context: Context):
         """EMPTY：先分流 chat/flow，再写入轮询上下文。"""
-        username, execute_kwargs = _resolve_execute_kwargs(inputs, context)
-        agent = BkpluginAgentRunner.create(
-            chat_history=inputs.chat_history or [],
-            execute_kwargs=execute_kwargs,
-            input_text=inputs.input or "",
-            username=username,
-            plugin_context=inputs.context or [],
-            stream=True,
-        )
-        result = agent.execute()
-        context.storage.update(result.storage or {})
+        storage = build_bkplugin_runner_from_plugin(inputs, context).dispatch_async()
+        context.storage.update(storage)
         self.wait_poll(interval=POLL_INTERVAL_SECONDS)
 
     def _poll_stream(self, inputs: Inputs, context: Context):
@@ -205,7 +165,13 @@ class CommonAgentSSE(Plugin):
                     "[CommonAgentSSE] flow finished without assistant output, session_code=%s",
                     session_code,
                 )
-            context.outputs = _build_outputs(inputs, session_code, output)
+            context.outputs = {
+                "output": output,
+                "input": inputs.input or "",
+                "session_code": session_code,
+                "intermediate_steps": [],
+                "chat_history": inputs.chat_history or [],
+            }
             return
 
         self.wait_poll(interval=POLL_INTERVAL_SECONDS)

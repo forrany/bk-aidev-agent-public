@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import contextlib
 import logging
 
 from aidev_agent.utils.module_loading import import_string
@@ -50,10 +49,5 @@ class AgentConfig(AppConfig):
                 "[aidev_bkplugin] OpenTelemetry extras 未安装，跳过自动 instrument；"
                 "如需启用请安装 aidev-bkplugin[opentelemetry]。"
             )
-
-        # 导入蓝鲸插件版本，使其被框架自动注册
-        # 这会自动注册 CommonAgent (1.0.0assistant) 和 CommonAgentSSE (2.0.0sse)
-        with contextlib.suppress(ImportError):
-            import bk_plugin.versions  # noqa: F401
 
         return super().ready()

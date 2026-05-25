@@ -50,6 +50,7 @@ class TestRunChatCompletionWithThreadId:
             mock_builder = mock_builder_cls.return_value
             mock_agent = MagicMock(name="agent_instance")
             mock_builder.by_thread_id.return_value = (mock_agent, "session-abc")
+            mock_builder.turn_id = "turn-1"
             mock_execute_with_save.return_value = iter(["data: {}"])
 
             ek = MagicMock()
@@ -66,6 +67,7 @@ class TestRunChatCompletionWithThreadId:
 
             assert session_code == "session-abc"
             assert ek.session_code == "session-abc"
+            assert ek.turn_id == "turn-1"
             assert result is not None
 
             mock_builder.by_thread_id.assert_called_once_with(
@@ -74,4 +76,4 @@ class TestRunChatCompletionWithThreadId:
                 save_content=True,
                 version=None,
             )
-            mock_execute_with_save.assert_called_once_with(mock_agent, ek, "session-abc")
+            mock_execute_with_save.assert_called_once_with(mock_agent, ek, "session-abc", turn_id="turn-1")

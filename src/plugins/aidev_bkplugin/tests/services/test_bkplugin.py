@@ -109,106 +109,160 @@ def test_prepare_session_turn_uses_user_content_turn_id(monkeypatch):
 @pytest.mark.skipif(not _has_django, reason="Django and plugin env required")
 class TestBkpluginExecution:
     @pytest.mark.parametrize("agent_type", [AgentType.FLOW, AgentType.CHAT])
-    def test_stream_execute_returns_async_storage(self, agent_type):
-        from aidev_bkplugin.services.agent_bkplugin import BkpluginAgentRunner
+    def test_dispatch_async_returns_storage(self, agent_type):
+        from aidev_bkplugin.services.agent_bkplugin import build_bkplugin_runner
 
         with (
             patch("aidev_bkplugin.services.agent_bkplugin.AgentConfigFetcher.get_info") as mock_info,
             patch("aidev_bkplugin.services.agent_bkplugin.SessionManager") as mock_sm_cls,
         ):
-            mock_info.return_value = {"agent_type": agent_type.value}
+            mock_info.return_value = {"agent_type": agent_type.value, "prompt_setting": {"content": []}}
             mock_sm = mock_sm_cls.return_value
             mock_sm.prepare_session_turn.return_value = ("sess-1", "turn-1")
-            agent = BkpluginAgentRunner.create(
+            task = MagicMock()
+            fake_tasks = MagicMock(run_bkplugin_background_agent_task=task)
+            agent = build_bkplugin_runner(
                 chat_history=[],
                 execute_kwargs={"session_code": "thread-1"},
                 input_text="hi",
                 username="alice",
-                stream=True,
             )
-            agent.start_background_task = MagicMock()
-            result = agent.execute()
+            with patch.dict(sys.modules, {"aidev_bkplugin.tasks": fake_tasks}):
+                storage = agent.dispatch_async()
 
         mock_sm.prepare_session_turn.assert_called_once_with("thread-1", input_text="hi", turn_id=ANY)
-        assert result.is_async and result.storage["turn_id"] and result.storage["agent_type"] == agent_type.value
-        agent.start_background_task.assert_called_once()
-        assert agent.start_background_task.call_args.args[1]["turn_id"] == "turn-1"
-        assert agent.start_background_task.call_args.args[1]["stream"] is True
+        assert storage["turn_id"] and storage["agent_type"] == agent_type.value
+        task.delay.assert_called_once()
+        assert task.delay.call_args.kwargs["execute_payload"]["turn_id"] == "turn-1"
+        assert task.delay.call_args.kwargs["execute_payload"]["stream"] is True
 
-    def test_start_background_task_uses_celery_delay(self):
+    def test_enqueue_background_uses_delay(self):
         from aidev_bkplugin.services.agent_bkplugin import BkpluginChat
 
         task = MagicMock()
+        fake_tasks = MagicMock(run_bkplugin_background_agent_task=task)
         agent = BkpluginChat(
             chat_history=[],
             execute_kwargs={},
             username="alice",
         )
-        with patch("aidev_bkplugin.tasks.run_bkplugin_background_agent_task", task):
-            agent.start_background_task(
+        with patch.dict(sys.modules, {"aidev_bkplugin.tasks": fake_tasks}):
+            storage = agent._enqueue_background(
                 "sess-1",
+                "turn-1",
                 {"turn_id": "turn-1"},
-                AgentType.CHAT,
                 chat_context=[{"role": "user", "content": "hi"}],
             )
 
         task.delay.assert_called_once_with(
             session_code="sess-1",
-            execute_kwargs={"turn_id": "turn-1"},
+            execute_payload={"turn_id": "turn-1", "stream": True},
             username="alice",
             agent_type_value=AgentType.CHAT.value,
             chat_context=[{"role": "user", "content": "hi"}],
         )
+        assert storage == {
+            "session_code": "sess-1",
+            "turn_id": "turn-1",
+            "plugin_username": "alice",
+            "agent_type": AgentType.CHAT.value,
+        }
 
     def test_serial_chat_execute(self):
-        from aidev_bkplugin.services.agent_bkplugin import BkpluginAgentRunner
+        from aidev_bkplugin.services.agent_bkplugin import build_bkplugin_runner
 
         with (
             patch("aidev_bkplugin.services.agent_bkplugin.AgentConfigFetcher.get_info") as mock_info,
             patch("aidev_bkplugin.services.agent_bkplugin.SessionManager") as mock_sm_cls,
             patch("aidev_bkplugin.services.agent_bkplugin.build_chat_agent_for_session") as mock_build,
         ):
-            mock_info.return_value = {"agent_type": AgentType.CHAT.value}
+            mock_info.return_value = {"agent_type": AgentType.CHAT.value, "prompt_setting": {"content": []}}
             mock_sm = mock_sm_cls.return_value
             mock_sm.prepare_session_turn.return_value = ("sess-chat", "turn-chat")
             mock_agent = MagicMock(execute=MagicMock(return_value={"choices": [{"delta": {"content": "ok"}}]}))
             mock_build.return_value = mock_agent
-            agent = BkpluginAgentRunner.create(
+            agent = build_bkplugin_runner(
                 chat_history=[{"role": "user", "content": "prev"}],
                 execute_kwargs={"session_code": "thread-1"},
                 input_text="hi",
                 username="alice",
-                stream=False,
             )
             result = agent.execute()
 
-        assert not result.is_async and result.result["choices"][0]["delta"]["content"] == "ok"
+        assert result == "ok"
+        assert agent.session_code == "sess-chat"
         assert [x["content"] for x in mock_build.call_args.kwargs["chat_context"]] == ["prev", "hi"]
         assert mock_build.call_args.kwargs["turn_id"] == "turn-chat"
-        mock_sm.save_ai_response.assert_called_once_with("sess-chat", result.result, turn_id=ANY)
+        mock_sm.save_ai_response.assert_called_once_with(
+            "sess-chat", {"choices": [{"delta": {"content": "ok"}}]}, turn_id=ANY
+        )
+
+    def test_build_chat_context_prepends_role_prompts(self, monkeypatch):
+        from aidev_agent.pydantic_models import ChatPrompt
+        from aidev_bkplugin.services.agent_bkplugin import BkpluginChat
+
+        role_prompts = [ChatPrompt(role="system", content="role-x")]
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_role_info.return_value = role_prompts
+        monkeypatch.setattr("aidev_bkplugin.services.agent_bkplugin.AgentConfigFetcher", fake_fetcher)
+
+        chat = BkpluginChat(
+            chat_history=[{"role": "user", "content": "hi"}],
+            execute_kwargs={},
+            username="alice",
+        )
+        context = chat._build_chat_context()
+
+        assert [item["role"] for item in context] == ["system", "user"]
+        assert context[0]["content"] == "role-x"
 
     def test_serial_flow_execute(self):
         from aidev_bkplugin.enums import PluginPollTaskState
-        from aidev_bkplugin.services.agent_bkplugin import BkpluginAgentRunner
+        from aidev_bkplugin.services.agent_bkplugin import BkpluginFlow, build_bkplugin_runner
 
         with (
             patch("aidev_bkplugin.services.agent_bkplugin.AgentConfigFetcher.get_info") as mock_info,
-            patch("aidev_bkplugin.services.agent_bkplugin.BkpluginFlow._run_flow") as mock_run_flow,
+            patch.object(BkpluginFlow, "invoke_agent") as mock_invoke_agent,
             patch("aidev_bkplugin.services.agent_bkplugin.SessionManager") as mock_sm_cls,
         ):
             mock_info.return_value = {"agent_type": AgentType.FLOW.value}
             mock_sm = mock_sm_cls.return_value
             mock_sm.prepare_session_turn.return_value = ("sess-flow", "turn-flow")
             mock_sm.poll_task_state.return_value = (PluginPollTaskState.SUCCESS, "flow out")
-            agent = BkpluginAgentRunner.create(
+            agent = build_bkplugin_runner(
                 chat_history=[],
                 execute_kwargs={"session_code": "thread-1"},
                 input_text="hi",
                 username="alice",
-                stream=False,
             )
             result = agent.execute()
 
         mock_sm.poll_task_state.assert_called_once_with("sess-flow", turn_id=ANY)
-        assert mock_run_flow.call_args.args[1]["turn_id"] == "turn-flow"
-        assert not result.is_async and result.result == "flow out"
+        assert mock_invoke_agent.call_args.args[1]["turn_id"] == "turn-flow"
+        assert result == "flow out" and agent.session_code == "sess-flow"
+
+    def test_build_runner_from_plugin_uses_duck_typed_inputs(self):
+        from aidev_bkplugin.services.agent_bkplugin import build_bkplugin_runner_from_plugin
+
+        inputs = MagicMock(
+            execute_kwargs={"session_code": "thread-x"},
+            session_code="thread-x",
+            chat_history=[{"role": "user", "content": "prev"}],
+            input="hi",
+            context=[{"k": "v"}],
+        )
+        ctx = MagicMock(data=MagicMock(executor="alice"))
+
+        with (
+            patch("aidev_bkplugin.services.agent_bkplugin.AgentConfigFetcher.get_info") as mock_info,
+            patch("aidev_bkplugin.services.agent_bkplugin.resolve_executor_username") as mock_resolve,
+        ):
+            mock_info.return_value = {"agent_type": AgentType.CHAT.value, "prompt_setting": {"content": []}}
+            mock_resolve.return_value = "alice"
+            runner = build_bkplugin_runner_from_plugin(inputs, ctx)
+
+        assert runner.username == "alice"
+        assert runner.input_text == "hi"
+        assert runner.execute_kwargs["session_code"] == "thread-x"
+        assert runner.plugin_context == [{"k": "v"}]
+        mock_resolve.assert_called_once_with("alice")

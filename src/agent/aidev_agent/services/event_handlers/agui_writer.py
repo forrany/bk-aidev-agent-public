@@ -47,6 +47,7 @@ class AGUISessionWriter(BaseSessionWriter):
         client: Client,
         username: str = "",
         tools: list | None = None,
+        turn_id: str = "",
     ):
         """初始化 API 回写器
 
@@ -55,11 +56,13 @@ class AGUISessionWriter(BaseSessionWriter):
             client: BKAidev API 客户端
             username: 用户名
             tools: 工具列表，用于获取工具描述信息
+            turn_id: 同一次 user-ai 回复的轮次 ID
         """
-        super().__init__(session_code=session_code, username=username, tools=tools)
+        super().__init__(session_code=session_code, username=username, tools=tools, turn_id=turn_id)
         self.client = client
         # 缓存 session_property，避免 update_flow_agent_info 每次都额外 GET
         self._cached_session_property: dict | None = None
+        self._has_run_error = False
 
     def _do_create_content(self, payload: dict[str, Any], headers: dict[str, str]) -> int | None:
         """通过 API 创建会话内容
@@ -92,12 +95,22 @@ class AGUISessionWriter(BaseSessionWriter):
         标记流式传输结束
         根据是否被取消选择不同的结束状态：
         - 正常完成：会话状态设为 finished
+        - 运行错误：会话状态设为 failed
         - 用户取消/暂停：会话状态设为 cancelled
         """
         if self._is_cancelled:
             self._update_session_status(SessionsStatus.CANCELLED.value)
+        elif self._has_run_error:
+            self._update_session_status(SessionsStatus.FAILED.value)
         else:
             self._update_session_status(SessionsStatus.FINISHED.value)
+
+    def handle_run_error(self, event) -> None:
+        """处理运行错误，并确保会话状态进入 failed。"""
+        super().handle_run_error(event)
+        if not self._is_cancelled:
+            self._has_run_error = True
+            self._update_session_status(SessionsStatus.FAILED.value)
 
     def _update_session_status(self, status: str) -> None:
         """更新会话状态（内部方法）

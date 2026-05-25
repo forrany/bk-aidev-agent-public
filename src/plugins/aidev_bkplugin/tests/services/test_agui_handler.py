@@ -13,7 +13,7 @@ from aidev_agent.core.ag_ui.types import (
     LangGraphEventTypes,
     SessionPersistenceEventNames,
 )
-from aidev_agent.enums import PromptRole
+from aidev_agent.enums import PromptRole, SessionsStatus
 from aidev_agent.services.event_handlers import AGUISessionWriter
 from langchain_core.messages import AIMessage, message_to_dict
 
@@ -122,22 +122,24 @@ class TestHandleToolFinishStatusMapping:
 class TestHandleModelEnd:
     """测试 handle_model_end 的回写逻辑"""
 
-    def test_model_end_with_content(self, session_writer, mock_client):
-        """模型输出有内容时正常回写"""
-        event = make_model_end_event(
-            message_id="msg_001",
-            content="这是 AI 的回答",
+    @pytest.mark.parametrize("turn_id", ["", "turn-1"])
+    def test_model_end_with_content(self, mock_client, turn_id):
+        """模型输出回写；有 turn_id 时写入 property。"""
+        writer = AGUISessionWriter(
+            session_code="test-session-123",
+            client=mock_client,
+            username="test-user",
+            turn_id=turn_id,
         )
+        writer(make_model_end_event(message_id="msg_001", content="这是 AI 的回答"))
 
-        session_writer(event)
-
-        mock_client.api.create_chat_session_content.assert_called_once()
-        call_args = mock_client.api.create_chat_session_content.call_args
-        payload = call_args.kwargs["json"]
-
+        payload = mock_client.api.create_chat_session_content.call_args.kwargs["json"]
         assert payload["role"] == PromptRole.ASSISTANT.value
         assert payload["content"] == "这是 AI 的回答"
-        assert payload["status"] == "complete"
+        if turn_id:
+            assert payload["property"]["turn_id"] == turn_id
+        else:
+            assert "turn_id" not in payload.get("property", {})
 
     def test_model_end_empty_content_uses_placeholder(self, session_writer, mock_client):
         """模型输出内容为空但有 tool_calls 时使用占位符（后端 API 不接受空字符串或纯空白字符）"""
@@ -264,6 +266,24 @@ class TestHandleRunError:
         assert payload["role"] == PromptRole.ASSISTANT.value
         assert payload["content"] == "执行过程中发生错误"
         assert payload["property"]["builtin_property"]["error"] is True
+        mock_client.api.update_chat_session.assert_called_once_with(
+            path_params={"session_code": "test-session-123"},
+            json={"status": SessionsStatus.FAILED.value},
+            headers={"X-BKAIDEV-USER": "test-user"},
+        )
+
+    def test_run_error_finished_keeps_session_failed(self, session_writer, mock_client):
+        """运行错误后结束流，不应把会话覆盖为 finished"""
+        event = RunErrorEvent(type=EventType.RUN_ERROR, message="执行过程中发生错误")
+
+        session_writer(event)
+        session_writer.set_streaming_finished()
+
+        status_payloads = [call.kwargs["json"] for call in mock_client.api.update_chat_session.call_args_list]
+        assert status_payloads == [
+            {"status": SessionsStatus.FAILED.value},
+            {"status": SessionsStatus.FAILED.value},
+        ]
 
 
 class TestAPIErrorHandling:

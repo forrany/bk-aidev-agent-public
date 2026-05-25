@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 from .agent_bkplugin import (
     BkpluginAgentRunner,
-    BkpluginExecuteResult,
+    build_bkplugin_runner,
+    build_bkplugin_runner_from_plugin,
     normalize_execute_kwargs,
     poll_bkplugin_agent,
     record_plugin_poll_failure,
@@ -11,7 +12,8 @@ from .agent_session import SessionManager
 
 __all__ = [
     "BkpluginAgentRunner",
-    "BkpluginExecuteResult",
+    "build_bkplugin_runner",
+    "build_bkplugin_runner_from_plugin",
     "normalize_execute_kwargs",
     "poll_bkplugin_agent",
     "record_plugin_poll_failure",

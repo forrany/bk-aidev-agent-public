@@ -25,6 +25,7 @@ class ExecuteKwargs(BaseModel):
     caller_trace_context: Dict[str, Any] | None = Field(default=None, description="调用链ID")
     thread_id: str | None = Field(default=None, description="Thread ID，用于APIGW调用时自动管理会话")
     version: str | None = Field(default=None, description="agent 配置版本；为空则使用最新版本")
+    turn_id: str = Field(default="", description="同一次 user-ai 回复的轮次 ID")
 
     # 执行配置
     legacy_streaming: bool = Field(default=False, description="是否使用 legacy streaming protocol")
@@ -64,6 +65,7 @@ class SessionContentExtra(BaseModel):
 class SessionContentProperty(BaseModel):
     """会话内容的一些额外属性"""
 
+    turn_id: str = Field(default="", description="同一次 user-ai 回复的轮次 ID")
     extra: SessionContentExtra | None = None
 
 

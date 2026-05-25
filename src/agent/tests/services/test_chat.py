@@ -917,6 +917,42 @@ def _make_dummy_chat_ctx():
     return ctx
 
 
+def test_chat_agent_builder_ignores_none_extra_in_last_user_message():
+    """最后一条 user 消息 extra=None 时，应按无指定资源处理。"""
+    from aidev_agent.services.agent.chat import ChatAgentBuilder
+
+    ctx = _make_dummy_chat_ctx()
+    ctx.session_context_data = [{"role": PromptRole.USER.value, "content": "hi", "extra": None}]
+
+    builder = ChatAgentBuilder(ctx)
+
+    assert builder._specific_resources == []
+
+
+def test_build_chat_history_prepends_config_role_prompts_once():
+    """角色提示词由 ChatAgentBuilder 统一构建，插件层不需要提前拼上下文。"""
+    from aidev_agent.services.agent.chat import ChatAgentBuilder
+
+    ctx = _make_dummy_chat_ctx()
+    ctx.extra = {}
+    ctx.agent_config.role_prompts = [
+        {"role": PromptRole.SYSTEM.value, "content": "system prompt"},
+        {"role": PromptRole.PAUSE.value, "content": "pause prompt"},
+        {"role": "hidden-user", "content": "hidden user prompt"},
+    ]
+
+    history = ChatAgentBuilder(ctx).build_chat_history(
+        [{"role": PromptRole.USER.value, "content": "hi"}],
+    )
+
+    assert [(item.role, item.content) for item in history] == [
+        (PromptRole.SYSTEM.value, "system prompt"),
+        (PromptRole.PAUSE.value, "pause prompt"),
+        (PromptRole.USER.value, "hidden user prompt"),
+        (PromptRole.USER.value, "hi"),
+    ]
+
+
 class TestFilterUnmatchedToolCalls:
     """测试过滤没有匹配工具结果的 assistant 消息"""
 
