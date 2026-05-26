@@ -32,6 +32,7 @@ from aidev_agent.core.ag_ui.types import ActivityMessage, CustomMessageType
 from aidev_agent.enums import ActivityType
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag, KnowledgeRagRetrieveResult
+from aidev_agent.packages.langchain_core.retrievers.utils import normalize_query_for_search
 from aidev_agent.pydantic_models import AgentOptions
 
 logger = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ class BaseKnowledgeNode:
             messages = state.get("messages")
             if messages:
                 query = messages[-1].content
-        return query or ""
+        return normalize_query_for_search(query)
 
 
 class AgentKnowledgeNode(BaseKnowledgeNode):

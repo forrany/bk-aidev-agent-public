@@ -194,6 +194,8 @@ src/frontend/publish-template/node_modules/
 src/frontend/ai-blueking/lesscode-dist/
 
 .aider*
+.serena/
+notes/
 .vscode/
 
 # static files
@@ -212,5 +214,3 @@ src/agent/openspec
 src/agent/CODEBUDDY.md
 src/agent/.planning
 src/agent/harness
-
-

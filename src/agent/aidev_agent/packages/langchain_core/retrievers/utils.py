@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.documents import Document
@@ -13,6 +13,31 @@ from aidev_agent.utils.decorator import timeit
 
 HUNYUAN_SPECIFIC_RESPONSE = "很抱歉，我还未学习到如何回答这个问题的内容，暂时无法提供相关信息。"
 reg = RegistryPluginMixIn()
+
+
+def normalize_query_for_search(query: Any) -> str:
+    """将多模态 content 归一化为知识库可检索文本。"""
+    if query is None:
+        return ""
+    if isinstance(query, str):
+        return query
+    if isinstance(query, list):
+        text_parts = []
+        for item in query:
+            if isinstance(item, str):
+                text_parts.append(item)
+            elif isinstance(item, dict):
+                item_type = item.get("type")
+                text = item.get("text") or item.get("content")
+                if (
+                    item_type == "text"
+                    and isinstance(text, str)
+                    or item_type not in {"image_url", "input_image"}
+                    and isinstance(text, str)
+                ):
+                    text_parts.append(text)
+        return "\n".join(part for part in text_parts if part.strip())
+    return str(query)
 
 
 def is_structured_data(doc):
