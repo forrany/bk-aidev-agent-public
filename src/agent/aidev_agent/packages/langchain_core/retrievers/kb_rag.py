@@ -42,6 +42,7 @@ from .utils import (
     deduplicate_knowledge_file_paths,
     dispatch_rag_event_chunk,
     invoke_decorator,
+    normalize_query_for_search,
 )
 
 logger = logging.getLogger(__name__)
@@ -778,8 +779,7 @@ class KnowledgeRag:
                 res = f"{sum_res}\n{query}"
         if isinstance(res, dict) and "decision" in res:
             return res
-        elif isinstance(res, str):
-            query_for_search = res
+        query_for_search = normalize_query_for_search(res)
         # 并发执行多种召回策略
         futures = {}
 
@@ -797,7 +797,8 @@ class KnowledgeRag:
 
         # 2. 原始查询召回（如果查询被重写过）
         if (knowledge_bases or knowledge_items) and (
-            agent_options.intent_recognition_options.with_index_specific_search_init and query_for_search != raw_input
+            agent_options.intent_recognition_options.with_index_specific_search_init
+            and query_for_search != raw_input
         ):
             futures["index_specific_init"] = knowledge_bk_executor.submit(
                 kb_retriever.search_knowledge_index_specific,

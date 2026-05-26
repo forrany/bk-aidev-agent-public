@@ -19,7 +19,7 @@ to the current version of the project delivered to anyone in the future.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from aidev_agent.enums import FineGrainedScoreType
+from aidev_agent.enums import Decision, FineGrainedScoreType
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
 from aidev_agent.pydantic_models import (
     AgentOptions,
@@ -54,6 +54,14 @@ def create_agent_options(
         with_index_specific_search_keywords=False,
     )
     return AgentOptions(knowledge_query_options=knowledge_settings, intent_recognition_options=intent_settings)
+
+
+def create_multimodal_query(text: str = "蓝鲸是什么") -> list[dict]:
+    """创建图文混合 query。"""
+    return [
+        {"type": "image_url", "image_url": {"url": "https://example.com/test.png"}},
+        {"type": "text", "text": text},
+    ]
 
 
 class TestKnowledgeRag:
@@ -463,6 +471,26 @@ class TestKnowledgeRag:
 
         with pytest.raises(RuntimeError, match="请至少选择一种召回方式"):
             rag.retrieve(query="test query", agent_options=agent_options)
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.dispatch_rag_event_chunk")
+    def test_retrieve_normalizes_non_string_result_before_search(self, mock_dispatch_rag_event):
+        """测试非字符串 res 会在召回前归一化为文本。"""
+        mock_llm = MagicMock()
+        mock_retriever = MagicMock()
+        mock_retriever.search_knowledge_index_specific.return_value = []
+        rag = KnowledgeRag(llm=mock_llm, kb_retriever=mock_retriever)
+        agent_options = create_agent_options()
+        agent_options.knowledge_query_options.knowledge_items = [{"id": 1}]
+        query = create_multimodal_query()
+
+        result = rag.retrieve(
+            query=query,
+            agent_options=agent_options,
+            input=query,
+        )
+
+        assert result["decision"] == Decision.GENERAL_QA
+        assert mock_retriever.search_knowledge_index_specific.call_args.kwargs["query"] == "蓝鲸是什么"
 
     @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
     @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")

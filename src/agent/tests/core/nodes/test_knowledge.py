@@ -5,6 +5,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from aidev_agent.core.nodes.knowledge import (
     AgentKnowledgeNode,
     AidevKnowledgeNode,
@@ -348,6 +349,37 @@ class TestAidevKnowledgeNode:
 
         call_args = mock_rag_instance.retrieve.call_args
         assert call_args[0][0] == "query_value"
+
+    @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
+    @pytest.mark.parametrize(
+        "content, expected",
+        [
+            (
+                [
+                    {"type": "image_url", "image_url": {"url": "https://example.com/test.png"}},
+                    {"type": "text", "text": "这张图片有什么内容?"},
+                ],
+                "这张图片有什么内容?",
+            ),
+            ([{"type": "image_url", "image_url": {"url": "https://example.com/test.png"}}], ""),
+        ],
+    )
+    def test_get_query_normalizes_multimodal_content(self, mock_rag_class, content, expected):
+        """测试多模态 content 会归一化为知识库可检索文本"""
+        mock_rag_class.return_value = MagicMock()
+        node = AidevKnowledgeNode(llm=create_mock_llm(), agent_options=create_mock_agent_options())
+
+        assert node.get_query({"messages": [HumanMessage(content=content)]}) == expected
+
+    @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
+    def test_get_query_ignores_single_image_content(self, mock_rag_class):
+        """测试单个图片 content 不会作为知识库检索文本"""
+        mock_rag_class.return_value = MagicMock()
+        node = AidevKnowledgeNode(llm=create_mock_llm(), agent_options=create_mock_agent_options())
+
+        query = {"type": "image_url", "image_url": {"url": "https://example.com/test.png"}}
+
+        assert node.get_query({"query": query}) == ""
 
     @patch("aidev_agent.core.nodes.knowledge.KnowledgeRag")
     def test_empty_query_fallback(self, mock_rag_class):
