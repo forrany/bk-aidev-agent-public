@@ -240,6 +240,7 @@
               :placeholder="placeholder"
               :prompts="prompts"
               :resources="resources"
+              :send-disabled-tip="pendingApprovalTipText"
               :shortcut-id="selectedShortcut?.id"
               :shortcuts="shortcuts"
               :skills="skills"
@@ -249,7 +250,12 @@
               @select-shortcut="handleSelectShortcut"
               @update:model-value="handleUpdateModelValue"
             >
-              <template #top> </template>
+              <template #interrupt>
+                <InputInfoAlert
+                  v-if="pendingApprovalTipText"
+                  :content="pendingApprovalTipText"
+                />
+              </template>
             </ChatInput>
           </template>
         </template>
@@ -289,6 +295,7 @@
   import ShortcutRender from '../ai-shortcut/shortcut-render/shortcut-render.vue';
   import ContentRender from '../chat-content/content-render/content-render.vue';
   import ChatInput, { type ChatInputEmits, type ChatInputProps } from '../chat-input/chat-input.vue';
+  import InputInfoAlert from '../chat-input/input-info-alert.vue';
   import MessageContainer, {
     type MessageContainerEmits,
     type MessageContainerProps,
@@ -454,6 +461,7 @@
     onToggleShareAll,
     onCancelShare,
     onConfirmShare,
+    pendingApprovalTipText,
   } = useMessageGroup({
     keyword,
     messages: computed(() => props.messages),

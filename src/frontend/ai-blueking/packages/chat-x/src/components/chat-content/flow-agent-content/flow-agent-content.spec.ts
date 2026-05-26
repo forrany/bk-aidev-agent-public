@@ -23,7 +23,7 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-import { defineComponent, h } from 'vue';
+import { defineComponent, h, nextTick } from 'vue';
 
 import { type VueWrapper, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,6 +33,17 @@ import { useRenderModeProvider } from '../../../composables/use-common';
 import FlowAgentContent from './flow-agent-content.vue';
 
 import type { BkFlowMessageContent, BkFlowTask } from '../../../ag-ui/types/contents';
+
+/** v-show 折叠后 happy-dom 下 isVisible() 仍为 true，改断言 style.display */
+const expectTaskNodesCollapsed = (wrapper: VueWrapper, index: number) => {
+  const el = wrapper.findAll('.flow-agent-task-nodes')[index].element as HTMLElement;
+  expect(el.style.display).toBe('none');
+};
+
+const expectTaskNodesExpanded = (wrapper: VueWrapper, index: number) => {
+  const el = wrapper.findAll('.flow-agent-task-nodes')[index].element as HTMLElement;
+  expect(el.style.display).not.toBe('none');
+};
 
 const { mockAddCustomTab, mockRemoveCustomTab, mockScrollRef, mockSelectedTab } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -65,6 +76,7 @@ vi.mock('../../../ag-ui/types/constants', () => ({
   },
   MessageStatus: {
     Complete: 'complete',
+    Disabled: 'disabled',
     Pending: 'pending',
     Streaming: 'streaming',
     Success: 'success',
@@ -365,6 +377,35 @@ describe('FlowAgentContent', () => {
       expect(wrapper.text()).toContain('测试任务');
       expect(wrapper.text()).toContain('第二任务');
       expect(wrapper.text()).toContain('节点三');
+    });
+
+    it('点击任务箭头应只折叠当前任务节点列表', async () => {
+      wrapper = mount(FlowAgentContent, {
+        props: {
+          content: [
+            createTask(),
+            createTask({
+              task_id: 101,
+              task_name: '第二任务',
+              nodes: {
+                n3: createNode({ id: 'n3', name: '节点三' }),
+              },
+            }),
+          ],
+        },
+      });
+
+      const arrows = wrapper.findAll('.flow-agent-task-arrow');
+      await arrows[0].trigger('click');
+      await nextTick();
+
+      expectTaskNodesCollapsed(wrapper, 0);
+      expectTaskNodesExpanded(wrapper, 1);
+
+      await arrows[0].trigger('click');
+      await nextTick();
+
+      expectTaskNodesExpanded(wrapper, 0);
     });
 
     it('renderMode 为 Share 时不应渲染节点耗时和详情入口', () => {
