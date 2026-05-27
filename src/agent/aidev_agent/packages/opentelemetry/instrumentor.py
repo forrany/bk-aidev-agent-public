@@ -26,7 +26,6 @@ from opentelemetry import context as context_api
 from opentelemetry import trace
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
-from opentelemetry.trace import Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from wrapt import wrap_function_wrapper
 
@@ -39,9 +38,6 @@ from .utils import dont_throw
 
 logger = logging.getLogger(__name__)
 
-_E2B_BACKEND_MODULE = "aidev_agent.core.tools.e2b_sandbox.backend"
-_E2B_ENSURE_SANDBOX = "E2BSandboxBackend._ensure_sandbox"
-_E2B_PREPARE_SKILL_RUNTIME = "E2BSandboxBackend._prepare_skill_runtime"
 _instruments = ("langchain-core > 0.1.0",)
 
 
@@ -91,21 +87,6 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
             name="AgentKnowledgeNode.__call__",
             wrapper=AgentKnowledgeNodeCallWrapper(),
         )
-        # 注入 E2B 沙箱运行时的可观测性（使用全局 tracer，不依赖 otel_service 的 tracer）
-        _global_tracer = trace.get_tracer(__name__)
-        try:
-            wrap_function_wrapper(
-                module=_E2B_BACKEND_MODULE,
-                name=_E2B_ENSURE_SANDBOX,
-                wrapper=E2BEnsureSandboxWrapper(_global_tracer),
-            )
-            wrap_function_wrapper(
-                module=_E2B_BACKEND_MODULE,
-                name=_E2B_PREPARE_SKILL_RUNTIME,
-                wrapper=E2BPrepareSkillRuntimeWrapper(_global_tracer),
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug("E2B sandbox backend not available, skipping E2B instrumentation")
 
     def _uninstrument(self, **kwargs):
         """
@@ -121,11 +102,6 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
         unwrap("aidev_agent.services.agent.chat", "ChatCompletionAgent._execute")
         unwrap("aidev_agent.services.agent.chat", "ChatCompletionAgent._get_agent")
         unwrap("aidev_agent.core.nodes.knowledge", "AgentKnowledgeNode.__call__")
-        try:
-            unwrap(_E2B_BACKEND_MODULE, _E2B_ENSURE_SANDBOX)
-            unwrap(_E2B_BACKEND_MODULE, _E2B_PREPARE_SKILL_RUNTIME)
-        except Exception:  # noqa: BLE001
-            logger.debug("E2B sandbox backend not available, skipping E2B uninstrumentation")
 
 
 def _get_trace_cb_from_callbacks(callbacks):
@@ -234,73 +210,6 @@ class AgentKnowledgeNodeCallWrapper:
         else:
             ret = wrapped(*args, **kwargs)
         return ret
-
-
-class E2BEnsureSandboxWrapper:
-    """E2BSandboxBackend._ensure_sandbox 的可观测性包装器。
-
-    仅在沙箱首次创建时生成 ``e2b.ensure_sandbox`` span，
-    已初始化的沙箱实例（幂等调用）不创建 span。
-    """
-
-    def __init__(self, tracer: trace.Tracer):
-        self.tracer = tracer
-
-    @dont_throw
-    def __call__(self, wrapped, instance, args, kwargs):
-        # 沙箱已初始化，跳过 span 创建
-        if instance._sandbox is not None:
-            return wrapped(*args, **kwargs)
-
-        attributes = {
-            "e2b.template": instance._template,
-            "e2b.timeout": instance._timeout,
-            "e2b.has_envs": bool(instance._pending_sandbox_env),
-        }
-        with self.tracer.start_as_current_span("e2b.ensure_sandbox", attributes=attributes) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-            except Exception as exc:
-                span.set_status(Status(StatusCode.ERROR, str(exc)))
-                span.record_exception(exc)
-                raise
-            # 沙箱创建成功，补充 sandbox_info
-            try:
-                sandbox_info = instance.sandbox_info
-                if sandbox_info:
-                    for key, value in sandbox_info.items():
-                        if value is not None:
-                            span.set_attribute(f"e2b.{key}", str(value))
-            except Exception:  # noqa: BLE001
-                pass
-            return result
-
-
-class E2BPrepareSkillRuntimeWrapper:
-    """E2BSandboxBackend._prepare_skill_runtime 的可观测性包装器。
-
-    为 skill 打包上传解压过程生成 ``e2b.prepare_skill_runtime`` span。
-    """
-
-    def __init__(self, tracer: trace.Tracer):
-        self.tracer = tracer
-
-    @dont_throw
-    def __call__(self, wrapped, instance, args, kwargs):
-        skill_dir = args[0] if args else kwargs.get("skill_dir", "")
-        skill_name = args[1] if len(args) > 1 else kwargs.get("skill_name", "")
-
-        attributes = {
-            "e2b.skill_dir": str(skill_dir),
-            "e2b.skill_name": str(skill_name),
-        }
-        with self.tracer.start_as_current_span("e2b.prepare_skill_runtime", attributes=attributes) as span:
-            try:
-                return wrapped(*args, **kwargs)
-            except Exception as exc:
-                span.set_status(Status(StatusCode.ERROR, str(exc)))
-                span.record_exception(exc)
-                raise
 
 
 class ChatCompletionAgentExecuteByAgentWrapper:
