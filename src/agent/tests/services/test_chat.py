@@ -934,6 +934,7 @@ def test_build_chat_history_prepends_config_role_prompts_once():
     from aidev_agent.services.agent.chat import ChatAgentBuilder
 
     ctx = _make_dummy_chat_ctx()
+    ctx.agent_code = "role_prompt-test"
     ctx.extra = {}
     ctx.agent_config.role_prompts = [
         {"role": PromptRole.SYSTEM.value, "content": "system prompt"},

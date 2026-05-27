@@ -377,7 +377,7 @@ class TestAidevKnowledgeNode:
         mock_rag_class.return_value = MagicMock()
         node = AidevKnowledgeNode(llm=create_mock_llm(), agent_options=create_mock_agent_options())
 
-        query = {"type": "image_url", "image_url": {"url": "https://example.com/test.png"}}
+        query = [{"type": "image_url", "image_url": {"url": "https://example.com/test.png"}}]
 
         assert node.get_query({"query": query}) == ""
 
