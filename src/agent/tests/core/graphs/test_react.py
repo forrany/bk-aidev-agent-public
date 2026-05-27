@@ -443,25 +443,12 @@ class TestReActAgentBuilder:
             kwargs = mock_prepare_tools.call_args.kwargs
             assert kwargs["extra_tools"] == [calculator, multiplier]
 
-    def test_build_vision_tool_injected_when_support_vision(self):
-        """support_vision=True 时 _prepare_agent_tools 应注入 add_image_to_chat_context"""
-        from aidev_agent.core.tools.add_image_to_chat_context import add_image_to_chat_context
-
-        builder = ReActAgentBuilder()
-        tools = builder._prepare_agent_tools(
-            extra_tools=[],
-            support_vision=True,
-            langchain_middleware=[],
-        )
-        assert add_image_to_chat_context in tools
-
     def test_build_middleware_tools_collected(self):
         """middleware 中的 tools 属性应被收集到工具列表"""
         builder = ReActAgentBuilder()
         mw = CustomMiddlewareWithTools(tools=[calculator])
         tools = builder._prepare_agent_tools(
             extra_tools=[],
-            support_vision=False,
             langchain_middleware=[mw],
         )
         assert calculator in tools
@@ -859,7 +846,6 @@ class TestReActAgentBuilder:
             llm=llm,
             knowledge_llm=knowledge_llm,
             role_prompt="test role",
-            support_vision=True,
             callbacks=cb,
         )
         builder = ReActAgentBuilder()
@@ -867,7 +853,6 @@ class TestReActAgentBuilder:
         assert builder._llm is llm
         assert builder._knowledge_llm is knowledge_llm
         assert builder._role_prompt == "test role"
-        assert builder._support_vision is True
         assert builder._callbacks == cb
         assert result is builder
 

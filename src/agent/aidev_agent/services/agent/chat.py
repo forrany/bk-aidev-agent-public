@@ -359,7 +359,7 @@ class ChatCompletionAgent(BaseModel):
                 each.role = PromptRole.USER.value
                 match = self.IMAGE_FILE_PATTERN.search(each.content)
                 if match:
-                    file_path, file_name = match.group(1), match.group(2)
+                    file_path, _ = match.group(1), match.group(2)
                     each.content = [{"type": "image_url", "image_url": {"url": file_path}}]
                     # 图片不计算实际大小，但不能为 0 —— 给一个大于 0 的占位值
                     self.files.append({"file_name": file_path, "file_size": 100})
@@ -445,7 +445,8 @@ class ChatAgentBuilder:
             [
                 ChatPrompt(role=each["role"].replace("hidden-", ""), content=each["content"])
                 for each in config.role_prompts
-                if each.get("role") in ["user", "assistant", "hidden-user", "hidden-assistant", "hidden-system"]
+                if each.get("role")
+                in ["user", "assistant", "hidden-user", "hidden-assistant", "hidden-system", "system"]
             ]
             if config.role_prompts
             else []
