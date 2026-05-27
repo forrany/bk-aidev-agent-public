@@ -16,6 +16,7 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
+import asyncio
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -131,8 +132,45 @@ class TestBkAidevAgentInjector:
         assert "agent.session.start_time" in span.attributes
         assert "agent.session.start_time_unix_nano" in span.attributes
 
-        # 验证 debug 属性
+        # 验证 debug 属性（start 与 end 都应记录线程名，便于排查跨线程结束 root span 的场景）
         assert "debug.thread_id" in span.attributes
+        assert "debug.end_thread_id" in span.attributes
+
+    def test_on_bk_agent_end_records_end_thread_when_cross_thread(self, tracer_and_exporter):
+        """跨线程结束 root span 时，``debug.end_thread_id`` 应记录的是 end 线程，而非 start 线程。
+
+        模拟生产场景：start 发生在 HTTP 线程，end 由 LangChain callback
+        在 producer 线程触发（这是 trace 上报丢失修复后的新行为）。
+        """
+        import threading as _threading
+
+        tracer, exporter = tracer_and_exporter
+        execute_kwargs = MagicMock()
+        execute_kwargs.executor = "u"
+        execute_kwargs.session_code = "s"
+        execute_kwargs.caller_bk_app_code = "app"
+        execute_kwargs.caller_bk_biz_env = "env"
+        execute_kwargs.caller_bk_biz_id = 1
+        execute_kwargs.caller_executor = "u"
+        execute_kwargs.caller_order_type = "ai_chat"
+        agent_info = {"agent_id": "a", "agent_code": "c", "agent_name": "n"}
+
+        injector = BkAidevAgentInjector(tracer=tracer, debug=True)
+        # start 在主线程
+        injector.on_bk_agent_start(inputs={"input": "x"}, execute_kwargs=execute_kwargs, agent_info=agent_info)
+        start_thread_name = _threading.current_thread().name
+
+        # end 在子线程
+        producer_thread_name = "producer-thread-1"
+        t = _threading.Thread(target=injector.on_bk_agent_end, name=producer_thread_name)
+        t.start()
+        t.join()
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.attributes["debug.thread_id"] == start_thread_name
+        assert span.attributes["debug.end_thread_id"] == producer_thread_name
 
 
 class TestBkAidevAgentCallbackHandler:
@@ -149,12 +187,14 @@ class TestBkAidevAgentCallbackHandler:
         run_id = uuid4()
         parent_run_id = None
 
-        # LLM 开始
-        handler.on_llm_start(
-            serialized={"name": "test_llm"},
-            prompts=["请回答这个问题"],
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        # LLM 开始（async 回调需 await，否则 dont_throw + async 双装饰会让函数体静默不执行）
+        asyncio.run(
+            handler.on_llm_start(
+                serialized={"name": "test_llm"},
+                prompts=["请回答这个问题"],
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # LLM 结束
@@ -163,10 +203,12 @@ class TestBkAidevAgentCallbackHandler:
             llm_output={"model_name": "qwen3"},
         )
 
-        handler.on_llm_end(
-            response=llm_result,
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        asyncio.run(
+            handler.on_llm_end(
+                response=llm_result,
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # 获取导出的 spans
@@ -195,11 +237,13 @@ class TestBkAidevAgentCallbackHandler:
 
         # Chat Model 开始
         messages = [[HumanMessage(content="你好")]]
-        handler.on_chat_model_start(
-            serialized={"name": "test_chat_model"},
-            messages=messages,
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        asyncio.run(
+            handler.on_chat_model_start(
+                serialized={"name": "test_chat_model"},
+                messages=messages,
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # Chat Model 结束
@@ -208,10 +252,12 @@ class TestBkAidevAgentCallbackHandler:
             llm_output={"model_name": "qwen3"},
         )
 
-        handler.on_llm_end(
-            response=llm_result,
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        asyncio.run(
+            handler.on_llm_end(
+                response=llm_result,
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # 获取导出的 spans
@@ -239,18 +285,22 @@ class TestBkAidevAgentCallbackHandler:
         parent_run_id = None
 
         # 工具开始
-        handler.on_tool_start(
-            serialized={"name": "calculator"},
-            input_str="1+1",
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        asyncio.run(
+            handler.on_tool_start(
+                serialized={"name": "calculator"},
+                input_str="1+1",
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # 工具结束
-        handler.on_tool_end(
-            output="2",
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        asyncio.run(
+            handler.on_tool_end(
+                output="2",
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # 获取导出的 spans
@@ -279,11 +329,13 @@ class TestBkAidevAgentCallbackHandler:
         parent_run_id = None
 
         # 工具开始
-        handler.on_tool_start(
-            serialized={"name": "json_processor"},
-            input_str='{"action": "process", "data": [1, 2, 3]}',
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        asyncio.run(
+            handler.on_tool_start(
+                serialized={"name": "json_processor"},
+                input_str='{"action": "process", "data": [1, 2, 3]}',
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # 工具结束 - 输出为字典
@@ -292,10 +344,12 @@ class TestBkAidevAgentCallbackHandler:
             "result": {"sum": 6, "count": 3},
             "message": "处理完成",
         }
-        handler.on_tool_end(
-            output=output_dict,  # type: ignore[assignment]
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+        asyncio.run(
+            handler.on_tool_end(
+                output=output_dict,  # type: ignore[assignment]
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+            )
         )
 
         # 获取导出的 spans
@@ -331,11 +385,13 @@ class TestBkAidevAgentCallbackHandler:
 
         # 创建一个顶层 workflow chain 以便挂载自定义 span
         chain_run_id = uuid4()
-        handler.on_chain_start(
-            serialized={"name": "test_workflow"},
-            inputs={"input": "测试"},
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_start(
+                serialized={"name": "test_workflow"},
+                inputs={"input": "测试"},
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 使用 create_custom_span 创建 RAG span
@@ -351,10 +407,12 @@ class TestBkAidevAgentCallbackHandler:
             pass
 
         # 结束 chain
-        handler.on_chain_end(
-            outputs={"output": "结果"},
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_end(
+                outputs={"output": "结果"},
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 获取导出的 spans

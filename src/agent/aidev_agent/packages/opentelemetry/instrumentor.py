@@ -16,17 +16,13 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
-import inspect
 import logging
-from typing import Any, Collection, Dict, Generator, Iterator, Optional
+from typing import Any, Collection, Dict, Optional
 
 import orjson
 from langchain_core.messages import BaseMessage
-from opentelemetry import context as context_api
-from opentelemetry import trace
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from wrapt import wrap_function_wrapper
 
 from aidev_agent.pydantic_models import ExecuteKwargs
@@ -48,9 +44,31 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
     默认使用由 BkAidevAgentInstrumentor 提供的 tracer_provider 而不是全局的 tracer_provider
     将在 instrument 的时候，启动 otel_service
     请注意，不要使用 BkAidevAgentInstrumentor().instrument() 多次，由于 BaseInstrumentor() 是单例化的，第二次会导致 trace 获取异常
+
+    设计说明（线程归属）：
+        历史方案曾在 ``ChatCompletionAgent._execute`` 上注入，由 ``_wrap_generator``
+        在迭代结束时触发 ``BkAidevAgentInjector.on_bk_agent_end``。问题：在流式场景下
+        生成器的实际驱动发生在 ``streaming_helper`` 的 producer 线程中，而注入器
+        的 end 触发点却挂在 HTTP 请求线程上（消费者侧）。当用户关闭页面、gunicorn
+        kill 掉 HTTP 线程时，``on_bk_agent_end`` 永远不会被调用，root span 无法
+        上报。
+        现方案：取消 ``_execute`` 的 wrap。``BkAidevAgentCallbackHandler`` 持有
+        injector，在 LangChain 顶层 chain 的 ``on_chain_end`` / ``on_chain_error``
+        中结束 root span —— 这些 callback 由 LangChain 在真正驱动 Runnable 的线程上
+        触发（流式场景下即 producer 线程），不再受 HTTP 线程存活的影响。
     """
 
-    def __init__(self, config: OTelConfig = None):
+    def __init__(self, config: OTelConfig):
+        """初始化插桩器。
+
+        Args:
+            config: 必须显式提供 ``OTelConfig``。本插桩器内部读取
+                ``config.enabled`` / ``config.enable_traces`` / ``config.debug`` /
+                ``config.max_attribute_length`` 等字段；若放任为 ``None`` 会在
+                ``_get_agent`` wrap 中触发 ``AttributeError``，因此在构造期强制要求。
+        """
+        if config is None:
+            raise TypeError("BkAidevAgentInstrumentor requires a non-None OTelConfig")
         self._otel_service_config = config
         self._otel_service: Optional[BkAgentOTelService] = None
 
@@ -70,12 +88,11 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
         if tracer is None:
             self.start_otel_service()
             tracer = self._otel_service.get_tracer(__name__)
-        # 注入 Agent 启动的消息头
-        wrap_function_wrapper(
-            module="aidev_agent.services.agent.chat",
-            name="ChatCompletionAgent._execute",
-            wrapper=ChatCompletionAgentExecuteByAgentWrapper(tracer, self._otel_service_config),
-        )
+        # 在 _get_agent 阶段一次性完成：
+        #   1. 创建 root span（HTTP 线程，便于同步 RPC 关联）
+        #   2. 注入 caller_trace_context 用于跨服务传播
+        #   3. 构造 BkAidevAgentCallbackHandler，并把 injector 交给它
+        #      (callback handler 在顶层 chain end/error 时收尾 root span)
         wrap_function_wrapper(
             module="aidev_agent.services.agent.chat",
             name="ChatCompletionAgent._get_agent",
@@ -99,7 +116,6 @@ class BkAidevAgentInstrumentor(BaseInstrumentor):
             bool: 是否成功取消插桩
         """
         self.stop_otel_service()
-        unwrap("aidev_agent.services.agent.chat", "ChatCompletionAgent._execute")
         unwrap("aidev_agent.services.agent.chat", "ChatCompletionAgent._get_agent")
         unwrap("aidev_agent.core.nodes.knowledge", "AgentKnowledgeNode.__call__")
 
@@ -212,7 +228,31 @@ class AgentKnowledgeNodeCallWrapper:
         return ret
 
 
-class ChatCompletionAgentExecuteByAgentWrapper:
+class ChatCompletionAgentGetAgentWrapper:
+    """包装 ``ChatCompletionAgent._get_agent``。
+
+    职责（按发生顺序）：
+
+    1. 提取 ``messages`` / ``execute_kwargs`` / ``agent_info``，作为 root span start
+       入参的快照——但**不立即创建 root span**；
+    2. 创建 ``BkAidevAgentInjector`` 实例（持有 tracer / parent_trace_context / debug
+       配置），但延迟 ``on_bk_agent_start`` 的触发；
+    3. 执行原始 ``_get_agent`` 拿到 graph + cfg；该函数自身失败直接抛出，不会有
+       ``agent.execution`` span 残留（图都没构造出来本来就不该有）；
+    4. 构造 ``BkAidevAgentCallbackHandler`` 并把 injector + start 入参快照都交给它，
+       挂入 ``cfg.callbacks``。
+
+    线程归属（关键设计）：
+
+    root span 的 **start 与 end 都由 callback handler 在执行线程上触发**：
+    - 顶层 ``on_chain_start`` 首次触发时调用 ``injector.on_bk_agent_start``
+    - 顶层 ``on_chain_end`` / ``on_chain_error`` 时调用 ``injector.on_bk_agent_end``
+
+    流式场景下"执行线程 = producer 线程"，HTTP 请求线程被 gunicorn kill 不影响 trace
+    上报；非流式场景下"执行线程 = HTTP 线程"，行为与之前一致。``debug.thread_id`` /
+    ``debug.end_thread_id`` 因此始终一致，不再跨线程。
+    """
+
     def __init__(self, tracer, config: OTelConfig):
         """
         初始化包装器
@@ -220,51 +260,20 @@ class ChatCompletionAgentExecuteByAgentWrapper:
         self.tracer = tracer
         self.config = config
 
-    def get_values(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs = None, instance=None):
-        # 用户输入
+    @staticmethod
+    def _extract_user_input(messages) -> Any:
+        """从 messages 末尾提取用户输入文本，用于 root span 的 ``agent.session.input``"""
         if isinstance(messages, list) and len(messages) >= 1 and isinstance(messages[-1], BaseMessage):
-            user_input = messages[-1].content
-        else:
-            logger.warning("用户调用Agent时没有传入任何数据，user_input 为 None, execute_kwargs 不处理")
-            user_input = None
-        # 调用相关参数
-        execute_kwargs = execute_kwargs or ExecuteKwargs()
-        # Agent 相关参数
+            return messages[-1].content
+        logger.warning("用户调用 Agent 时未传入有效 messages，user_input 为 None")
+        return None
+
+    @staticmethod
+    def _extract_agent_info(instance) -> Dict[str, Any]:
+        """提取 agent_info 并剔除 otel_info（避免污染 span 属性）"""
         agent_info = dict(instance.agent_info) if instance and instance.agent_info else {}
         agent_info.pop("otel_info", None)
-        # trace 链路追踪的参数
-        parent_trace_context = execute_kwargs.caller_trace_context
-        # 构建统一参数
-        ret = {
-            "inputs": user_input,
-            "execute_kwargs": execute_kwargs,
-            "agent_info": agent_info,
-            "parent_trace_context": parent_trace_context,
-        }
-        return ret
-
-    def _wrap_generator(
-        self, gen: Iterator, base_handler: BkAidevAgentInjector, values: Dict[str, Any]
-    ) -> Generator[Any, None, None]:
-        """
-        包装生成器/迭代器，确保在迭代完成或异常时正确触发 on_bk_agent_end
-
-        Args:
-            gen: 原始生成器/迭代器
-            base_handler: BkAidevAgentInjector 实例
-            values: 传递给 on_bk_agent_end 的参数
-
-        Yields:
-            原始生成器的每个元素
-        """
-        try:
-            yield from gen
-        except Exception as e:
-            logger.exception("Agent 执行过程中发生异常")
-            base_handler.on_bk_agent_end(**values, error=e)
-            raise
-        else:
-            base_handler.on_bk_agent_end(**values)
+        return agent_info
 
     def __call__(
         self,
@@ -273,77 +282,27 @@ class ChatCompletionAgentExecuteByAgentWrapper:
         args,
         kwargs,
     ):
-        values = self.get_values(*args, **kwargs, instance=instance)
-        base_handler = BkAidevAgentInjector(tracer=self.tracer, parent_trace_context=values.get("parent_trace_context"))
-
-        base_handler.on_bk_agent_start(**values)
-        # 获取 root span，注入到 caller_trace_context 以保证链路追踪不断掉
-        # 直接从 base_handler 获取 root_span，不通过全局 context（避免 context 污染）
-        execute_kwargs = values.get("execute_kwargs") or ExecuteKwargs()
-        root_span = base_handler.root_span
-        if root_span is not None and root_span.get_span_context().is_valid:
-            carrier: dict[str, str] = {}
-            propagator = TraceContextTextMapPropagator()
-            propagator.inject(carrier, context=trace.set_span_in_context(root_span))
-            execute_kwargs.caller_trace_context = carrier
-
-        # 在当前 HTTP 请求线程上 attach root span，使得自动插桩（requests/redis 等）能关联 trace
-        # 注意：必须在同一线程上 detach，因为 ContextVar 是线程隔离的
-        # 在流式场景下，_wrap_generator 内的 on_bk_agent_end 在 producer 线程执行，
-        # 无法 detach 当前线程的 context，所以必须在 __call__ 返回前 detach
-        root_span_token = None
-        if root_span is not None:
-            root_span_token = context_api.attach(trace.set_span_in_context(root_span))
-
-        try:
-            result = wrapped(*args, **kwargs)
-        except Exception as e:
-            # 同步执行时发生异常，立即触发 on_end
-            base_handler.on_bk_agent_end(**values, error=e)
-            raise
-        finally:
-            # 无论同步还是流式，在当前 HTTP 线程上立即 detach
-            # 流式场景：generator 的实际消费在 producer 线程，不在当前线程
-            # 当前线程的职责到这里结束，必须清理 context 栈
-            if root_span_token is not None:
-                try:
-                    context_api.detach(root_span_token)
-                except Exception:  # noqa: BLE001
-                    # 确保finally块中的清理操作不因detach失败而中断
-                    logger.debug("Failed to detach root span context token", exc_info=True)
-
-        # 判断返回值是否是生成器/迭代器
-        if inspect.isgenerator(result) or inspect.isgeneratorfunction(result):
-            # 流式返回：包装生成器，在迭代完成时触发 on_end
-            return self._wrap_generator(result, base_handler, values)
-        elif hasattr(result, "__iter__") and hasattr(result, "__next__"):
-            # 其他迭代器类型（如自定义迭代器）
-            return self._wrap_generator(result, base_handler, values)
-        else:
-            # 非流式返回：立即触发 on_end
-            base_handler.on_bk_agent_end(**values)
-            return result
-
-
-class ChatCompletionAgentGetAgentWrapper:
-    def __init__(self, tracer, config: OTelConfig):
-        """
-        初始化包装器
-        """
-        self.tracer = tracer
-        self.config = config
-
-    def __call__(
-        self,
-        wrapped,
-        instance,
-        args,
-        kwargs,
-    ):
-        agent, cfg = wrapped(*args, **kwargs)
-        callbacks = cfg.setdefault("callbacks", [])
+        # 提取构造 root span 所需的入参快照（延迟到执行线程的 on_chain_start 顶层触发时使用）
+        messages = args[0] if args else kwargs.get("messages", [])
         execute_kwargs = kwargs.get("execute_kwargs") or ExecuteKwargs()
-        agent_info = dict(instance.agent_info) if instance and instance.agent_info else {}
+        agent_info = self._extract_agent_info(instance)
+        user_input = self._extract_user_input(messages)
+
+        # 仅创建 injector 实例，不立即 on_bk_agent_start。
+        # parent_trace_context 取自上游 caller（HTTP header 解出的 traceparent，由 view
+        # 层在 build_execute_kwargs 中写入）；root span 创建后将以此为父。
+        injector = BkAidevAgentInjector(
+            tracer=self.tracer,
+            parent_trace_context=execute_kwargs.caller_trace_context,
+            debug=self.config.debug,
+        )
+
+        # _get_agent 自身失败直接抛出：图都没构造出来，也不应该有 agent.execution span。
+        agent, cfg = wrapped(*args, **kwargs)
+
+        # 构造 callback handler，把 injector + start 入参快照都交给它。
+        # root span 的 start/end 都由 callback handler 在执行线程上触发。
+        callbacks = cfg.setdefault("callbacks", [])
         callback_handler = BkAidevAgentCallbackHandler(
             tracer=self.tracer,
             parent_trace_context=execute_kwargs.caller_trace_context,
@@ -356,6 +315,10 @@ class ChatCompletionAgentGetAgentWrapper:
             agent_name=agent_info.get("agent_name"),
             session_code=execute_kwargs.session_code,
             caller_executor=execute_kwargs.caller_executor,
+            injector=injector,
+            start_inputs=user_input,
+            start_execute_kwargs=execute_kwargs,
+            start_agent_info=agent_info,
         )
         callbacks.append(callback_handler)
         return agent, cfg

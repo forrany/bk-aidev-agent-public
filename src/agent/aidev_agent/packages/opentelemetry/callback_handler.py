@@ -200,6 +200,11 @@ class BkAidevAgentInjector:
         _set_span_attribute(self.root_span, "agent.end_time", end_time_str)
         _set_span_attribute(self.root_span, "agent.end_time_unix_nano", end_time_unix_nano)
 
+        # debug 模式下记录结束线程名，便于排查跨线程结束 root span 的场景
+        # （例如：start 在 HTTP 线程、end 由 LangChain callback 在 producer 线程触发）
+        if self.debug:
+            _set_span_attribute(self.root_span, "debug.end_thread_id", threading.current_thread().name)
+
         if error is not None:
             # 执行过程中发生异常，标记为失败
             _set_span_attribute(self.root_span, "agent.status", "failed")
@@ -237,6 +242,10 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
         agent_name: Optional[str] = None,
         session_code: Optional[str] = None,
         caller_executor: Optional[str] = None,
+        injector: Optional["BkAidevAgentInjector"] = None,
+        start_inputs: Any = None,
+        start_execute_kwargs: Optional[ExecuteKwargs] = None,
+        start_agent_info: Optional[Dict[str, Any]] = None,
     ):
         """
         初始化 Trace 收集器
@@ -253,6 +262,17 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
             agent_name: agent.info.name
             session_code: agent.session.session_code
             caller_executor: agent.session.caller_executor
+            injector: 可选的 BkAidevAgentInjector 实例。本 handler 会在顶层 chain
+                首次触发时调用 ``injector.on_bk_agent_start``，并在顶层 chain
+                end/error 时调用 ``injector.on_bk_agent_end``，保证 root span 的
+                完整生命周期都跟随真正执行 Agent 的线程（流式场景下为 producer 线程，
+                非流式场景下为 HTTP 线程）。这样 HTTP 请求线程被 gunicorn kill 不会
+                丢失 trace 上报，且 start/end 在同线程，避免跨线程 ContextVar 问题。
+            start_inputs: 顶层 chain 首次触发时传给 ``injector.on_bk_agent_start``
+                的 ``inputs`` 参数（通常是用户输入文本）。由 instrumentor 在 wrap
+                ``_get_agent`` 时提取并快照，延迟到执行线程上的 start 时机使用。
+            start_execute_kwargs: 同上，``ExecuteKwargs`` 快照。
+            start_agent_info: 同上，``agent_info`` 字典快照（已剔除 ``otel_info``）。
         """
         super().__init__()
 
@@ -271,7 +291,20 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
         self._caller_executor = caller_executor
 
         # Span 管理 - 使用 SpanHolder 管理完整的 Span 层级
-        self.root_span: Optional[Span] = None
+        self._injector: Optional[BkAidevAgentInjector] = injector
+        # injector 是否已被本 handler 触发过 start（幂等保护）
+        self._injector_started: bool = False
+        # 注入器侧 root span 是否已被本 handler 主动结束（幂等保护，避免重复 end）
+        self._injector_ended: bool = False
+        # 顶层 chain 首次触发时延迟调用 on_bk_agent_start 所需的入参快照
+        self._start_inputs: Any = start_inputs
+        self._start_execute_kwargs: Optional[ExecuteKwargs] = start_execute_kwargs
+        self._start_agent_info: Optional[Dict[str, Any]] = start_agent_info
+        # 顶层 chain start 时把 root span 重新 attach 为当前 active context 的 token；
+        # 由 on_chain_end / on_chain_error 在顶层 detach。
+        # 目的：让 LangchainInstrumentor 等"取当前 active ctx 作为父"的自动插桩
+        # 把它们的顶层 span 直接挂在 root span 下，而不是被覆盖到 chain.workflow 之下。
+        self._root_attach_token: Any = None
         self._root_run_id: Optional[UUID] = None  # 根 Span 的 run_id
         self.spans: Dict[UUID, SpanHolder] = {}  # 使用 UUID 管理所有 Span
         self._current_workflow_run_id: Optional[UUID] = None  # 当前顶层 workflow 链的 run_id，用于挂载自定义 span
@@ -284,6 +317,50 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
         self.parent_trace_context = parent_trace_context
         self.parent_context = None
         self._setup_trace_context()
+
+    @property
+    def root_span(self) -> Optional[Span]:
+        """兼容旧引用：root_span 实际由持有的 injector 管理。
+
+        若未注入 injector（独立使用 handler 的场景），返回 None；同时保留
+        setter 行为以兼容 ``self.root_span = None`` 的清理写法。
+        """
+        return self._injector.root_span if self._injector else None
+
+    @root_span.setter
+    def root_span(self, value: Optional[Span]) -> None:
+        if self._injector is not None:
+            self._injector.root_span = value
+
+    def _finalize_injector(self, error: Optional[Exception] = None) -> None:
+        """结束 injector 的 root span（幂等）。
+
+        通常在以下时机调用：
+        - 顶层 chain 正常结束（``on_chain_end``）
+        - 顶层 chain 异常结束（``on_chain_error``）
+        - 顶层 chain 因流式上游关闭而抛 GeneratorExit（视为正常结束）
+        """
+        if self._injector is None or self._injector_ended:
+            return
+        try:
+            self._injector.on_bk_agent_end(error=error)
+        finally:
+            self._injector_ended = True
+
+    def _detach_root_attach_token(self) -> None:
+        """detach 顶层 chain start 时为对外可见的 active context attach 的 root span token。
+
+        必须在结束 chain span（``_end_span``，其内部会 detach chain 自己的 token）**之前**
+        调用，以满足 OTel context 栈式 attach 的 LIFO 顺序约束。幂等。
+        """
+        if self._root_attach_token is None:
+            return
+        try:
+            _safe_detach_context(self._root_attach_token)
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to detach root attach token", exc_info=True)
+        finally:
+            self._root_attach_token = None
 
     def _setup_trace_context(self):
         """
@@ -355,8 +432,13 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
         if parent_run_id and parent_run_id in self.spans:
             # 有父 Span，使用父 Span 的 context
             ctx = set_span_in_context(self.spans[parent_run_id].span)
+        elif self._injector is not None and self._injector.root_span is not None:
+            # 顶层 span（无 LangChain 父 run_id）：优先以本服务的 root span 作为父，
+            # 让 chain.workflow 等顶层 span 直接挂在 ``agent.execution`` 下。
+            # 注：injector.root_span 在 on_chain_start 顶层路径里已被本 handler 创建。
+            ctx = set_span_in_context(self._injector.root_span)
         elif self.parent_context is not None:
-            # 没有父 run_id，但存在上游传播的 Trace Context
+            # 没有 root span（独立使用 handler 的场景），但存在上游传播的 Trace Context
             ctx = self.parent_context
         else:
             # 都没有，使用当前 context
@@ -541,7 +623,10 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
     ) -> None:
         """Agent 链开始执行 - 创建 Chain Span
 
-        根据是否有父级 Span，创建 workflow 或 task 类型的 Chain Span
+        顶层 chain 首次触发时，本回调还会承担 Agent 级 root span 的创建职责：
+        在执行线程上调用 ``injector.on_bk_agent_start``，并把 root span attach 为
+        当前 active context。这是把 ``agent.execution`` 的整个生命周期都收敛到执行
+        线程的关键一步——start/end 同线程，避免 ContextVar 跨线程失效。
         """
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
@@ -550,6 +635,21 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
 
         is_top_level = parent_run_id is None or parent_run_id not in self.spans
         span_kind = "workflow" if is_top_level else "task"
+
+        # 顶层 chain 首次触发：先在执行线程上启动 injector 得到 root span。
+        # 之后 _create_span 才能通过 self._injector.root_span 把 chain span 挂在 root 下。
+        if is_top_level and self._injector is not None and not self._injector_started:
+            try:
+                self._injector.on_bk_agent_start(
+                    inputs=self._start_inputs,
+                    execute_kwargs=self._start_execute_kwargs,
+                    agent_info=self._start_agent_info,
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to call injector.on_bk_agent_start", exc_info=True)
+            finally:
+                self._injector_started = True
+
         attributes = {
             "chain.name": str(name),
             "chain.type": span_kind,
@@ -567,6 +667,19 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
         if is_top_level:
             # 记录当前顶层 workflow 链的 run_id，供 create_span 使用
             self._current_workflow_run_id = run_id
+            # 在 chain span attach 之上，再 attach root span 让其成为当前 active context。
+            # 这样后续在同一线程上启动、依赖"当前 active ctx 作为父"的自动插桩 span
+            # （典型如 ``opentelemetry.instrumentation.langchain.LangchainInstrumentor``
+            # 在顶层 ``start_span`` 时不传 context 的 traceloop workflow span）会以 root 为父，
+            # 而不是被压到 ``chain.workflow`` 之下。
+            # 注意：栈式 attach 会覆盖此前的 active；on_chain_end / on_chain_error 顶层
+            # 必须在结束 chain span 之前 detach 该 token，保持栈平衡。
+            if self._injector is not None and self._injector.root_span is not None:
+                try:
+                    self._root_attach_token = context_api.attach(set_span_in_context(self._injector.root_span))
+                except Exception:  # noqa: BLE001
+                    logger.debug("Failed to re-attach root span on top-level chain start", exc_info=True)
+                    self._root_attach_token = None
 
     @dont_throw
     async def on_chain_end(
@@ -577,17 +690,31 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """Agent 链执行结束 - 结束 Chain Span"""
+        """Agent 链执行结束 - 结束 Chain Span
+
+        若本 handler 持有 injector，且当前结束的是顶层 workflow 链，则在此处
+        触发 ``injector.on_bk_agent_end()``。该回调由 LangChain 在真正驱动
+        Runnable 的线程上调用（流式场景下为 producer 线程），从而保证 root span
+        能正确闭合，不受 HTTP 请求线程被 kill 的影响。
+        """
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
         span_holder = self.spans[run_id]
         span = span_holder.span
         span.set_status(Status(StatusCode.OK))
-        # 如果当前结束的是顶层 workflow 链，则清理标记
-        if self._current_workflow_run_id == run_id:
+        # 判断当前结束的是否为顶层 workflow 链
+        is_top_level_workflow = self._current_workflow_run_id == run_id
+        if is_top_level_workflow:
             self._current_workflow_run_id = None
+            # 顶层 chain：先 detach 在 on_chain_start 顶层时 attach 的 root span context
+            # （栈式 attach 必须按 LIFO 顺序 detach，否则 _end_span 内的 detach 会把栈搞乱）
+            self._detach_root_attach_token()
 
         self._end_span(span, run_id)
+
+        # 顶层 workflow 结束 → 在当前线程结束 root span（与执行 Agent 同线程）
+        if is_top_level_workflow:
+            self._finalize_injector()
 
     @dont_throw
     async def on_chain_error(
@@ -601,32 +728,26 @@ class BkAidevAgentCallbackHandler(AsyncCallbackHandler):
         """Agent 链执行出错
 
         注意：GeneratorExit 在 LangChain 流式执行中表示上游正常关闭流，
-        不视为业务错误，这里直接忽略。
+        不视为业务错误。若持有 injector，则将其作为"正常结束"处理 root span，
+        避免因流被关闭而导致 root span 永不结束。
         """
-        # 忽略 GeneratorExit
+        # GeneratorExit：上游正常关流，按"成功"处理
         if isinstance(error, GeneratorExit):  # type: ignore[name-defined]
             logger.debug("Ignore GeneratorExit in on_chain_error (stream closed)")
+            # 若是顶层 chain 的关流，需要把 root span 也收尾，避免泄露
+            is_top_level = parent_run_id is None or parent_run_id not in self.spans
+            if is_top_level:
+                self._detach_root_attach_token()
+                self._finalize_injector()
             return
 
         # 如果是顶层 chain 且错误影响到根 Span，需要特殊处理
         is_top_level = parent_run_id is None or parent_run_id not in self.spans
 
-        if is_top_level and self.root_span:
-            # 顶层 chain 错误，也标记根 Span 为失败
-            try:
-                _set_span_attribute(self.root_span, "agent.status", "failed")
-                self.root_span.set_status(Status(StatusCode.ERROR, str(error)))
-                self.root_span.record_exception(error)
-                self.root_span.end()
-
-                logger.debug(
-                    "Root span ended with error: error=%s",
-                    error,
-                )
-            except Exception as e:
-                logger.error(f"Failed to handle root span error: {e}", exc_info=True)
-            finally:
-                self.root_span = None
+        if is_top_level:
+            # 顶层 chain 错误：先 detach root attach（保持栈平衡），再统一走 injector 收尾
+            self._detach_root_attach_token()
+            self._finalize_injector(error=error)
 
         # 处理 Chain Span 本身的错误
         self._handle_error(error, run_id, parent_run_id, **kwargs)

@@ -21,10 +21,13 @@ from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
+from aidev_agent.packages.opentelemetry.callback_handler import (
+    BkAidevAgentCallbackHandler,
+    BkAidevAgentInjector,
+)
 from aidev_agent.packages.opentelemetry.config import OTelConfig
 from aidev_agent.packages.opentelemetry.instrumentor import (
     BkAidevAgentInstrumentor,
-    ChatCompletionAgentExecuteByAgentWrapper,
     ChatCompletionAgentGetAgentWrapper,
 )
 from langchain_core.messages import HumanMessage
@@ -93,41 +96,15 @@ def tracer_and_config():
     exporter.clear()
 
 
-def verify_get_values_result(result):
-    """
-    公共验证函数：验证 get_values 返回值的结构和内容
-
-    Args:
-        result: get_values 方法的返回值
-    """
-    # 验证返回值包含所有必需的键
-    assert "inputs" in result
-    assert "execute_kwargs" in result
-    assert "agent_info" in result
-    assert "parent_trace_context" in result
-
-    # 验证 inputs (user_input) 不能为空
-    assert result["inputs"] is not None
-    assert result["inputs"] != ""
-
-    # 验证 execute_kwargs 是 ExecuteKwargs 对象
-    assert isinstance(result["execute_kwargs"], ExecuteKwargs)
-    execute_kwargs = result["execute_kwargs"]
-
-    # 验证 execute_kwargs 包含所有必需的字段
-    assert hasattr(execute_kwargs, "session_code")
-    assert hasattr(execute_kwargs, "caller_executor")
-    assert hasattr(execute_kwargs, "caller_bk_app_code")
-    assert hasattr(execute_kwargs, "caller_bk_biz_env")
-    assert hasattr(execute_kwargs, "caller_bk_biz_id")
-    assert hasattr(execute_kwargs, "caller_order_type")
-
-    # 验证 agent_info 是一个字典
-    assert isinstance(result["agent_info"], dict)
-    agent_info = result["agent_info"]
-
-    # 验证 agent_info 不能有 otel_info 字段
-    assert "otel_info" not in agent_info
+def _build_mock_instance(agent_info: dict | None = None) -> MagicMock:
+    """构造带 agent_info 的 mock instance"""
+    mock_instance = MagicMock()
+    mock_instance.agent_info = agent_info or {
+        "agent_id": "test-agent",
+        "agent_code": "test_code",
+        "agent_name": "测试智能体",
+    }
+    return mock_instance
 
 
 class TestBkAidevAgentInstrumentor:
@@ -139,194 +116,269 @@ class TestBkAidevAgentInstrumentor:
             BkAidevAgentInstrumentor()
 
 
-class TestChatCompletionAgentExecuteByAgentWrapper:
-    """测试 ChatCompletionAgentExecuteByAgentWrapper 包装器"""
-
-    def test_get_values_with_execute_kwargs_param(self, tracer_and_config):
-        """测试 get_values 从 instance.agent_info 获取 agent_info"""
-        tracer, config, _ = tracer_and_config
-
-        # 创建 mock instance 并设置 agent_info
-        mock_instance = MagicMock()
-        mock_instance.agent_info = {
-            "agent_id": "test-agent-456",
-            "agent_code": "test_agent_2",
-            "agent_name": "测试智能体2",
-            "agent_type": "ai_chat",
-            "service_catalogue": "test_service_2",
-            "updated_by": "admin",
-            "otel_info": "base64encoded",  # agent_info 中 otel_info 会被 pop 掉
-        }
-
-        # 创建 ExecuteKwargs 对象
-        execute_kwargs = ExecuteKwargs(
-            session_code="input-session-456",
-            caller_bk_app_code="input-app",
-            caller_bk_biz_env="domestic_biz",
-            caller_bk_biz_id=200,
-            caller_executor="input-user",
-            caller_order_type="ai_chat",
-        )
-
-        # 创建包装器
-        wrapper = ChatCompletionAgentExecuteByAgentWrapper(tracer, config)
-
-        # 准备输入
-        messages = [HumanMessage(content="测试问题2")]
-
-        # 调用 get_values
-        result = wrapper.get_values(messages=messages, execute_kwargs=execute_kwargs, instance=mock_instance)
-
-        # 使用公共验证函数
-        verify_get_values_result(result)
-
-        # 验证具体的值 - 应该使用传入的 execute_kwargs
-        assert result["inputs"] == "测试问题2"
-        assert result["execute_kwargs"].session_code == "input-session-456"
-        assert result["execute_kwargs"].caller_executor == "input-user"
-        assert result["execute_kwargs"].caller_bk_app_code == "input-app"
-        assert result["execute_kwargs"].caller_bk_biz_env == "domestic_biz"
-        assert result["execute_kwargs"].caller_bk_biz_id == 200
-        assert result["execute_kwargs"].caller_order_type == "ai_chat"
-
-    @patch("aidev_agent.packages.opentelemetry.instrumentor.BkAidevAgentInjector")
-    def test_wrapper_call(self, mock_injector_class, tracer_and_config):
-        """测试包装器的完整调用流程"""
-        tracer, config, _ = tracer_and_config
-
-        # 创建 mock injector 实例
-        mock_injector = MagicMock()
-        mock_injector_class.return_value = mock_injector
-
-        # 创建 mock instance 并设置 agent_info
-        mock_instance = MagicMock()
-        mock_instance.agent_info = {
-            "agent_id": "test-agent-789",
-            "agent_code": "test_agent_3",
-            "agent_name": "测试智能体3",
-            "agent_type": "ai_chat",
-            "service_catalogue": "test_service_3",
-            "updated_by": "admin",
-            "otel_info": {},
-        }
-
-        # 创建包装器
-        wrapper = ChatCompletionAgentExecuteByAgentWrapper(tracer, config)
-
-        # 模拟被包装的生成器函数
-        def mock_execute_by_agent(*args, **kwargs):
-            yield {"event": "start"}
-            yield {"event": "data", "content": "测试"}
-            yield {"event": "end"}
-
-        # 准备输入
-        messages = [HumanMessage(content="测试问题3")]
-        execute_kwargs = None
-
-        # 调用包装器
-        generator = wrapper(
-            wrapped=mock_execute_by_agent,
-            instance=mock_instance,
-            args=(messages, execute_kwargs),
-            kwargs={},
-        )
-
-        # 消费生成器
-        events = list(generator)
-
-        # 验证生成器输出
-        assert len(events) == 3
-        assert events[0]["event"] == "start"
-        assert events[1]["event"] == "data"
-        assert events[2]["event"] == "end"
-
-        # 验证 BkAidevAgentInjector 被正确调用
-        mock_injector_class.assert_called_once()
-        mock_injector.on_bk_agent_start.assert_called_once()
-        mock_injector.on_bk_agent_end.assert_called_once()
-
-
 class TestChatCompletionAgentGetAgentWrapper:
-    """测试 ChatCompletionAgentGetAgentWrapper 包装器"""
+    """测试 ChatCompletionAgentGetAgentWrapper 包装器
 
-    def test_wrapper_adds_callback_handler(self, tracer_and_config):
-        """测试包装器添加 callback handler"""
+    新方案下 wrapper 仅做"延迟构造"：
+    - 创建 ``BkAidevAgentInjector`` 实例但不立即 ``on_bk_agent_start``
+    - 把 start 入参快照 + injector 都交给 ``BkAidevAgentCallbackHandler``
+    - root span 的 start 与 end 都由 callback handler 在执行线程上触发
+    - ``_get_agent`` 自身失败直接抛出，不会留下孤儿 root span
+    """
+
+    @pytest.mark.parametrize(
+        "agent_info, expected_pop_otel",
+        [
+            ({"agent_id": "id1", "agent_code": "c1", "agent_name": "n1", "otel_info": "x"}, True),
+            ({"agent_id": "id2", "agent_code": "c2", "agent_name": "n2"}, False),
+        ],
+    )
+    def test_wrapper_creates_handler_with_deferred_start(self, tracer_and_config, agent_info, expected_pop_otel):
+        """包装器应当：
+        1. 创建 BkAidevAgentInjector 但**不**立即 on_bk_agent_start
+        2. 把 injector + start 入参快照都注入到 BkAidevAgentCallbackHandler
+        3. 将 callback handler 追加到 cfg.callbacks
+        """
         tracer, config, _ = tracer_and_config
-
-        # 创建 mock instance 并设置 agent_info
-        mock_instance = MagicMock()
-        mock_instance.agent_info = {
-            "agent_id": "test",
-            "agent_code": "code",
-            "agent_name": "name",
-        }
-
-        # 创建包装器
+        mock_instance = _build_mock_instance(agent_info)
         wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
+        execute_kwargs = ExecuteKwargs(session_code="s1", caller_executor="u1")
 
-        # 模拟被包装的函数
         def mock_get_agent(*args, **kwargs):
-            mock_agent = MagicMock()
-            cfg = {}
-            return mock_agent, cfg
+            return MagicMock(), {}
 
-        # 调用包装器
-        agent, cfg = wrapper(
+        messages = [HumanMessage(content="问题")]
+        _, cfg = wrapper(
             wrapped=mock_get_agent,
             instance=mock_instance,
-            args=(),
-            kwargs={},
+            args=(messages,),
+            kwargs={"execute_kwargs": execute_kwargs},
         )
 
-        # 验证 callbacks 被添加
-        assert "callbacks" in cfg
-        assert isinstance(cfg["callbacks"], list)
+        # 1. callback handler 已挂载
         assert len(cfg["callbacks"]) == 1
-
-        # 验证添加的是 BkAidevAgentCallbackHandler
-        from aidev_agent.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
-
-        assert isinstance(cfg["callbacks"][0], BkAidevAgentCallbackHandler)
+        handler = cfg["callbacks"][0]
+        assert isinstance(handler, BkAidevAgentCallbackHandler)
+        # 2. handler 持有 injector 但 root span 未创建（延迟到顶层 chain start）
+        assert isinstance(handler._injector, BkAidevAgentInjector)
+        assert handler._injector.root_span is None, "root span should be deferred until on_chain_start"
+        # 3. start 入参快照已挂在 handler 上
+        assert handler._start_inputs == "问题"
+        assert handler._start_execute_kwargs is execute_kwargs
+        # 4. otel_info 已剔除（防止污染 span）
+        if expected_pop_otel:
+            assert "otel_info" not in handler._start_agent_info
+        else:
+            assert handler._start_agent_info == agent_info
 
     def test_wrapper_preserves_existing_callbacks(self, tracer_and_config):
-        """测试包装器保留已有的 callbacks"""
+        """包装器需保留已有 callbacks"""
         tracer, config, _ = tracer_and_config
-
-        # 创建 mock instance 并设置 agent_info
-        mock_instance = MagicMock()
-        mock_instance.agent_info = {
-            "agent_id": "test",
-            "agent_code": "code",
-            "agent_name": "name",
-        }
-
-        # 创建包装器
+        mock_instance = _build_mock_instance()
         wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
-
-        # 模拟被包装的函数，返回已有 callbacks
-        existing_callback = MagicMock()
+        existing_cb = MagicMock()
 
         def mock_get_agent(*args, **kwargs):
-            mock_agent = MagicMock()
-            cfg = {"callbacks": [existing_callback]}
-            return mock_agent, cfg
+            return MagicMock(), {"callbacks": [existing_cb]}
 
-        # 调用包装器
-        agent, cfg = wrapper(
+        _, cfg = wrapper(
             wrapped=mock_get_agent,
             instance=mock_instance,
-            args=(),
-            kwargs={},
+            args=([HumanMessage(content="hi")],),
+            kwargs={"execute_kwargs": ExecuteKwargs()},
         )
 
-        # 验证 callbacks 包含已有的和新增的
-        assert "callbacks" in cfg
-        assert isinstance(cfg["callbacks"], list)
-        assert len(cfg["callbacks"]) == 2
-        assert existing_callback in cfg["callbacks"]
-
-        # 验证新增的是 BkAidevAgentCallbackHandler
-        from aidev_agent.packages.opentelemetry.callback_handler import BkAidevAgentCallbackHandler
-
+        assert existing_cb in cfg["callbacks"]
         callback_handlers = [cb for cb in cfg["callbacks"] if isinstance(cb, BkAidevAgentCallbackHandler)]
         assert len(callback_handlers) == 1
+
+    def test_wrapper_propagates_get_agent_failure_without_orphan_span(self, tracer_and_config):
+        """``_get_agent`` 自身失败时直接抛出，不应留下任何孤儿 ``agent.execution`` span。
+
+        新方案下 root span 仅在顶层 chain start 时创建，``_get_agent`` 失败意味着图都没
+        构造出来，本就不应该有 agent 执行 span。
+        """
+        tracer, config, exporter = tracer_and_config
+        mock_instance = _build_mock_instance()
+        wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
+
+        def mock_get_agent_failing(*args, **kwargs):
+            raise RuntimeError("get_agent failed")
+
+        with pytest.raises(RuntimeError, match="get_agent failed"):
+            wrapper(
+                wrapped=mock_get_agent_failing,
+                instance=mock_instance,
+                args=([HumanMessage(content="hi")],),
+                kwargs={"execute_kwargs": ExecuteKwargs()},
+            )
+
+        # 没有任何 agent.execution span 被导出
+        spans = exporter.get_finished_spans()
+        assert not any(s.name == "agent.execution" for s in spans)
+
+    def test_callback_handler_creates_and_ends_root_span_in_execution_thread(self, tracer_and_config):
+        """新方案核心：root span 的 start 与 end **都**由 callback handler 在执行线程触发。
+
+        - on_chain_start (顶层) → injector.on_bk_agent_start → root span 创建
+        - on_chain_end (顶层) → injector.on_bk_agent_end → root span 结束
+        - chain.workflow span 以 root span 为父
+        """
+        import asyncio
+        from uuid import uuid4
+
+        tracer, config, exporter = tracer_and_config
+        mock_instance = _build_mock_instance()
+        wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
+
+        def mock_get_agent(*args, **kwargs):
+            return MagicMock(), {}
+
+        _, cfg = wrapper(
+            wrapped=mock_get_agent,
+            instance=mock_instance,
+            args=([HumanMessage(content="hi")],),
+            kwargs={"execute_kwargs": ExecuteKwargs()},
+        )
+        handler = cfg["callbacks"][0]
+        injector = handler._injector
+        # wrap 阶段：root span 还未创建
+        assert injector.root_span is None
+        assert handler._injector_started is False
+
+        # 模拟顶层 chain start/end —— 必须在同一 event loop（ContextVar 限制）
+        chain_run_id = uuid4()
+        captured: dict = {}
+
+        async def _scenario():
+            await handler.on_chain_start(
+                serialized={"name": "agent"}, inputs={"input": "hi"}, run_id=chain_run_id, parent_run_id=None
+            )
+            captured["root_span_after_start"] = injector.root_span
+            await handler.on_chain_end(outputs={"output": "ok"}, run_id=chain_run_id, parent_run_id=None)
+
+        asyncio.run(_scenario())
+
+        # 顶层 on_chain_start 应当触发了 injector.on_bk_agent_start，root span 已创建
+        assert captured["root_span_after_start"] is not None
+        assert handler._injector_started is True
+        # on_chain_end 应当结束了 root span
+        assert injector.root_span.end_time is not None
+        assert handler._injector_ended is True
+
+        # chain.workflow 应当以 root span 为父
+        spans = exporter.get_finished_spans()
+        chain_span = next((s for s in spans if s.name.startswith("chain.")), None)
+        agent_span = next((s for s in spans if s.name == "agent.execution"), None)
+        assert chain_span is not None and agent_span is not None
+        assert chain_span.parent.span_id == agent_span.context.span_id
+
+        # 幂等：再次结束不抛异常
+        handler._finalize_injector()
+
+    def test_wrapper_propagates_debug_flag_to_injector(self, tracer_and_config):
+        """``OTelConfig.debug`` 必须透传给 injector，否则 ``debug.thread_id`` /
+        ``debug.end_thread_id`` 不会写入 root span。
+        """
+        import asyncio
+        from uuid import uuid4
+
+        tracer, config, exporter = tracer_and_config
+        config.debug = True  # 打开 debug
+
+        mock_instance = _build_mock_instance()
+        wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
+
+        def mock_get_agent(*args, **kwargs):
+            return MagicMock(), {}
+
+        _, cfg = wrapper(
+            wrapped=mock_get_agent,
+            instance=mock_instance,
+            args=([HumanMessage(content="hi")],),
+            kwargs={"execute_kwargs": ExecuteKwargs()},
+        )
+        handler = cfg["callbacks"][0]
+        injector = handler._injector
+        assert injector.debug is True
+
+        # 通过完整的 chain start/end 流程触发 root span 的 start + end
+        chain_run_id = uuid4()
+
+        async def _scenario():
+            await handler.on_chain_start(
+                serialized={"name": "agent"}, inputs={"input": "hi"}, run_id=chain_run_id, parent_run_id=None
+            )
+            await handler.on_chain_end(outputs={"output": "ok"}, run_id=chain_run_id, parent_run_id=None)
+
+        asyncio.run(_scenario())
+
+        spans = exporter.get_finished_spans()
+        root_spans = [s for s in spans if s.name == "agent.execution"]
+        assert len(root_spans) == 1
+        assert "debug.thread_id" in root_spans[0].attributes
+        assert "debug.end_thread_id" in root_spans[0].attributes
+
+    def test_external_instrumentation_span_attaches_to_root_not_chain(self, tracer_and_config):
+        """模拟 ``opentelemetry.instrumentation.langchain.LangchainInstrumentor`` 行为：
+        在顶层 chain 执行期间，用 ``tracer.start_span(name)`` 不显式传 context 启动一个 span。
+        该 span 应当挂在 ``agent.execution`` 下，而不是被压到 ``chain.workflow`` 之下。
+
+        这是历史层级（``agent.execution → [外部插桩 span, chain.workflow]``）的关键性质，
+        本次修复通过在顶层 ``on_chain_start`` 末尾把 root span 重新 attach 为当前 active context
+        来恢复该性质。
+        """
+        import asyncio
+        from uuid import uuid4
+
+        tracer, config, exporter = tracer_and_config
+        mock_instance = _build_mock_instance()
+        wrapper = ChatCompletionAgentGetAgentWrapper(tracer, config)
+
+        def mock_get_agent(*args, **kwargs):
+            return MagicMock(), {}
+
+        _, cfg = wrapper(
+            wrapped=mock_get_agent,
+            instance=mock_instance,
+            args=([HumanMessage(content="hi")],),
+            kwargs={"execute_kwargs": ExecuteKwargs()},
+        )
+        handler = cfg["callbacks"][0]
+
+        # 把 chain start / 外部插桩 span / chain end 放在同一个 event loop 里执行，
+        # 避免 ``asyncio.run`` 之间 OTel context（ContextVar）跨 loop 失效。
+        chain_run_id = uuid4()
+        captured: dict = {}
+
+        async def _scenario():
+            await handler.on_chain_start(
+                serialized={"name": "agent"}, inputs={"input": "hi"}, run_id=chain_run_id, parent_run_id=None
+            )
+            captured["root_span"] = handler._injector.root_span
+            # 模拟外部插桩（如 LangchainInstrumentor）启动 span：
+            # 不显式传 context，按 OTel 默认取当前 active context 作为父
+            external_span = tracer.start_span("external.workflow")
+            captured["external_parent"] = external_span.parent
+            external_span.end()
+            await handler.on_chain_end(outputs={"output": "ok"}, run_id=chain_run_id, parent_run_id=None)
+
+        asyncio.run(_scenario())
+
+        root_span = captured["root_span"]
+        assert root_span is not None
+
+        # 验证：external span 的父应当是 root span，而不是 chain.workflow
+        assert captured["external_parent"] is not None, "external span should have a parent"
+        assert captured["external_parent"].span_id == root_span.get_span_context().span_id, (
+            "external span should attach to root (agent.execution), not chain.workflow"
+        )
+
+        # 同时验证 chain span 仍以 root 为父（保持原有结构）
+        spans = exporter.get_finished_spans()
+        chain_span = next((s for s in spans if s.name.startswith("chain.")), None)
+        assert chain_span is not None
+        assert chain_span.parent.span_id == root_span.get_span_context().span_id
+
+        # 进而验证 LIFO 栈平衡：on_chain_end 后 _root_attach_token 已被清理
+        assert handler._root_attach_token is None

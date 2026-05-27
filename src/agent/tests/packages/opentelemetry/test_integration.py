@@ -16,6 +16,7 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
+import asyncio
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -104,20 +105,24 @@ class TestCompleteAgentExecution:
 
         # 2. Chain 开始
         chain_run_id = uuid4()
-        handler.on_chain_start(
-            serialized={"name": "qa_chain"},
-            inputs=inputs,
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_start(
+                serialized={"name": "qa_chain"},
+                inputs=inputs,
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 3. LLM 调用
         llm_run_id = uuid4()
-        handler.on_chat_model_start(
-            serialized={"name": "gpt-4"},
-            messages=[[HumanMessage(content="什么是人工智能？")]],
-            run_id=llm_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_chat_model_start(
+                serialized={"name": "gpt-4"},
+                messages=[[HumanMessage(content="什么是人工智能？")]],
+                run_id=llm_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
         llm_result = LLMResult(
@@ -125,17 +130,21 @@ class TestCompleteAgentExecution:
             llm_output={"model_name": "gpt-4"},
         )
 
-        handler.on_llm_end(
-            response=llm_result,
-            run_id=llm_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_llm_end(
+                response=llm_result,
+                run_id=llm_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # 4. Chain 结束
-        handler.on_chain_end(
-            outputs={"output": "人工智能是计算机科学的一个分支..."},
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_end(
+                outputs={"output": "人工智能是计算机科学的一个分支..."},
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 5. Agent 结束
@@ -205,20 +214,24 @@ class TestCompleteAgentExecution:
 
         # 2. Chain 开始
         chain_run_id = uuid4()
-        handler.on_chain_start(
-            serialized={"name": "tool_chain"},
-            inputs=inputs,
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_start(
+                serialized={"name": "tool_chain"},
+                inputs=inputs,
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 3. 第一次 LLM 调用（决定使用工具）
         llm_run_id_1 = uuid4()
-        handler.on_chat_model_start(
-            serialized={"name": "gpt-4"},
-            messages=[[HumanMessage(content="北京今天的天气怎么样？")]],
-            run_id=llm_run_id_1,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_chat_model_start(
+                serialized={"name": "gpt-4"},
+                messages=[[HumanMessage(content="北京今天的天气怎么样？")]],
+                run_id=llm_run_id_1,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # LLM 返回需要调用工具
@@ -243,40 +256,48 @@ class TestCompleteAgentExecution:
             llm_output={"model_name": "gpt-4"},
         )
 
-        handler.on_llm_end(
-            response=llm_result_1,
-            run_id=llm_run_id_1,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_llm_end(
+                response=llm_result_1,
+                run_id=llm_run_id_1,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # 4. 工具调用
         tool_run_id = uuid4()
-        handler.on_tool_start(
-            serialized={"name": "get_weather"},
-            input_str='{"city": "北京"}',
-            run_id=tool_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_tool_start(
+                serialized={"name": "get_weather"},
+                input_str='{"city": "北京"}',
+                run_id=tool_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
-        handler.on_tool_end(
-            output='{"temperature": 15, "condition": "晴"}',
-            run_id=tool_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_tool_end(
+                output='{"temperature": 15, "condition": "晴"}',
+                run_id=tool_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # 5. 第二次 LLM 调用（根据工具结果回答）
         llm_run_id_2 = uuid4()
-        handler.on_chat_model_start(
-            serialized={"name": "gpt-4"},
-            messages=[
-                [
-                    HumanMessage(content="北京今天的天气怎么样？"),
-                    AIMessage(content="调用工具..."),
-                    HumanMessage(content='工具结果: {"temperature": 15, "condition": "晴"}'),
-                ]
-            ],
-            run_id=llm_run_id_2,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_chat_model_start(
+                serialized={"name": "gpt-4"},
+                messages=[
+                    [
+                        HumanMessage(content="北京今天的天气怎么样？"),
+                        AIMessage(content="调用工具..."),
+                        HumanMessage(content='工具结果: {"temperature": 15, "condition": "晴"}'),
+                    ]
+                ],
+                run_id=llm_run_id_2,
+                parent_run_id=chain_run_id,
+            )
         )
 
         llm_result_2 = LLMResult(
@@ -284,17 +305,21 @@ class TestCompleteAgentExecution:
             llm_output={"model_name": "gpt-4"},
         )
 
-        handler.on_llm_end(
-            response=llm_result_2,
-            run_id=llm_run_id_2,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_llm_end(
+                response=llm_result_2,
+                run_id=llm_run_id_2,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # 6. Chain 结束
-        handler.on_chain_end(
-            outputs={"output": "北京今天的天气是晴天，温度15度"},
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_end(
+                outputs={"output": "北京今天的天气是晴天，温度15度"},
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 7. Agent 结束
@@ -365,11 +390,13 @@ class TestCompleteAgentExecution:
 
         # 2. Chain 开始
         chain_run_id = uuid4()
-        handler.on_chain_start(
-            serialized={"name": "rag_chain"},
-            inputs=inputs,
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_start(
+                serialized={"name": "rag_chain"},
+                inputs=inputs,
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 3. RAG 检索
@@ -387,11 +414,13 @@ class TestCompleteAgentExecution:
 
         # 4. LLM 调用
         llm_run_id = uuid4()
-        handler.on_chat_model_start(
-            serialized={"name": "gpt-4"},
-            messages=[[HumanMessage(content="如何使用蓝鲸平台？")]],
-            run_id=llm_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_chat_model_start(
+                serialized={"name": "gpt-4"},
+                messages=[[HumanMessage(content="如何使用蓝鲸平台？")]],
+                run_id=llm_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
         llm_result = LLMResult(
@@ -399,17 +428,21 @@ class TestCompleteAgentExecution:
             llm_output={"model_name": "gpt-4"},
         )
 
-        handler.on_llm_end(
-            response=llm_result,
-            run_id=llm_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_llm_end(
+                response=llm_result,
+                run_id=llm_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # 5. Chain 结束
-        handler.on_chain_end(
-            outputs={"output": "根据文档，蓝鲸平台的使用方法是..."},
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_end(
+                outputs={"output": "根据文档，蓝鲸平台的使用方法是..."},
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 6. Agent 结束
@@ -483,24 +516,29 @@ class TestCompleteAgentExecution:
 
         # 验证 root span 已创建
         assert injector.root_span is not None
-        assert injector.context_token is not None
+        # 注：BkAidevAgentInjector 不再维护 context_token —— attach/detach 由
+        # instrumentor.py 在 _get_agent wrap 中完成，避免跨线程污染
 
         # 2. Chain 开始
         chain_run_id = uuid4()
-        handler.on_chain_start(
-            serialized={"name": "streaming_chain"},
-            inputs=inputs,
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_start(
+                serialized={"name": "streaming_chain"},
+                inputs=inputs,
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 3. LLM 流式调用开始
         llm_run_id = uuid4()
-        handler.on_chat_model_start(
-            serialized={"name": "gpt-4"},
-            messages=[[HumanMessage(content="流式响应测试")]],
-            run_id=llm_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_chat_model_start(
+                serialized={"name": "gpt-4"},
+                messages=[[HumanMessage(content="流式响应测试")]],
+                run_id=llm_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # 模拟流式响应：在 StreamingHttpResponse 返回后，
@@ -512,17 +550,21 @@ class TestCompleteAgentExecution:
             llm_output={"model_name": "gpt-4"},
         )
 
-        handler.on_llm_end(
-            response=llm_result,
-            run_id=llm_run_id,
-            parent_run_id=chain_run_id,
+        asyncio.run(
+            handler.on_llm_end(
+                response=llm_result,
+                run_id=llm_run_id,
+                parent_run_id=chain_run_id,
+            )
         )
 
         # 5. Chain 结束
-        handler.on_chain_end(
-            outputs={"output": "这是流式响应的内容..."},
-            run_id=chain_run_id,
-            parent_run_id=None,
+        asyncio.run(
+            handler.on_chain_end(
+                outputs={"output": "这是流式响应的内容..."},
+                run_id=chain_run_id,
+                parent_run_id=None,
+            )
         )
 
         # 6. 关键验证点：在流式响应场景下，必须确保 Agent 正确结束
