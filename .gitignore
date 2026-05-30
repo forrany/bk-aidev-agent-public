@@ -214,3 +214,5 @@ src/agent/openspec
 src/agent/CODEBUDDY.md
 src/agent/.planning
 src/agent/harness
+
+.codegraph/

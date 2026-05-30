@@ -434,8 +434,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         main_queue_name = self._get_queue_name(thread_id)
 
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 # 尝试被动声明来检查队列是否存在
                 try:
                     channel.queue_declare(queue=main_queue_name, durable=True, passive=True)
@@ -472,8 +471,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                     logger.warning(f"Queue {main_queue_name} has incompatible arguments, will be deleted")
 
             # 使用新连接删除旧队列（因为上面的 channel 可能已关闭）
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 channel.queue_delete(queue=main_queue_name)
                 logger.info(f"Deleted incompatible queue {main_queue_name}")
                 return True
@@ -548,8 +546,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
 
         # 批量推送到 RabbitMQ
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
 
                 for thread_id, messages in messages_to_flush.items():
                     if not messages:
@@ -592,8 +589,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         Returns:
             恢复的消息数量
         """
-        with self._with_connection() as connection:
-            channel = connection.channel()
+        with self._with_channel() as channel:
             main_queue_name, dlq_name = self._ensure_queue_with_dlx(channel, thread_id)
 
             # 检查死信队列中的消息数量
@@ -664,8 +660,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def _get_dlq_count(self, thread_id: str) -> int:
         """获取死信队列中的消息数量"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 dlq_name = self._get_dlq_name(thread_id)
                 try:
                     dlq_info = channel.queue_declare(queue=dlq_name, durable=True, passive=True)
@@ -723,8 +718,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             logger.debug("[Streaming] rabbitmq flush thread_id=%s, count=%d", thread_id, len(messages_to_flush))
 
             try:
-                with self._with_connection() as connection:
-                    channel = connection.channel()
+                with self._with_channel() as channel:
                     queue_name = self._ensure_queue(channel, thread_id)
 
                     for message in messages_to_flush:
@@ -760,8 +754,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         Returns:
             消息列表
         """
-        with self._with_connection() as connection:
-            channel = connection.channel()
+        with self._with_channel() as channel:
             main_queue_name = self._ensure_queue(channel, thread_id)
 
             # 查询主队列中有多少消息
@@ -864,22 +857,21 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         # 每次 passive declare 使用独立 channel，避免主队列不存在时
         # channel 被 404 error 关闭导致 DLQ 检查静默失败
         try:
-            with self._with_connection() as connection:
-                main_queue_name = self._get_queue_name(thread_id)
-                dlq_name = self._get_dlq_name(thread_id)
+            main_queue_name = self._get_queue_name(thread_id)
+            dlq_name = self._get_dlq_name(thread_id)
 
-                # 检查主队列（独立 channel）
+            # 检查主队列（独立 channel）
+            with self._with_channel() as channel:
                 try:
-                    channel = connection.channel()
                     queue_info = channel.queue_declare(queue=main_queue_name, durable=True, passive=True)
                     if queue_info.method.message_count > 0:
                         return True
                 except Exception:
                     pass
 
-                # 检查死信队列（独立 channel）
+            # 检查死信队列（独立 channel）
+            with self._with_channel() as channel:
                 try:
-                    channel = connection.channel()
                     dlq_info = channel.queue_declare(queue=dlq_name, durable=True, passive=True)
                     if dlq_info.method.message_count > 0:
                         return True
@@ -918,6 +910,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         Returns:
             True 表示成功清空，False 表示失败或队列不存在
         """
+        channel = None
         try:
             channel = connection.channel()
             if passive_check:
@@ -929,6 +922,10 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             if not passive_check:  # 非被动检查模式下才记录警告
                 logger.warning(f"Failed to purge queue {queue_name}: {e}")
             return False
+        finally:
+            if channel and getattr(channel, "is_open", False):
+                with contextlib.suppress(Exception):
+                    channel.close()
 
     def _purge_all_queues(self, thread_id: str, include_cancel_queue: bool = True) -> None:
         """清空指定 thread_id 的所有队列（内部方法）
@@ -958,8 +955,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         在消费完成后调用，主动释放资源，避免空队列空占 1 小时以及死信交换机永久残留。
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 # 收集所有需要删除的队列名
                 queue_names = [
                     self._get_queue_name(thread_id),
@@ -1010,8 +1006,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def request_cancel(self, thread_id: str) -> None:
         """请求取消该 thread_id 的流。幂等：向取消队列投递一条消息，生产者轮询时消费到即退出。"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancel_queue_name = self._get_cancel_queue_name(thread_id)
                 channel.queue_declare(
                     queue=cancel_queue_name,
@@ -1031,8 +1026,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def is_cancel_requested(self, thread_id: str) -> bool:
         """检查是否已请求取消该 thread_id 的流；若存在取消消息则消费一条并返回 True。"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancel_queue_name = self._get_cancel_queue_name(thread_id)
                 try:
                     channel.queue_declare(queue=cancel_queue_name, durable=True, passive=True)
@@ -1063,11 +1057,13 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def get_cached_count(self, thread_id: str) -> int:
         """获取主队列中的消息数量"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 queue_name = self._get_queue_name(thread_id)
-                queue_info = channel.queue_declare(queue=queue_name, durable=True, passive=True)
-                return queue_info.method.message_count
+                try:
+                    queue_info = channel.queue_declare(queue=queue_name, durable=True, passive=True)
+                    return queue_info.method.message_count
+                except Exception:
+                    return 0
         except Exception as e:
             logger.error(f"Error getting cached count: {e}")
             return 0
@@ -1113,8 +1109,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         delivery_tags = []
 
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 dlq_name = self._get_dlq_name(thread_id)
 
                 # 先获取 DLQ 中的消息数量
