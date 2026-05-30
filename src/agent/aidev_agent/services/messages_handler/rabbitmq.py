@@ -511,11 +511,11 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             logger.info("RabbitMQ daemon thread stopped")
 
     def _daemon_worker(self) -> None:
-        """后台守护线程工作函数：每隔 0.5 秒批量推送消息到 RabbitMQ"""
+        """后台守护线程工作函数：每隔 0.1 秒批量推送消息到 RabbitMQ"""
         while self._daemon_running:
             try:
-                # 等待 0.5 秒或直到停止事件触发
-                if self._daemon_stop_event.wait(timeout=0.5):
+                # 等待 0.1 秒或直到停止事件触发
+                if self._daemon_stop_event.wait(timeout=0.1):
                     break
 
                 # 批量推送消息
@@ -547,7 +547,6 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         # 批量推送到 RabbitMQ
         try:
             with self._with_channel() as channel:
-
                 for thread_id, messages in messages_to_flush.items():
                     if not messages:
                         continue
