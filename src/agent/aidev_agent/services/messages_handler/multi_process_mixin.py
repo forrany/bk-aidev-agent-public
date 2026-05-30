@@ -50,6 +50,18 @@ class MultiProcessMixin:
     STOPPED_SIGNAL_TTL_MS = QueueTTLConfig.STOPPED_SIGNAL_TTL_MS
     WAIT_POLL_INTERVAL = QueueTTLConfig.WAIT_POLL_INTERVAL
 
+    @contextlib.contextmanager
+    def _with_channel(self):
+        """获取临时 RabbitMQ channel，并确保用完后关闭。"""
+        with self._with_connection() as connection:
+            channel = connection.channel()
+            try:
+                yield channel
+            finally:
+                if getattr(channel, "is_open", False):
+                    with contextlib.suppress(Exception):
+                        channel.close()
+
     def _get_consumer_queue_name(self, thread_id: str) -> str:
         """获取控制队列名"""
         return f"{self.CONSUMER_QUEUE_PREFIX}{thread_id}"
@@ -116,8 +128,7 @@ class MultiProcessMixin:
 
         import pika
 
-        with self._with_connection() as connection:
-            channel = connection.channel()
+        with self._with_channel() as channel:
             consumer_queue, exit_queue = self._ensure_consumer_queues(channel, thread_id)
 
             # 先读取旧消费者信息（用于日志）
@@ -181,8 +192,7 @@ class MultiProcessMixin:
                 return False
 
             try:
-                with self._with_connection() as connection:
-                    channel = connection.channel()
+                with self._with_channel() as channel:
                     exit_queue = self._get_consumer_exit_queue_name(thread_id)
 
                     # 尝试先被动声明检查队列是否存在
@@ -215,8 +225,7 @@ class MultiProcessMixin:
         Raises:
             ConsumerPreemptedError: 当前消费者已被新消费者抢占
         """
-        with self._with_connection() as connection:
-            channel = connection.channel()
+        with self._with_channel() as channel:
             consumer_queue = self._get_consumer_queue_name(thread_id)
 
             # 尝试先被动声明检查队列是否存在
@@ -263,8 +272,7 @@ class MultiProcessMixin:
         active_consumer_id = None
         release_outcome = "empty_control_queue"
 
-        with self._with_connection() as connection:
-            channel = connection.channel()
+        with self._with_channel() as channel:
             consumer_queue = self._get_consumer_queue_name(thread_id)
 
             try:
@@ -321,8 +329,7 @@ class MultiProcessMixin:
     def has_active_consumer(self, thread_id: str) -> bool:
         """检查指定 thread_id 是否仍有活跃消费者。"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 consumer_queue = self._get_consumer_queue_name(thread_id)
 
                 try:
@@ -351,8 +358,7 @@ class MultiProcessMixin:
         import pika
 
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 exit_queue = self._get_consumer_exit_queue_name(thread_id)
 
                 payload = json.dumps(
@@ -433,8 +439,7 @@ class MultiProcessMixin:
             True 表示成功设置取消信号
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancel_queue = self._get_cancel_queue_name(thread_id)
 
                 # 声明取消信号队列
@@ -460,8 +465,7 @@ class MultiProcessMixin:
             True 表示存在取消信号，应该停止
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancel_queue = self._get_cancel_queue_name(thread_id)
 
                 # 先被动声明检查队列是否存在
@@ -496,8 +500,7 @@ class MultiProcessMixin:
             thread_id: 线程ID / session_code
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancel_queue = self._get_cancel_queue_name(thread_id)
 
                 # 尝试清空取消信号队列
@@ -531,8 +534,7 @@ class MultiProcessMixin:
             True 表示成功发送通知
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancelled_queue = self._get_cancelled_queue_name(thread_id)
 
                 # 声明通知队列
@@ -571,8 +573,7 @@ class MultiProcessMixin:
                 return False
 
             try:
-                with self._with_connection() as connection:
-                    channel = connection.channel()
+                with self._with_channel() as channel:
                     cancelled_queue = self._get_cancelled_queue_name(thread_id)
 
                     # 先被动声明检查队列是否存在
@@ -600,8 +601,7 @@ class MultiProcessMixin:
             thread_id: 线程ID / session_code
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancelled_queue = self._get_cancelled_queue_name(thread_id)
 
                 try:
@@ -627,8 +627,7 @@ class MultiProcessMixin:
             thread_id: 线程ID / session_code
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 stopped_queue = self._get_stopped_queue_name(thread_id)
 
                 # 声明停止状态队列
@@ -652,8 +651,7 @@ class MultiProcessMixin:
             True 表示已停止
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 stopped_queue = self._get_stopped_queue_name(thread_id)
 
                 # 先被动声明检查队列是否存在
@@ -687,8 +685,7 @@ class MultiProcessMixin:
             thread_id: 线程ID / session_code
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 stopped_queue = self._get_stopped_queue_name(thread_id)
 
                 try:

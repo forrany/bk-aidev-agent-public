@@ -36,6 +36,25 @@ def thread_id(request, handler):
 
 
 class TestRabbitMQMessageHandler:
+    def _get_open_channel_count(self, handler: RabbitMQMessageHandler) -> int:
+        """Return open AMQP channels held by one pooled connection."""
+        connection = handler._connection_pool.get_connection()
+        try:
+            channels = getattr(getattr(connection, "_impl", None), "_channels", {})
+            return len(channels)
+        finally:
+            handler._connection_pool.release_connection(connection)
+
+    def test_repeated_operations_do_not_accumulate_open_channels(self, handler, thread_id):
+        """Repeated RabbitMQ operations should close their temporary AMQP channels."""
+        handler.put(thread_id, "seed")
+        handler.flush(thread_id)
+
+        for _ in range(20):
+            assert handler.get_cached_count(thread_id) == 1
+
+        assert self._get_open_channel_count(handler) <= 1
+
     def test_live_test(self, handler, thread_id):
         """实际连接 RabbitMQ 进行测试"""
         # 发送 3 条消息
