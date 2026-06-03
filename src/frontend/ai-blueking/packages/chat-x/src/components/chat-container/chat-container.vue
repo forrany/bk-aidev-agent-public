@@ -241,6 +241,7 @@
   import { useMessageGroup } from '../../composables';
   import { useCommonTippyProvider, useRenderModeProvider } from '../../composables/use-common';
   import { EXECUTION_TAB_NAME, useCustomTabProvider } from '../../composables/use-custom-tab';
+  import { useArtifactPreviewProvider } from '../../composables/use-artifact-preview';
   import { useGlobalConfig } from '../../composables/use-global-config';
   import { OverflowTips as vOverflowTips } from '../../directives';
   import { CloseIcon, ExecutionIcon, NodeTabIcon } from '../../icons';
@@ -389,6 +390,9 @@
         };
       },
     });
+
+  // 提供 artifact preview 上下文给子孙组件
+  useArtifactPreviewProvider();
 
   const keyword = shallowRef('');
   const selectedUserMessages = deepRef<Message[]>([]);

@@ -23,9 +23,10 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+import ArtifactCard from '../artifact-preview/artifact-card.vue';
 import CodeContent from './code-content/code-content.vue';
 import ImageContent from './image-content/image-content.vue';
 import LatexContent from './latex-content/latex-content.vue';
 import MermaidContent from './mermaid-content/mermaid-content.vue';
 
-export { CodeContent, ImageContent, LatexContent, MermaidContent };
+export { ArtifactCard, CodeContent, ImageContent, LatexContent, MermaidContent };

@@ -31,6 +31,7 @@
               :key="index"
               :token="groupedToken"
               @mounted="handleTokenMounted"
+              @content-update="handleCodeContentUpdate"
             >
               <template #header="{ language, token }">
                 <slot
@@ -39,6 +40,14 @@
                 />
               </template>
             </CodeContent>
+          </template>
+          <template v-else-if="hasHtmlFileCardToken(groupedToken)">
+            <ArtifactCard
+              v-if="extractHtmlFileCardData(groupedToken)"
+              :key="index"
+              :filename="extractHtmlFileCardData(groupedToken)!.filename"
+              :html-content="extractHtmlFileCardData(groupedToken)!.htmlContent"
+            />
           </template>
           <template v-else>
             <VNodeRenderer
@@ -66,12 +75,13 @@
   import markdownItTaskCheckbox from 'markdown-it-task-checkbox';
 
   import { MessageStatus } from '../../../ag-ui/types/constants';
-  import { useContainerScrollConsumer } from '../../../composables';
+  import { useArtifactPreviewConsumer, useContainerScrollConsumer } from '../../../composables';
   import MarkdownIt from '../../../markdown-it/index';
-  import { markdownItBkInlineStyle, markdownItLatex, markdownItMermaid } from '../../../plugins';
+  import { markdownItBkInlineStyle, markdownItHtmlFile, markdownItLatex, markdownItMermaid } from '../../../plugins';
   import { markdownItContainer } from '../../../plugins/markdown-container';
   // import { markdownAnimationAttrs } from '../../../plugins/markdown-animation-attrs';
   import { completeMarkdownSyntax } from '../../../utils/stream-markdown-completer';
+  import ArtifactCard from '../../artifact-preview/artifact-card.vue';
   import { CodeContent, MermaidContent } from '../../markdown-token';
   import LatexContent from '../../markdown-token/latex-content/latex-content.vue';
   import CommonErrorContent from '../common-error-content/common-error-content.vue';
@@ -98,6 +108,10 @@
   }>();
 
   const containerScrollConsumer = useContainerScrollConsumer();
+  const artifactPreview = useArtifactPreviewConsumer();
+
+  /** 当前活跃的 HTML artifact preview id（用于 streaming 更新） */
+  let activeHtmlPreviewId: string | null = null;
 
   const groupedTokens = shallowRef<Token[][]>([]);
   const md = new MarkdownIt()
@@ -110,6 +124,7 @@
     .use(markdownItSup)
     .use(markdownItTaskCheckbox)
     .use(markdownItMermaid)
+    .use(markdownItHtmlFile)
     .use(markdownItLatex, {
       katexOptions: {
         strict: false,
@@ -135,19 +150,66 @@
   };
 
   // 检查 token 组中是否包含代码块（fence 或 code_block）
-  // 注意：mermaid 代码块已在 hasMermaidToken 中处理，这里要排除
+  // 注意：mermaid 和 html-file 代码块已由专门组件处理，这里要排除
   const hasCodeToken = (tokens: Token[]): boolean => {
     return tokens.some(token => {
       if (token.type === 'fence') {
         const info = token.info ? token.info.trim() : '';
-        // 排除 mermaid，它由专门的 MermaidContent 处理
-        return info !== 'mermaid';
+        // 排除 mermaid 和 html-file，它们由专门的组件处理
+        return info !== 'mermaid' && !info.startsWith('html-file');
       }
       if (token.type === 'code_block') {
         return true;
       }
       return false;
     });
+  };
+
+  // 检查 token 组中是否包含 html-file 代码块
+  const hasHtmlFileCardToken = (tokens: Token[]): boolean => {
+    return tokens.some(token => {
+      if (token.type === 'fence') {
+        const info = token.info?.trim() ?? '';
+        return info === 'html-file' || info.startsWith('html-file ');
+      }
+      return false;
+    });
+  };
+
+  // 从 html-file token 中提取文件名和 HTML 内容
+  const extractHtmlFileCardData = (
+    tokens: Token[],
+  ): { filename: string; htmlContent: string } | null => {
+    for (const token of tokens) {
+      if (token.type === 'fence') {
+        const info = token.info?.trim() ?? '';
+        if (info === 'html-file' || info.startsWith('html-file ')) {
+          // 从渲染输出的 placeholder div 中解析 data 属性
+          // markdown-it 插件已将数据编码在 HTML 属性中
+          const rawContent = token.content || '';
+          const lines = rawContent.split('\n');
+          const metaLine = lines[0]?.trim() ?? '';
+
+          let filename = 'untitled.html';
+          // 解析 meta
+          if (metaLine.startsWith('{')) {
+            try {
+              const obj = JSON.parse(metaLine) as Record<string, unknown>;
+              if (typeof obj.filename === 'string') filename = obj.filename;
+            } catch {
+              // ignore
+            }
+          } else {
+            const m = metaLine.match(/filename=["']?([^"'\s]+)["']?/);
+            if (m?.[1]) filename = m[1];
+          }
+
+          const htmlContent = lines.slice(1).join('\n').trim();
+          return { filename, htmlContent };
+        }
+      }
+    }
+    return null;
   };
 
   const hasLatexToken = (tokens: Token[]): boolean => {
@@ -320,6 +382,31 @@
       trailing: true,
     },
   );
+
+  /**
+   * 处理 CodeContent 的 contentUpdate 事件
+   * 当 HTML 代码块内容变化时，更新活跃的 artifact preview（支持 streaming）
+   */
+  const handleCodeContentUpdate = ({ language, content }: { language: string; content: string }) => {
+    if (language === 'html' && activeHtmlPreviewId && artifactPreview) {
+      artifactPreview.updatePreview(activeHtmlPreviewId, content);
+    }
+  };
+
+  /**
+   * 创建 HTML artifact preview 并打开侧栏
+   * 供外部（如 codeHeader slot 消费者）调用
+   */
+  const createHtmlPreview = (htmlContent: string, filename?: string): string | null => {
+    if (!artifactPreview) return null;
+
+    const previewId = artifactPreview.createPreview('html', htmlContent, { filename });
+    activeHtmlPreviewId = previewId;
+    return previewId;
+  };
+
+  // 暴露给外部使用
+  defineExpose({ createHtmlPreview });
 </script>
 <style lang="scss">
   /* stylelint-disable custom-property-pattern */

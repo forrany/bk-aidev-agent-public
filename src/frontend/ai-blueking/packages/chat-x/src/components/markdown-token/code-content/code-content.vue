@@ -58,6 +58,8 @@
 
   const emit = defineEmits<{
     (e: 'mounted', payload: { el: HTMLElement | null }): void;
+    /** 通用内容更新事件：当代码块内容变化时触发（支持 streaming 场景） */
+    (e: 'contentUpdate', payload: { language: string; content: string }): void;
   }>();
 
   const codeRef = useTemplateRef<HTMLElement>('codeRef');
@@ -225,6 +227,9 @@
       const { content, language: languageName } = extractCodeInfo(tokens);
       language.value = languageName;
       processContent(content, languageName);
+
+      // 通用：通知上层内容变化（上层自行决定是否处理，如 artifact preview streaming）
+      emit('contentUpdate', { language: languageName, content });
 
       nextTick(() => {
         emit('mounted', {

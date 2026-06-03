@@ -25,6 +25,7 @@
  */
 
 export * from './use-animation-text';
+export * from './use-artifact-preview';
 export * from './use-clipboard';
 export * from './use-command-selection';
 export * from './use-container-scroll';
