@@ -20,7 +20,7 @@
       @resizing="handleResizing"
     >
       <template #aside>
-        <template v-if="!isCollapse && (executionGroups?.length || keyword?.length) && renderMode !== RenderMode.Share">
+        <template v-if="!isCollapse && (executionGroups?.length || keyword?.length || tabs.length > 1) && renderMode !== RenderMode.Share">
           <Tab
             :active="selectedTab.name"
             class="ai-chat-container-tab"
