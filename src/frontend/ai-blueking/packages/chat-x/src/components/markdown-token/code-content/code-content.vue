@@ -10,6 +10,13 @@
         }"
       ></slot>
       <ToolBtn
+        v-if="language === 'html'"
+        id="preview"
+        description="预览"
+        name="预览"
+        @click="handlePreviewHtml"
+      />
+      <ToolBtn
         id="copy"
         description="复制"
         name="复制"
@@ -36,8 +43,9 @@
   import hljs from 'highlight.js';
 
   import { MarkdownLanguageMap } from '../../../common';
-  import { useClipboard } from '../../../composables';
+  import { useArtifactPreviewConsumer, useClipboard, useCustomTabConsumer } from '../../../composables';
   import ToolBtn from '../../ai-buttons/tool-btn/tool-btn.vue';
+  import ArtifactPreview from '../../artifact-preview/artifact-preview.vue';
 
   import type { Token } from '../../../markdown-it';
 
@@ -65,6 +73,9 @@
   const codeRef = useTemplateRef<HTMLElement>('codeRef');
   const language = shallowRef<string>('');
   const { copy } = useClipboard();
+  const artifactPreview = useArtifactPreviewConsumer();
+  const customTab = useCustomTabConsumer();
+  const activePreviewId = shallowRef<string | null>(null);
 
   // 已完成的行（不包含最后一行），高亮显示
   const completedLines = shallowRef<HighlightedLine[]>([]);
@@ -231,6 +242,11 @@
       // 通用：通知上层内容变化（上层自行决定是否处理，如 artifact preview streaming）
       emit('contentUpdate', { language: languageName, content });
 
+      // 流式更新：如果已有活跃的 HTML 预览，同步更新 store
+      if (activePreviewId.value && languageName === 'html' && artifactPreview) {
+        artifactPreview.updatePreview(activePreviewId.value, content);
+      }
+
       nextTick(() => {
         emit('mounted', {
           get el() {
@@ -244,6 +260,31 @@
       deep: true,
     },
   );
+  const handlePreviewHtml = () => {
+    const { content } = extractCodeInfo(props.token);
+
+    // 如果已有活跃预览，更新内容
+    if (activePreviewId.value && artifactPreview) {
+      artifactPreview.updatePreview(activePreviewId.value, content);
+      return;
+    }
+
+    // 创建新的预览
+    if (!artifactPreview || !customTab) return;
+
+    const previewId = artifactPreview.createPreview('html', content);
+    activePreviewId.value = previewId;
+
+    customTab.addCustomTab({
+      name: previewId,
+      label: 'HTML 预览',
+      data: {
+        component: ArtifactPreview,
+        props: { previewId },
+      },
+    });
+  };
+
   const handleCopyCode = () => {
     const code = codeRef.value?.innerText;
     if (code) {
