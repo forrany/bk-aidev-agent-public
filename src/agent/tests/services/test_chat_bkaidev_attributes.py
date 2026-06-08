@@ -200,3 +200,68 @@ class TestUpdateBkaidevSessionHeader:
         result = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
         assert result["agent.info.code"] == ""
         assert result["agent.session.session_code"] == ""
+
+    def test_ensure_ascii_no_raw_chinese_in_header_value(self):
+        """Header value uses ASCII-only encoding; Chinese chars are escaped as \\uXXXX
+        to comply with W3C baggage header percent-encoding requirements."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": "智能助手",
+                "service_catalogue": "服务目录/智能服务",
+            }
+        )
+        kwargs = ExecuteKwargs(
+            stream=False,
+            caller_executor="张三",
+            executor="李四",
+        )
+        agent._update_aidev_agent_header(kwargs)
+
+        header_value = agent.chat_model.default_headers["X-BKAIDEV-Attributes"]
+        # The raw JSON string MUST NOT contain unescaped Chinese characters
+        assert "智能助手" not in header_value
+        assert "服务目录" not in header_value
+        assert "智能服务" not in header_value
+        assert "张三" not in header_value
+        assert "李四" not in header_value
+        # It SHOULD contain \\u escapes
+        assert "\\u" in header_value
+
+    def test_ensure_ascii_round_trip_chinese_values(self):
+        """Unicode-escaped JSON can be parsed back to the original Chinese values."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": "智能助手",
+                "service_catalogue": "服务目录/智能服务",
+            }
+        )
+        kwargs = ExecuteKwargs(
+            stream=False,
+            caller_executor="张三",
+            executor="李四",
+        )
+        agent._update_aidev_agent_header(kwargs)
+
+        result = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
+        assert result["agent.info.name"] == "智能助手"
+        assert result["agent.info.service_catalogue"] == "服务目录/智能服务"
+        assert result["agent.session.caller_executor"] == "张三"
+        assert result["agent.session.executor"] == "李四"
+
+    def test_ensure_ascii_no_control_chars(self):
+        """Header value must not contain any character with code point > 127
+        (i.e., no raw non-ASCII bytes)."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": "中文名称",
+            }
+        )
+        kwargs = ExecuteKwargs(stream=False)
+        agent._update_aidev_agent_header(kwargs)
+
+        header_value = agent.chat_model.default_headers["X-BKAIDEV-Attributes"]
+        for ch in header_value:
+            assert ord(ch) <= 127, f"Found non-ASCII char U+{ord(ch):04X} in header value"

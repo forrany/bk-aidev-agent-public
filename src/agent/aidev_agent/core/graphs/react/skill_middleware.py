@@ -90,7 +90,8 @@ def _extract_paas_params(skill: SkillOptions, config: dict) -> dict:
     # 从 envs_mask 提取需要脱敏的 env 值
     envs_mask = paas_sandbox.get("envs_mask", [])
     extra_sensitive_values = [env_vars[k] for k in envs_mask if k in env_vars and env_vars[k]]
-    extra_sensitive_values.append(access_token)
+    if access_token:
+        extra_sensitive_values.append(access_token)
 
     return {
         "app_code": app_code,

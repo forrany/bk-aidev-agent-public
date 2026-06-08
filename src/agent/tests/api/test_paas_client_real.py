@@ -42,6 +42,7 @@ def client():
 @pytest.mark.skipif(
     skip_no_env, reason="缺少必要环境变量 (BKPAAS_APP_ID, BKPAAS_APP_SECRET, ACCESS_TOKEN)，跳过真实接口测试"
 )
+@pytest.mark.slow
 class TestPaasClientVolumes:
     """PV 接口测试：Volume 增删查与跨沙箱数据共享。"""
 
@@ -156,6 +157,7 @@ class TestPaasClientVolumes:
 @pytest.mark.skipif(
     skip_no_env, reason="缺少必要环境变量 (BKPAAS_APP_ID, BKPAAS_APP_SECRET, ACCESS_TOKEN)，跳过真实接口测试"
 )
+@pytest.mark.slow
 class TestPaasClientSandbox:
     """已有方法测试：Sandbox 完整生命周期。"""
 

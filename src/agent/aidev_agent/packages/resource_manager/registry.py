@@ -114,16 +114,6 @@ class ResourceManagerProtocol(Protocol):
         """
         ...
 
-    def build_skill_env(self, skill_config: dict, username: str = None) -> dict:
-        """按 skill 配置生成沙箱环境变量。
-
-        逻辑与 ``skill_middleware._extract_paas_params`` 中 env_vars 处理保持一致：
-        1. 从 ``metadata.bkai_paas_sandbox.envs`` 提取环境变量
-        2. 特殊规则：值为 ``None`` 时从环境变量获取
-        3. 赋值 ``ACCESS_TOKEN``
-        """
-        ...
-
     def knowledge_query(self, data: dict[str, Any]) -> dict:
         """提交知识库查询并返回业务结果（``data`` 字段）。"""
         ...

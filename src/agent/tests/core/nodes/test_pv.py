@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from aidev_agent.pydantic_models import ExecuteKwargs
+from langchain_core.messages import AIMessage, HumanMessage
 
 # 直接从 pv.py 文件加载模块，避免 __init__.py 的 NotRequired 兼容性问题
 
@@ -120,8 +121,6 @@ def _make_mock_resource_manager():
 
 def _make_ai_message_with_paas_sandbox():
     """创建带有 paas_sandbox tool_call 的 AIMessage。"""
-    from langchain_core.messages import AIMessage
-
     return AIMessage(
         content="", tool_calls=[{"args": {"target_runtime": "paas_sandbox"}, "id": "tc1", "name": "activate_skill"}]
     )
@@ -129,8 +128,6 @@ def _make_ai_message_with_paas_sandbox():
 
 def _make_ai_message_without_paas_sandbox():
     """创建不包含 paas_sandbox tool_call 的 AIMessage。"""
-    from langchain_core.messages import AIMessage
-
     return AIMessage(
         content="", tool_calls=[{"args": {"target_runtime": "local"}, "id": "tc2", "name": "activate_skill"}]
     )
@@ -175,8 +172,6 @@ def test_pv_node_skip_existing_platform_session_pv():
 
 def test_pv_node_skip_no_tool_calls():
     """last_message 不是 AIMessage 或无 tool_calls 时，pv_node 返回空。"""
-    from langchain_core.messages import HumanMessage
-
     client = _make_mock_client()
     pv_node = make_pv_node(client=client, app_code="test-app")
 
@@ -223,11 +218,10 @@ def test_pv_node_creates_pv_and_writes_back():
 
     result = pv_node(state, config)
 
-    # 验证 API 被调用
-    client.create_agent_sandbox_volume.request.assert_called_once_with(
-        json={"name": "agent-pv-test-thread"},
-        path_params={"app_code": "test-app"},
-    )
+    # 验证 API 被调用（volume_name 含随机后缀，用 startswith 检查）
+    call_args = client.create_agent_sandbox_volume.request.call_args
+    assert call_args.kwargs["path_params"] == {"app_code": "test-app"}
+    assert call_args.kwargs["json"]["name"].startswith("agent-pv-test-thread-")
     resource_manager.update_chat_session_sandbox_pv_id.assert_called_once_with("test-session", "test-volume-uuid")
 
     # 验证返回结果
@@ -237,7 +231,7 @@ def test_pv_node_creates_pv_and_writes_back():
     pv = pv_list[0]
     assert pv["type"] == "paas-sbx-pv"
     assert pv["volume_id"] == "test-volume-uuid"
-    assert pv["volume_name"] == "agent-pv-test-thread"
+    assert pv["volume_name"].startswith("agent-pv-test-thread-")
     assert pv["mount_path"] == "session"
     assert pv["source"] == "platform"
 

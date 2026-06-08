@@ -11,11 +11,14 @@
 
 from __future__ import annotations
 
+import inspect
+import threading
 from unittest.mock import MagicMock
 
 import pytest
 from aidev_agent.core.tools.runtime_tools.paas_backend import ExecResult, PaasSandboxBackend
 from aidev_agent.core.tools.runtime_tools.types import EditResult, ExecuteResult, WriteResult
+from requests.exceptions import HTTPError
 
 # ---------------------------------------------------------------------------
 # Mock helpers
@@ -47,8 +50,6 @@ def _make_http_response(*, status_code: int = 200, json_data=None, content: byte
     resp.json.return_value = json_data
     resp.raise_for_status.return_value = None
     if status_code >= 400:
-        from requests.exceptions import HTTPError
-
         resp.raise_for_status.side_effect = HTTPError(response=resp)
     return resp
 
@@ -877,9 +878,6 @@ class TestEnsureSandboxConcurrency:
 
     def test_concurrent_ensure_sandbox_creates_once(self, monkeypatch):
         """多线程并发调用 _ensure_sandbox 时，create_sandbox 只执行一次。"""
-        import threading
-        from unittest.mock import MagicMock
-
         backend = PaasSandboxBackend(
             app_code="test-app",
             bk_username="user",
@@ -932,6 +930,7 @@ class TestEnsureSandboxConcurrency:
             env_vars={},
             workspace="/app",
             ttl_seconds=3600,
+            volume_mounts=None,
         )
 
 
@@ -940,8 +939,6 @@ class TestConfigStatePassThrough:
 
     def test_ls_info_accepts_config_state_kwargs(self):
         """ls_info 应接受 keyword-only config/state 参数（签名验证）。"""
-        import inspect
-
         sig = inspect.signature(PaasSandboxBackend.ls_info)
         params = sig.parameters
         assert "config" in params, "ls_info 缺少 config 参数"

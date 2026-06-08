@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from aidev_agent.core.nodes.model import ModelNodeSettings, ModelState, build_model_node
 from aidev_agent.core.nodes.model.node import InvalidModelMessageError, _is_invalid_message
+from aidev_agent.enums import Decision
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import tool
@@ -357,8 +358,6 @@ class TestBuildModelNode:
 
     def test_model_node_state_with_decision(self, mock_llm, sample_tools, mock_store, mock_prompt_setup):
         """测试 state 中包含 decision 的情况"""
-        from aidev_agent.enums import Decision
-
         mock_template, variables = mock_prompt_setup
 
         with (

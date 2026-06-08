@@ -15,7 +15,6 @@ from __future__ import annotations
 import abc
 import asyncio
 import json
-import os
 import time
 from copy import deepcopy
 from logging import getLogger
@@ -112,7 +111,6 @@ class BaseResourceManager(abc.ABC):
         return access_token
 
     def get_paas_sbx_client(self, executor_info: dict, **kwargs) -> Any:
-
         app_code = executor_info.get("app_code", "")
         app_secret = executor_info.get("app_secret", "")
         bk_username = executor_info.get("executor", "")
@@ -123,10 +121,7 @@ class BaseResourceManager(abc.ABC):
         else:
             client = BkPaaSSandboxApi.get_client_by_username(bk_username)
 
-        client.update_bkapi_authorization(
-            access_token=access_token or None,
-            bk_username=bk_username or ""
-        )
+        client.update_bkapi_authorization(access_token=access_token or None, bk_username=bk_username or "")
         return client
 
     # ---------- 资源方法 (7) ----------
@@ -388,36 +383,6 @@ class BaseResourceManager(abc.ABC):
             if fail is not None:
                 failures.append(fail)
         return McpToolsResult(tools=tools_list, fetch_failures=failures)
-
-    def build_skill_env(self, skill_config: dict, username: str = None) -> dict:
-        """根据 skill 配置生成沙箱环境变量。
-
-        逻辑与 ``skill_middleware._extract_paas_params`` 中 env_vars 处理保持一致：
-        1. 从 ``metadata.bkai_paas_sandbox.envs`` 提取环境变量
-        2. 特殊规则：值为 ``None`` 时从环境变量获取
-        3. 赋值 ``ACCESS_TOKEN``（从 self.access_token 或 username 获取）
-
-        :param skill_config: skill 配置字典，包含 metadata 等字段
-        :param username: 用户名，用于 fallback 获取 access_token
-        :return: 环境变量字典
-        """
-        env_vars = {}
-
-        if skill_config:
-            paas_sandbox = skill_config.get("metadata", {}).get("bkai_paas_sandbox", {})
-            env_vars = paas_sandbox.get("envs", {})
-
-        # 特殊规则：如果值是 None，则从环境变量中获取
-        for key, value in env_vars.items():
-            if value is None:
-                env_vars[key] = os.getenv(key, "")
-
-        # 赋值 ACCESS_TOKEN：优先级 self.access_token > username > 环境变量
-        access_token = self.resolve_access_token(username)
-
-        env_vars["ACCESS_TOKEN"] = access_token or os.getenv("SANDBOX_BP_ACCESS_TOKEN", "")
-
-        return env_vars
 
     def knowledge_query(self, data: dict[str, Any]) -> dict:
         client = self.get_client()

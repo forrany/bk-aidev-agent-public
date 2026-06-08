@@ -6,10 +6,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
 from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware
 from aidev_agent.core.nodes.model.pydantic_models import ProcessorContext
+from aidev_agent.core.tools.runtime_tools import RuntimeBackendResolver, get_execute_tool
+from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
 from aidev_agent.core.tools.skill import SkillOptions
 from aidev_agent.core.tools.skill.provider import SkillRegistry
+from aidev_agent.pydantic_models import AgentExecutorKwargs
 
 
 def _write_skill(root: Path, *, name: str, description: str, body: str, runtime: str | None = None) -> Path:
@@ -145,9 +149,6 @@ class TestSkillOptionsRuntime:
 
 class TestSkillRuntimeBackend:
     def test_execute_in_skill_scripts_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from aidev_agent.core.tools.runtime_tools import RuntimeBackendResolver, get_execute_tool
-        from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
-
         skills_root = tmp_path / "skills"
         skill_md = _write_skill(skills_root, name="my-skill", description="desc", body="Body")
         scripts_dir = skill_md.parent / "scripts"
@@ -177,8 +178,6 @@ class TestSkillRuntimeBackend:
 
 class TestReActBuilderSkillsIntegration:
     def test_builder_injects_tools_and_middleware(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
-
         # Arrange: make ./ .agent/skills available
         monkeypatch.chdir(tmp_path)
         skills_root = tmp_path / ".agent" / "skills"
@@ -217,6 +216,11 @@ class TestReActBuilderSkillsIntegration:
                 .set_enable_runtime_tool(True)
                 .set_skill_sources([str(skills_root)])
                 .enable_runtime_local(True)
+            )
+            builder.set_bkai_options(
+                AgentExecutorKwargs(
+                    runtime_backend_resolver=RuntimeBackendResolver(),
+                )
             )
             builder.build()
 

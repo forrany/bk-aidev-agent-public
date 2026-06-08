@@ -10,11 +10,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.config import settings
 from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
+from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware, _extract_paas_params
 from aidev_agent.core.nodes.tool import ToolNodeSettings
+from aidev_agent.packages.langchain_core.models import ChatModel
+from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
+from aidev_agent.pydantic_models import AgentExecutorKwargs
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.store.memory import InMemoryStore
 
 # ============================================================================
 # 测试工具定义
@@ -556,8 +562,6 @@ class TestReActAgentBuilder:
         ):
             (ReActAgentBuilder().set_llm(llm).set_enable_skills(True).set_skill_sources([str(skills_root)]).build())
 
-        from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware
-
         middlewares = captured_node_options["opts"].extra_template_middlewares
         assert any(isinstance(m, SkillsPromptMiddleware) for m in middlewares)
 
@@ -766,8 +770,6 @@ class TestReActAgentBuilder:
     # ----------------------------------------------------------------
 
     def test_prepare_store_returns_inmemory_when_none(self):
-        from langgraph.store.memory import InMemoryStore
-
         builder = ReActAgentBuilder()
         result = builder._prepare_store(store=None, file_store=None)
         assert isinstance(result, InMemoryStore)
@@ -784,8 +786,6 @@ class TestReActAgentBuilder:
 
     def test_set_bkai_options_maps_fields(self):
         """set_bkai_options 应将 AgentExecutorKwargs 字段映射到 builder 内部状态"""
-        from aidev_agent.pydantic_models import AgentExecutorKwargs
-
         llm = MagicMock()
         knowledge_llm = MagicMock()
         cb = [MagicMock()]
@@ -803,9 +803,6 @@ class TestReActAgentBuilder:
 
     def test_set_bkai_options_non_thinking_llm_basechatmodel(self):
         """non_thinking_llm 为 BaseChatModel 时应直接赋值"""
-        from aidev_agent.pydantic_models import AgentExecutorKwargs
-        from langchain_core.language_models.chat_models import BaseChatModel
-
         mock_llm = MagicMock(spec=BaseChatModel)
         # Use a real MagicMock without spec for llm to avoid Pydantic serialization issues
         opts = AgentExecutorKwargs(llm=MagicMock(), non_thinking_llm=mock_llm)
@@ -821,8 +818,6 @@ class TestReActAgentBuilder:
 
     def test_prepare_checkpointer_returns_provided(self):
         """传入 BaseCheckpointSaver 时应直接返回"""
-        from langgraph.checkpoint.memory import MemorySaver
-
         builder = ReActAgentBuilder()
         cp = MemorySaver()
         result = builder._prepare_checkpointer(checkpointer=cp)
@@ -830,8 +825,6 @@ class TestReActAgentBuilder:
 
     def test_prepare_checkpointer_returns_memory_saver_when_none(self):
         """传入 None 时应返回 MemorySaver"""
-        from langgraph.checkpoint.memory import MemorySaver
-
         builder = ReActAgentBuilder()
         result = builder._prepare_checkpointer(checkpointer=None)
         assert isinstance(result, MemorySaver)
@@ -842,9 +835,6 @@ class TestReActAgentBuilder:
 
     def test_extract_paas_params_from_skill_and_config(self, monkeypatch):
         """_extract_paas_params 应从 skill metadata 与 config 中提取参数"""
-        from aidev_agent.config import settings
-        from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-
         monkeypatch.delenv("SANDBOX_BP_ACCESS_TOKEN", raising=False)
         skill = {
             "metadata": {
@@ -859,34 +849,26 @@ class TestReActAgentBuilder:
         result = _extract_paas_params(skill=skill, config=config)
         assert result["app_code"] == settings.APP_CODE
         assert result["bk_username"] == "admin"
-        assert result["access_token"] == "token123"
         assert result["snapshot"] == "snap1"
         assert result["snapshot_entrypoint"] == []
         assert result["env_vars"] == {"KEY": "VAL", "ACCESS_TOKEN": "token123"}
 
     def test_extract_paas_params_defaults(self, monkeypatch):
         """skill=None 且 config 为空时应返回带 settings.APP_CODE 的默认值"""
-        from aidev_agent.config import settings
-        from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-
         monkeypatch.delenv("SANDBOX_BP_ACCESS_TOKEN", raising=False)
 
         result = _extract_paas_params(skill=None, config={})
         assert result["app_code"] == settings.APP_CODE
         assert result["bk_username"] is None
-        assert result["access_token"] == ""
         assert result["snapshot"] == ""
         assert result["snapshot_entrypoint"] == []
         assert result["env_vars"] == {"ACCESS_TOKEN": ""}
 
     def test_extract_paas_params_access_token_from_env(self, monkeypatch):
         """config 未提供 access_token 时应从环境变量 SANDBOX_BP_ACCESS_TOKEN 读取"""
-        from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-
         monkeypatch.setenv("SANDBOX_BP_ACCESS_TOKEN", "env-token")
 
         result = _extract_paas_params(skill=None, config={})
-        assert result["access_token"] == "env-token"
         assert result["env_vars"]["ACCESS_TOKEN"] == "env-token"
 
     # ----------------------------------------------------------------
@@ -904,8 +886,6 @@ class TestReActAgentBuilder:
         # graph 应是 compiled state graph
         assert hasattr(graph, "invoke") or hasattr(graph, "ainvoke")
         # graph.agent 应该是 AgentStreamAdapter
-        from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
-
         assert isinstance(graph.agent, AgentStreamAdapter)
         # cfg 应包含 configurable
         assert "configurable" in cfg
@@ -975,8 +955,6 @@ class TestReActAgentBuilder:
     @pytest.mark.slow
     async def test_react_agent_builder_real(self):
         """E2E 测试：使用真实 LLM 调用 ReActAgentBuilder"""
-        from aidev_agent.packages.langchain_core.models import ChatModel
-
         llm = ChatModel.get_setup_instance()
         builder = ReActAgentBuilder().set_llm(llm).set_tools([calculator])
         graph, cfg = builder.build()

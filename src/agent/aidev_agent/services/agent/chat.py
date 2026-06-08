@@ -262,7 +262,7 @@ class ChatCompletionAgent(BaseModel):
             "agent.session.langgraph_thread_id": langgraph_thread_id,
         }
 
-        header_value = json.dumps(attrs, ensure_ascii=False)
+        header_value = json.dumps(attrs, ensure_ascii=True)
         for model in (self.chat_model, self.chat_model_non_thinking):
             if model is None or not hasattr(model, "default_headers"):
                 continue
