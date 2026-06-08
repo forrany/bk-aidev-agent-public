@@ -54,6 +54,8 @@ type ChatContainerMountProps = ChatContainerProps & {
 
 type MockMessageGroup = {
   messages: Array<{ id?: string }>;
+  type?: string;
+  uid?: string;
 };
 
 const getChatContainerExposed = (w: VueWrapper): ChatContainerExposed => w.vm as unknown as ChatContainerExposed;
@@ -458,8 +460,19 @@ vi.mock('../chat-message/message-container/message-container.vue', () => ({
       renderMode: String,
     },
     emits: ['stopStreaming', 'update:selectedUserMessages'],
-    setup(props) {
-      return () => h('div', { class: 'mock-message-container', 'data-render-mode': props.renderMode });
+    setup(props, { slots }) {
+      return () =>
+        h(
+          'div',
+          { class: 'mock-message-container', 'data-render-mode': props.renderMode },
+          (
+            props.messageGroups as Array<{
+              messages: Array<{ id?: string }>;
+              type: string;
+              uid: string;
+            }>
+          )?.map(group => slots.group?.({ group }) ?? h('div', { class: 'default-group-fallback' })),
+        );
     },
   }),
 }));
@@ -515,64 +528,66 @@ const createAssistantMessage = (id: string, content: string): AssistantMessage =
   status: MessageStatus.Complete,
 });
 
-const createApprovalInterruptMessage = (id: string, status: APPROVAL_STATUS): Message => ({
-  id,
-  messageId: id,
-  role: MessageRole.Interrupt,
-  status: MessageStatus.Complete,
-  content: {
-    outcome: {
-      type: 'interrupt',
-      interrupts: [
-        {
-          id: `${id}-interrupt`,
-          reason: InterruptReason.AIDevToolApproval,
-          toolCallId: `${id}-tool`,
-          metadata: {
-            ticket: {
-              approvers: ['张三'],
-              sn: `REV-${id}`,
-              status,
-              submit_time: '2026-04-24 14:30:15',
-              title: '算法方案评审单',
-              url: 'https://example.com/ticket',
+const createApprovalInterruptMessage = (id: string, status: APPROVAL_STATUS): Message =>
+  ({
+    id,
+    messageId: id,
+    role: MessageRole.Interrupt,
+    status: MessageStatus.Complete,
+    content: {
+      outcome: {
+        type: 'interrupt',
+        interrupts: [
+          {
+            id: `${id}-interrupt`,
+            reason: InterruptReason.AIDevToolApproval,
+            toolCallId: `${id}-tool`,
+            metadata: {
+              ticket: {
+                approvers: ['张三'],
+                sn: `REV-${id}`,
+                status,
+                submit_time: '2026-04-24 14:30:15',
+                title: '算法方案评审单',
+                url: 'https://example.com/ticket',
+              },
             },
           },
-        },
-      ],
+        ],
+      },
     },
-  },
-} as Message);
+  }) as Message;
 
-const createUserQuestionInterruptMessage = (id: string): Message => ({
-  id,
-  messageId: id,
-  role: MessageRole.Interrupt,
-  status: MessageStatus.Pending,
-  content: {
-    outcome: {
-      type: 'interrupt',
-      interrupts: [
-        {
-          id: `${id}-interrupt`,
-          reason: InterruptReason.UserQuestion,
-          toolCallId: `${id}-tool`,
-          message: '请回答问题',
-          metadata: {
-            questions: [
-              {
-                header: '请回答问题',
-                multiSelect: false,
-                question: '请选择语言',
-                options: [{ label: 'A', description: 'Java' }],
-              },
-            ],
+const createUserQuestionInterruptMessage = (id: string): Message =>
+  ({
+    id,
+    messageId: id,
+    role: MessageRole.Interrupt,
+    status: MessageStatus.Pending,
+    content: {
+      outcome: {
+        type: 'interrupt',
+        interrupts: [
+          {
+            id: `${id}-interrupt`,
+            reason: InterruptReason.UserQuestion,
+            toolCallId: `${id}-tool`,
+            message: '请回答问题',
+            metadata: {
+              questions: [
+                {
+                  header: '请回答问题',
+                  multiSelect: false,
+                  question: '请选择语言',
+                  options: [{ label: 'A', description: 'Java' }],
+                },
+              ],
+            },
           },
-        },
-      ],
+        ],
+      },
     },
-  },
-} as Message);
+  }) as Message;
 
 describe('ChatContainer', () => {
   let wrapper: VueWrapper;
@@ -726,6 +741,29 @@ describe('ChatContainer', () => {
 
       expect(wrapper.find('.mock-shortcut-render').exists()).toBe(true);
       expect(wrapper.find('.mock-shortcut-render.is-welcome-overlay').exists()).toBe(false);
+    });
+
+    it('应该支持 group 插槽自定义消息组渲染', () => {
+      const messages = [createUserMessage('1', 'Hello'), createAssistantMessage('2', 'Hi')];
+      mockMessageGroupsRef.value = [
+        { messages: [{ id: '1' }], type: MessageRole.User, uid: 'group-user-1' },
+        { messages: [{ id: '2' }], type: MessageRole.Assistant, uid: 'group-assistant-2' },
+      ];
+
+      wrapper = mount(ChatContainer, {
+        props: { ...defaultProps, messages },
+        slots: {
+          group: ({ group }: { group: { type: string; uid: string } }) =>
+            h('div', { class: 'custom-group', 'data-uid': group.uid, 'data-type': group.type }, 'Custom Group'),
+        },
+      });
+
+      const customGroups = wrapper.findAll('.custom-group');
+      expect(customGroups.length).toBe(2);
+      expect(customGroups[0].attributes('data-uid')).toBe('group-user-1');
+      expect(customGroups[0].attributes('data-type')).toBe(MessageRole.User);
+      expect(customGroups[1].attributes('data-uid')).toBe('group-assistant-2');
+      expect(customGroups[1].attributes('data-type')).toBe(MessageRole.Assistant);
     });
   });
 
