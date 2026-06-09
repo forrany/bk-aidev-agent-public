@@ -3,16 +3,16 @@
 from unittest.mock import Mock
 
 import pytest
-from aidev_agent.core.tools.skill.bkai_provider import BKAiProvider
+from aidev_agent.core.tools.skill.bkai_backend import BkAiBackend
 from aidev_agent.core.tools.skill.types import SkillOptions
 
 
 @pytest.fixture(autouse=True)
 def _clear_class_cache():
     """每个测试前后清空类级别缓存，避免测试间污染"""
-    BKAiProvider.clear_cache()
+    BkAiBackend.clear_cache()
     yield
-    BKAiProvider.clear_cache()
+    BkAiBackend.clear_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +107,8 @@ def related_skills():
     ]
 
 
-class TestBKAiProvider:
-    """Test suite for BKAiProvider"""
+class TestBkAiBackend:
+    """Test suite for BkAiBackend"""
 
     # ------------------------------------------------------------------
     # 初始化
@@ -116,19 +116,19 @@ class TestBKAiProvider:
 
     def test_init(self, mock_client, related_skills):
         """Test initialization builds skill_options and calls API for each skill"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
 
         assert provider.client is mock_client
         assert provider.related_skills == related_skills
         assert len(provider.skill_options) == 2
         # __init__ -> _build_skill_options -> _convert_to_metadata -> _get_skill_data
         # 所以缓存中应该有条目（每个 skill 对应一个 API 调用）
-        assert len(BKAiProvider._bkai_skill_cache) == 2
+        assert len(BkAiBackend._bkai_skill_cache) == 2
 
     def test_repr(self, mock_client, related_skills):
         """Test __repr__"""
-        provider = BKAiProvider(mock_client, related_skills)
-        assert "BKAiProvider" in repr(provider)
+        provider = BkAiBackend(mock_client, related_skills)
+        assert "BkAiBackend" in repr(provider)
         assert "skills=2" in repr(provider)
 
     # ------------------------------------------------------------------
@@ -137,7 +137,7 @@ class TestBKAiProvider:
 
     def test_discover_returns_all_skills(self, mock_client, related_skills):
         """Test discover() returns all skills"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skills = provider.discover()
 
         assert len(skills) == 2
@@ -160,7 +160,7 @@ class TestBKAiProvider:
                 "version": "1.0",
             },
         ]
-        provider = BKAiProvider(mock_client, invalid_skills)
+        provider = BkAiBackend(mock_client, invalid_skills)
         skills = provider.discover()
 
         assert len(skills) == 1
@@ -168,7 +168,7 @@ class TestBKAiProvider:
 
     def test_discover_returns_same_reference(self, mock_client, related_skills):
         """Test discover() returns same list every time (initialized once)"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skills1 = provider.discover()
         skills2 = provider.discover()
 
@@ -176,7 +176,7 @@ class TestBKAiProvider:
 
     def test_discover_metadata_structure(self, mock_client, related_skills):
         """Test discover() returns correct metadata structure (no internal fields)"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skills = provider.discover()
         skill = skills[0]
 
@@ -196,7 +196,7 @@ class TestBKAiProvider:
 
     def test_discover_uses_skill_description(self, mock_client, related_skills):
         """Test discover() uses skill_description over description"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skills = provider.discover()
         skill = skills[0]
 
@@ -211,7 +211,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "my-skill", "skill_description": "Test", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         # Optional fields should already be set from frontmatter at discover time
@@ -228,7 +228,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "plain-skill", "skill_description": "Plain", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         assert "license" not in skill
@@ -243,9 +243,9 @@ class TestBKAiProvider:
 
     def test_get_skill_data_caches_api_response(self, mock_client, related_skills):
         """Test _get_skill_data caches complete API response with parsed fields"""
-        BKAiProvider(mock_client, related_skills)
+        BkAiBackend(mock_client, related_skills)
 
-        cached = BKAiProvider._bkai_skill_cache.get(("6", "0.0.1"))
+        cached = BkAiBackend._bkai_skill_cache.get(("6", "0.0.1"))
         assert cached is not None
         assert "_cache_instructions" in cached
         assert "_cache_frontmatter" in cached
@@ -254,7 +254,7 @@ class TestBKAiProvider:
 
     def test_get_skill_data_no_duplicate_api_calls(self, mock_client, related_skills):
         """Test _get_skill_data does not call API again for cached key"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         initial_call_count = mock_client.retrieve_skill.call_count
 
         # Call again for same key — should hit cache
@@ -267,9 +267,9 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "empty", "skill_description": "Empty", "version": "1.0"},
         ]
-        BKAiProvider(mock_client, related_skills)
+        BkAiBackend(mock_client, related_skills)
 
-        cached = BKAiProvider._bkai_skill_cache.get(("1", "1.0"))
+        cached = BkAiBackend._bkai_skill_cache.get(("1", "1.0"))
         assert cached is not None
         assert cached["_cache_instructions"] == ""
         assert cached["_cache_frontmatter"] == {}
@@ -280,7 +280,7 @@ class TestBKAiProvider:
 
     def test_fetch_instructions_returns_body(self, mock_client, related_skills):
         """Test fetch_instructions() returns instructions from cache"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         instructions = provider.fetch_instructions(skill)
@@ -289,7 +289,7 @@ class TestBKAiProvider:
 
     def test_fetch_instructions_uses_cache(self, mock_client, related_skills):
         """Test fetch_instructions() does not trigger extra API calls"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         call_count_after_init = mock_client.retrieve_skill.call_count
 
         skill = provider.discover()[0]
@@ -300,7 +300,7 @@ class TestBKAiProvider:
 
     def test_fetch_instructions_invalid_path(self, mock_client):
         """Test fetch_instructions() handles invalid path format"""
-        provider = BKAiProvider(mock_client, [])
+        provider = BkAiBackend(mock_client, [])
         skill: SkillOptions = {
             "name": "test",
             "description": "Test",
@@ -317,7 +317,7 @@ class TestBKAiProvider:
             {"id": 99, "skill_name": "fail-skill", "skill_description": "Fail", "version": "1.0"},
         ]
         # _convert_to_metadata will catch the exception and skip optional fields
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         # fetch_instructions calls _get_skill_data which will raise
@@ -332,7 +332,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "plain", "skill_description": "Test", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
         instructions = provider.fetch_instructions(skill)
 
@@ -344,14 +344,14 @@ class TestBKAiProvider:
 
     def test_parse_path_valid(self):
         """Test _parse_path with valid api:// path"""
-        assert BKAiProvider._parse_path("api://6/0.0.1") == ("6", "0.0.1")
-        assert BKAiProvider._parse_path("api://123/latest") == ("123", "latest")
+        assert BkAiBackend._parse_path("api://6/0.0.1") == ("6", "0.0.1")
+        assert BkAiBackend._parse_path("api://123/latest") == ("123", "latest")
 
     def test_parse_path_invalid(self):
         """Test _parse_path with invalid paths"""
-        assert BKAiProvider._parse_path("") == ("", "")
-        assert BKAiProvider._parse_path("invalid") == ("", "")
-        assert BKAiProvider._parse_path("api://") == ("", "")
+        assert BkAiBackend._parse_path("") == ("", "")
+        assert BkAiBackend._parse_path("invalid") == ("", "")
+        assert BkAiBackend._parse_path("api://") == ("", "")
 
     # ------------------------------------------------------------------
     # clear_cache()
@@ -359,12 +359,12 @@ class TestBKAiProvider:
 
     def test_clear_cache(self, mock_client, related_skills):
         """Test clear_cache() clears class-level cache"""
-        provider = BKAiProvider(mock_client, related_skills)
-        assert len(BKAiProvider._bkai_skill_cache) > 0
+        provider = BkAiBackend(mock_client, related_skills)
+        assert len(BkAiBackend._bkai_skill_cache) > 0
 
-        BKAiProvider.clear_cache()
+        BkAiBackend.clear_cache()
 
-        assert len(BKAiProvider._bkai_skill_cache) == 0
+        assert len(BkAiBackend._bkai_skill_cache) == 0
         # skill_options should remain intact
         assert len(provider.skill_options) == 2
 
@@ -373,11 +373,11 @@ class TestBKAiProvider:
     # ------------------------------------------------------------------
 
     def test_class_level_cache_shared_across_instances(self, mock_client, related_skills):
-        """Test that class-level cache is shared across different BKAiProvider instances"""
-        BKAiProvider(mock_client, related_skills)
+        """Test that class-level cache is shared across different BkAiBackend instances"""
+        BkAiBackend(mock_client, related_skills)
         call_count_after_p1 = mock_client.retrieve_skill.call_count
 
-        BKAiProvider(mock_client, related_skills)
+        BkAiBackend(mock_client, related_skills)
         # Second instance should hit cache, no new API calls
         assert mock_client.retrieve_skill.call_count == call_count_after_p1
 
@@ -386,19 +386,19 @@ class TestBKAiProvider:
     # ------------------------------------------------------------------
 
     def test_protocol_compliance(self, mock_client, related_skills):
-        """Test that BKAiProvider implements SkillProvider protocol"""
-        from aidev_agent.core.tools.skill.types import SkillProvider
+        """Test that BkAiBackend implements SkillProviderBackend protocol"""
+        from aidev_agent.core.tools.skill.types import SkillProviderBackend
 
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         assert hasattr(provider, "discover") and callable(provider.discover)
         assert hasattr(provider, "fetch_instructions") and callable(provider.fetch_instructions)
-        assert isinstance(provider, SkillProvider)
+        assert isinstance(provider, SkillProviderBackend)
 
     def test_integration_with_skill_registry(self, mock_client, related_skills):
         """Test integration with SkillRegistry"""
-        from aidev_agent.core.tools.skill.registry import SkillRegistry
+        from aidev_agent.core.tools.skill.provider import SkillRegistry
 
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         registry = SkillRegistry([provider])
 
         skills = registry.list_skills()
@@ -425,7 +425,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "no-runtime", "skill_description": "Test", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         assert skill["runtime"] == "paas_sandbox"
@@ -438,7 +438,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "with-runtime", "skill_description": "Test", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         assert skill["runtime"] == "sandbox"
@@ -449,7 +449,7 @@ class TestBKAiProvider:
 
     def test_empty_related_skills(self, mock_client):
         """Test with empty related_skills"""
-        provider = BKAiProvider(mock_client, [])
+        provider = BkAiBackend(mock_client, [])
         assert len(provider.discover()) == 0
 
     def test_fallback_to_short_description(self, mock_client):
@@ -462,7 +462,7 @@ class TestBKAiProvider:
                 "version": "1.0",
             }
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skills = provider.discover()
 
         assert len(skills) == 1
@@ -470,7 +470,7 @@ class TestBKAiProvider:
 
     def test_path_pseudo_format(self, mock_client, related_skills):
         """Test that path uses pseudo-API format"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
         assert skill["path"] == "api://6/0.0.1"
 
@@ -480,7 +480,7 @@ class TestBKAiProvider:
 
     def test_sandbox_written_to_metadata(self, mock_client, related_skills):
         """Test sandbox from API response is written into metadata.metadata.bkai_paas_sandbox"""
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         assert "metadata" in skill
@@ -495,7 +495,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "no-sandbox", "skill_description": "Test", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         # metadata key should not exist (no frontmatter metadata, no sandbox)
@@ -510,7 +510,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "empty-sandbox", "skill_description": "Test", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client, related_skills)
+        provider = BkAiBackend(mock_client, related_skills)
         skill = provider.discover()[0]
 
         assert "bkai_paas_sandbox" not in skill.get("metadata", {})
@@ -529,7 +529,7 @@ class TestBKAiProvider:
         related_skills = [
             {"id": 1, "skill_name": "my-skill", "skill_description": "Test", "version": "1.0"},
         ]
-        provider = BKAiProvider(mock_client_rich, related_skills)
+        provider = BkAiBackend(mock_client_rich, related_skills)
         skill = provider.discover()[0]
 
         # Both frontmatter metadata and sandbox should coexist

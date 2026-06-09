@@ -348,7 +348,8 @@ class LangGraphAgent:
         forwarded_props = input.forwarded_props or {}
         thread_id = input.thread_id
 
-        # 不再依赖 checkpoint 中的 messages，直接使用后端数据库传来的完整历史
+        # 检查点消息同步已在 chat.py:_execute() 中完成（覆盖流式和非流式两条路径）
+        # 此处直接使用平台传入的消息作为消息来源
         state_input["messages"] = []
         self.active_run["current_graph_state"] = agent_state.values.copy()
         langchain_messages = agui_messages_to_langchain(messages)
@@ -427,7 +428,7 @@ class LangGraphAgent:
         # 传完整的消息历史给 LangGraph
         stream_messages = stream_input["messages"] if stream_input else []
         kwargs = self.get_stream_kwargs(
-            input={"messages": stream_messages},
+            input={**state, "messages": stream_messages},
             config=config,
             subgraphs=bool(subgraphs_stream_enabled),
             version="v2",
@@ -435,7 +436,6 @@ class LangGraphAgent:
 
         stream_input_final = kwargs.pop("input")
         stream = self.graph.astream_events(stream_input_final, **kwargs)
-
         return {"stream": stream, "state": state, "config": config}
 
     async def prepare_regenerate_stream(  # pylint: disable=too-many-arguments

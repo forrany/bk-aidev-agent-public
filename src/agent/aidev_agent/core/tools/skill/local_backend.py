@@ -127,13 +127,13 @@ async def _alist_skills(source_path: str) -> list[SkillOptions]:
     return _list_skills(source_path)
 
 
-class LocalSkillProvider:
-    """本地文件系统技能提供者。
+class LocalBackend:
+    """本地文件系统技能后端。
 
     将现有的 ``_list_skills`` / 文件读取逻辑包装成
-    :class:`~aidev_agent.core.tools.skill.types.SkillProvider` 兼容的
-    对象，以便与基于提供者的
-    :class:`~aidev_agent.core.tools.skill.registry.SkillRegistry` 一起使用。
+    :class:`~aidev_agent.core.tools.skill.types.SkillProviderBackend` 兼容的
+    对象，以便与基于后端的
+    :class:`~aidev_agent.core.tools.skill.provider.SkillRegistry` 一起使用。
     """
 
     def __init__(self, path: str) -> None:
@@ -152,4 +152,4 @@ class LocalSkillProvider:
         return extract_instructions(content)
 
     def __repr__(self) -> str:
-        return f"LocalSkillProvider(path={self.path!r})"
+        return f"LocalBackend(path={self.path!r})"

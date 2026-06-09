@@ -25,11 +25,11 @@ class SkillOptions(TypedDict):
 
 
 @runtime_checkable
-class SkillProvider(Protocol):
-    """Skill provider protocol.
+class SkillProviderBackend(Protocol):
+    """Skill provider backend protocol.
 
     Any object implementing ``discover`` and ``fetch_instructions`` can serve
-    as a skill provider for :class:`SkillRegistry`.  Using :pep:`544`
+    as a skill provider backend for :class:`~aidev_agent.core.tools.skill.provider.SkillRegistry`.  Using :pep:`544`
     structural sub-typing (Protocol) instead of ABC so that providers need
     not inherit from a base class – duck-typing is sufficient.
     """

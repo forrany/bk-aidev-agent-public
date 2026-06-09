@@ -4,22 +4,23 @@
 Skills infrastructure: metadata types, discovery/loading, registry, and activation tool.
 
 This package provides:
-- skill metadata parsing and discovery (local_provider)
-- registry for lazy loading + activation (registry)
-- activate_skill tool for LLM agents (activate_skill)
-- SkillProvider protocol for extending skill sources (types)
-- LocalSkillProvider for local filesystem skills (local_provider)
+- skill metadata parsing and discovery (local_backend)
+- registry for lazy loading + activation (provider)
+- activate_skill tool for LLM agents (SkillRegistry method)
+- SkillProviderBackend protocol for extending skill sources (types)
+- LocalBackend for local filesystem skills (local_backend)
+- BkAiBackend for BK-AIDev platform skills (bkai_backend)
 """
 
-from .activate_skill import get_activate_skill_tool
-from .local_provider import LocalSkillProvider
-from .registry import SkillRegistry
-from .types import SkillOptions, SkillProvider
+from .bkai_backend import BkAiBackend
+from .local_backend import LocalBackend
+from .provider import SkillRegistry
+from .types import SkillOptions, SkillProviderBackend
 
 __all__ = [
-    "LocalSkillProvider",
+    "BkAiBackend",
+    "LocalBackend",
     "SkillOptions",
-    "SkillProvider",
+    "SkillProviderBackend",
     "SkillRegistry",
-    "get_activate_skill_tool",
 ]

@@ -31,9 +31,9 @@ import io
 import os
 import re
 import zipfile
-from typing import Annotated, NotRequired, Sequence
+from typing import Annotated, Sequence
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 # ========== 常量定义 ==========
 

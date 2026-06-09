@@ -8,7 +8,7 @@ from typing import Any, Callable, ClassVar, Generator, List, Optional
 from ag_ui.core import BaseEvent
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool
@@ -20,6 +20,7 @@ from aidev_agent.config import settings
 from aidev_agent.core.ag_ui.aidev_agent import AidevAGUIAgent
 from aidev_agent.core.ag_ui.types import AgentInput
 from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
+from aidev_agent.core.tools.runtime_tools import RuntimeBackendResolver
 from aidev_agent.enums import AgentType, PromptRole
 from aidev_agent.exceptions import AgentException
 from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
@@ -87,6 +88,11 @@ class ChatCompletionAgent(BaseModel):
     resource_manager: Any = Field(
         default=None, exclude=True, description="per-request 资源管理器（含正确 app_code / access_token）"
     )
+    runtime_backend_resolver: Any = Field(
+        default=None,
+        exclude=True,
+        description="RuntimeBackendResolver 引用，由 ChatAgentBuilder 构造，用于执行结束后关闭沙箱资源",
+    )
     agent_info: dict | None = Field(default=None, description="原始配置信息，来自 AgentConfig.agent_info")
 
     IMAGE_FILE_PATTERN: ClassVar[re.Pattern] = re.compile(r"^!\[.*\]\((http[^)]+/([^/]+?))\)")
@@ -131,6 +137,8 @@ class ChatCompletionAgent(BaseModel):
         self.chat_history = builder.build_chat_history(ctx.session_context_data)
         self.checkpointer = builder.build_checkpointer()
         self.callbacks = chat.callbacks
+        # 构造 RuntimeBackendResolver（在 ChatAgentBuilder 层管理生命周期）
+        self.runtime_backend_resolver = builder.build_runtime_backend_resolver()
         self.agent_info = ctx.agent_config.agent_info if ctx.agent_config else None
 
         if chat.agent_cls is not None:
@@ -158,6 +166,22 @@ class ChatCompletionAgent(BaseModel):
             helper.message_handler.request_cancel(self.thread_id)
         else:
             logger.info(f"[STOP_DEBUG] Cancel already requested for thread_id={self.thread_id}")
+        # 用户主动停止时也释放资源
+        self.release_resources()
+
+    def release_resources(self) -> None:
+        """释放 agent 持有的资源（沙箱后端等）。
+
+        调用 RuntimeBackendResolver.close() 关闭所有已解析的沙箱后端。
+        此方法是幂等的 — 多次调用不会产生副作用。
+        """
+        if self.runtime_backend_resolver is not None:
+            try:
+                self.runtime_backend_resolver.close()
+            except Exception:
+                logger.warning("ChatCompletionAgent.release_resources: 关闭沙箱资源失败", exc_info=True)
+            finally:
+                self.runtime_backend_resolver = None
 
     def convert_history_to_messages(self) -> list[BaseMessage]:
         if not self.chat_history:
@@ -169,6 +193,55 @@ class ChatCompletionAgent(BaseModel):
         return getattr(self.chat_model, "model_name", "")
 
     # ---------- 内部方法 ----------
+
+    def _sync_checkpoint_messages(self, agent_e: Runnable, cfg: RunnableConfig) -> list[BaseMessage]:
+        """同步 checkpoint 中的消息，返回 checkpoint 中非系统消息列表。
+
+        使用 RemoveMessage 清除旧的 checkpoint 消息，避免与平台消息重复/冲突。
+        这是保持 thread_id 稳定的前提条件（替代原来的 uuid4 后缀方案）。
+
+        注意：此同步必须在 _execute 中执行（而非 prepare_stream），
+        因为非流式路径（ainvoke）不经过 prepare_stream。
+        """
+        try:
+            agent_state = run_coro_sync(agent_e.aget_state(cfg))
+            checkpoint_messages = agent_state.values.get("messages", [])
+            non_system_checkpoint_msgs = [m for m in checkpoint_messages if not isinstance(m, SystemMessage)]
+
+            if non_system_checkpoint_msgs:
+                remove_ops = []
+                skipped_none_id_count = 0
+                for m in non_system_checkpoint_msgs:
+                    if m.id is not None:
+                        remove_ops.append(RemoveMessage(id=m.id))
+                    else:
+                        skipped_none_id_count += 1
+
+                if skipped_none_id_count > 0:
+                    logger.warning(
+                        "sync_checkpoint: %d checkpoint messages have id=None, "
+                        "cannot remove via RemoveMessage, thread_id=%s",
+                        skipped_none_id_count,
+                        self.thread_id,
+                    )
+
+                if remove_ops:
+                    run_coro_sync(
+                        agent_e.aupdate_state(
+                            cfg,
+                            {"messages": remove_ops},
+                            as_node="__start__",
+                        )
+                    )
+
+            return non_system_checkpoint_msgs
+        except Exception:
+            logger.warning(
+                "sync_checkpoint: failed to sync checkpoint messages, thread_id=%s",
+                self.thread_id,
+                exc_info=True,
+            )
+            return []
 
     def _update_aidev_agent_header(self, execute_kwargs: ExecuteKwargs) -> None:
         """Build complete X-BKAIDEV-Attributes header (agent.info + session) and inject in-place."""
@@ -197,15 +270,47 @@ class ChatCompletionAgent(BaseModel):
                 model.default_headers = {}
             model.default_headers["X-BKAIDEV-Attributes"] = header_value
 
+    def _fetch_platform_pv(self) -> list[dict]:
+        """从平台拉取已存在的 sandbox PV，返回包含 PV 信息的列表。
+
+        通过 resource_manager.retrieve_chat_session 获取会话的
+        session_property.sandbox_pv_id，若存在则构造 platform 来源的 PV 条目；
+        失败时返回空列表，不阻塞图执行。
+        """
+        if self.resource_manager is None or not self.thread_id:
+            return []
+        try:
+            session = self.resource_manager.retrieve_chat_session(self.thread_id)
+            session_property = (session or {}).get("session_property") or {}
+            sandbox_pv_id = session_property.get("sandbox_pv_id")
+        except Exception:
+            logger.warning("restore platform PV failed: session_code=%s", self.thread_id, exc_info=True)
+            return []
+        if not sandbox_pv_id:
+            return []
+        return [
+            {
+                "type": "paas-sbx-pv",
+                "volume_id": sandbox_pv_id,
+                "volume_name": f"agent-pv-{self.thread_id}",
+                "mount_path": "session",
+                "source": "platform",
+            }
+        ]
+
     def _execute(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs):
         if not messages:
             raise ValueError("The messages list cannot be empty.")
         self._update_aidev_agent_header(execute_kwargs)
         agent_e, cfg = self._get_agent(messages, execute_kwargs=execute_kwargs)
         cfg.setdefault("configurable", {})
-        cfg["configurable"]["thread_id"] = execute_kwargs.session_code or self.thread_id
+        cfg["configurable"]["thread_id"] = self.thread_id
         cfg["configurable"]["execute_kwargs"] = execute_kwargs
-        messages = [msg for msg in messages]
+
+        # 清除 checkpoint 中的旧消息，避免与平台消息重复
+        # 平台传入的 messages 已包含完整历史，无需拼接
+        self._sync_checkpoint_messages(agent_e, cfg)
+
         if execute_kwargs.stream:
             if execute_kwargs.legacy_streaming:
                 return self._stream_with_legacy(agent_e, cfg, messages)
@@ -214,8 +319,12 @@ class ChatCompletionAgent(BaseModel):
 
         else:
             try:
+                platform_pv = self._fetch_platform_pv()
+                input_state: dict[str, Any] = {"messages": messages, "execute_kwargs": execute_kwargs}
+                if platform_pv:
+                    input_state["runtime_paas_sbx_pv"] = platform_pv
                 result = run_coro_sync(
-                    agent_e.ainvoke({"messages": messages, "execute_kwargs": execute_kwargs}, cfg),
+                    agent_e.ainvoke(input_state, cfg),
                     timeout=execute_kwargs.invoke_timeout,
                 )
                 result_output = result.get("messages")[-1]
@@ -229,26 +338,33 @@ class ChatCompletionAgent(BaseModel):
             except Exception as e:
                 logger.exception(f"Error executing agent: {e}")
                 raise AgentException(message=f"Error executing agent: {e}")
+            finally:
+                # 非流式执行结束后释放资源
+                self.release_resources()
 
     def _stream_with_legacy(
         self, agent_e: Runnable, cfg: RunnableConfig, messages: list[BaseMessage]
     ) -> Generator[Any, None, None]:
-        _input = {"messages": messages}
+        platform_pv = self._fetch_platform_pv()
+        _input: dict[str, Any] = {"messages": messages}
+        if platform_pv:
+            _input["runtime_paas_sbx_pv"] = platform_pv
         return agent_e.agent.stream_standard_event(agent_e, cfg, _input)
 
     def _stream(
         self, agent_e: Runnable, cfg: RunnableConfig, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs
     ) -> Generator[Any, None, None]:
-        # 使用 session_code 作为 stream_thread_id，以支持断点续传（RabbitMQ 队列标识）
-        # 当用户刷新页面重新进入同一会话时，可以从 RabbitMQ 队列恢复之前的流
-        stream_thread_id = execute_kwargs.session_code or self.thread_id
-        # 每次请求使用新的 graph_thread_id，避免 LangGraph checkpoint 累积历史消息
-        # 因为平台端每次都从 DB 读取完整历史传入，不需要依赖 checkpoint 中的消息
-        graph_thread_id = f"{stream_thread_id}_{uuid.uuid4().hex[:8]}"
+        # self.thread_id 是 ChatCompletionAgent 唯一的 thread_id 来源，
+        # 同时用于 LangGraph checkpointer（跨请求持久化 state 如 PV）和 RabbitMQ 队列标识（断点续传）
+        # 消息同步通过 RemoveMessage 在 _execute 中处理
+        platform_pv = self._fetch_platform_pv()
+        state = {}
+        if platform_pv:
+            state["runtime_paas_sbx_pv"] = platform_pv
         body = {
-            "thread_id": graph_thread_id,
+            "thread_id": self.thread_id,
             "run_id": messages[-1].id or uuid.uuid4().hex,
-            "state": {},
+            "state": state,
             "messages": langchain_messages_to_agui(messages),
         }
         agent_input = AgentInput(**body)
@@ -271,11 +387,11 @@ class ChatCompletionAgent(BaseModel):
             event_handler=self.event_handler,
             config=cfg,
             tools={each.name: each for each in self.tools} if self.tools else {},
-            cancel_checker=make_cancel_checker(stream_thread_id),
+            cancel_checker=make_cancel_checker(self.thread_id),
             mcp_fetch_failures=getattr(self, "mcp_fetch_failures", []) or [],
         )
 
-        return self._stream_with_queue(agui_entry, agent_input, queue_thread_id=stream_thread_id)
+        return self._stream_with_queue(agui_entry, agent_input, queue_thread_id=self.thread_id)
 
     def _stream_with_queue(
         self, agui_entry: AidevAGUIAgent, agent_input: AgentInput, queue_thread_id: str | None = None
@@ -305,6 +421,8 @@ class ChatCompletionAgent(BaseModel):
     def _on_complete(self):
         if self.event_handler and hasattr(self.event_handler, "set_streaming_finished"):
             self.event_handler.set_streaming_finished()
+        # 流式执行结束后释放资源
+        self.release_resources()
 
     def migration_v1(self) -> None:
         """兼容 v1 旧构造参数，统一迁移到当前运行时协议。"""
@@ -346,6 +464,7 @@ class ChatCompletionAgent(BaseModel):
             execute_kwargs=execute_kwargs,
             checkpointer=self.checkpointer if self.checkpointer else MemorySaver(),
             resource_manager=self.resource_manager,
+            runtime_backend_resolver=self.runtime_backend_resolver,
         )
 
     def _chat_history_to_langchain_messages(self, chat_history: list[ChatPrompt]) -> list[BaseMessage]:
@@ -457,6 +576,7 @@ class ChatAgentBuilder:
         self._specific_resources: list[dict] = []
         self._mcp_fetch_failures: list[dict] = []
         self._executor_info: dict | None = None
+        self._runtime_backend_resolver: Any | None = None
         # 装配前先从最后一条 user 消息提取 specific_resources，供 build_tools / build_knowledge_bases 过滤
         self._handle_last_human_message(ctx.session_context_data)
 
@@ -464,6 +584,14 @@ class ChatAgentBuilder:
     def mcp_fetch_failures(self) -> list[dict]:
         """MCP 工具拉取失败记录，由 ``build_tools`` 写入"""
         return self._mcp_fetch_failures
+
+    def build_runtime_backend_resolver(self) -> RuntimeBackendResolver:
+        """构造 RuntimeBackendResolver。
+
+        resolver 将通过 AgentExecutorKwargs 传入 ReActAgentBuilder。
+        """
+        self._runtime_backend_resolver = RuntimeBackendResolver(default_runtime="local")
+        return self._runtime_backend_resolver
 
     # ---------- 公共：装配方法（被 ChatCompletionAgent.build 调用） ----------
 

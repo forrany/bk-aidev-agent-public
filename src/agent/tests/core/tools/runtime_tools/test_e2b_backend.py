@@ -324,3 +324,18 @@ class TestE2BSandboxBackendGrepGlobUploadDownloadExecute:
         res = await backend.aexecute("echo hello")
         assert isinstance(res, ExecuteResult)
         assert res.exit_code == 0
+
+
+class TestConfigStatePassThrough:
+    """测试 E2BSandboxBackend 方法签名接受 config/state 参数。"""
+
+    def test_ls_info_accepts_config_state_kwargs(self):
+        """ls_info 应接受 keyword-only config/state 参数（签名验证）。"""
+        import inspect
+
+        sig = inspect.signature(E2BSandboxBackend.ls_info)
+        params = sig.parameters
+        assert "config" in params, "ls_info 缺少 config 参数"
+        assert "state" in params, "ls_info 缺少 state 参数"
+        assert params["config"].kind == inspect.Parameter.KEYWORD_ONLY, "config 应为 keyword-only"
+        assert params["state"].kind == inspect.Parameter.KEYWORD_ONLY, "state 应为 keyword-only"

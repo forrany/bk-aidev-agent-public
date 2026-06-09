@@ -9,7 +9,7 @@ import pytest
 from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware
 from aidev_agent.core.nodes.model.pydantic_models import ProcessorContext
 from aidev_agent.core.tools.skill import SkillOptions
-from aidev_agent.core.tools.skill.registry import SkillRegistry
+from aidev_agent.core.tools.skill.provider import SkillRegistry
 
 
 def _write_skill(root: Path, *, name: str, description: str, body: str, runtime: str | None = None) -> Path:

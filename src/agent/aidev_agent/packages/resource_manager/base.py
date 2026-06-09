@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from langchain_core.tools import StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from aidev_agent.api.paas_client import BkPaaSSandboxApi
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
 from aidev_agent.packages.langchain_core.tools import Tool, ToolExtra, make_structured_tool
@@ -110,6 +111,24 @@ class BaseResourceManager(abc.ABC):
                 )
         return access_token
 
+    def get_paas_sbx_client(self, executor_info: dict, **kwargs) -> Any:
+
+        app_code = executor_info.get("app_code", "")
+        app_secret = executor_info.get("app_secret", "")
+        bk_username = executor_info.get("executor", "")
+        access_token = executor_info.get("access_token", "")
+
+        if app_code and app_secret:
+            client = BkPaaSSandboxApi.get_client(app_code=app_code, app_secret=app_secret)
+        else:
+            client = BkPaaSSandboxApi.get_client_by_username(bk_username)
+
+        client.update_bkapi_authorization(
+            access_token=access_token or None,
+            bk_username=bk_username or ""
+        )
+        return client
+
     # ---------- 资源方法 (7) ----------
 
     def retrieve_knowledgebase(self, id: int, **kwargs) -> dict:
@@ -123,6 +142,18 @@ class BaseResourceManager(abc.ABC):
     def get_chat_session_context(self, session_code: str, **kwargs) -> list[dict]:
         client = self.get_client()
         return client.api.get_chat_session_context(path_params={"session_code": session_code}, **kwargs).get("data", [])
+
+    def retrieve_chat_session(self, session_code: str, **kwargs) -> dict:
+        client = self.get_client()
+        return client.api.retrieve_chat_session(path_params={"session_code": session_code}, **kwargs).get("data", {})
+
+    def update_chat_session_sandbox_pv_id(self, session_code: str, sandbox_pv_id: str, **kwargs) -> dict:
+        client = self.get_client()
+        return client.api.update_chat_session(
+            path_params={"session_code": session_code},
+            json={"session_property": {"sandbox_pv_id": sandbox_pv_id}},
+            **kwargs,
+        ).get("data", {})
 
     def retrieve_agent_config(self, agent_code: str, version: Optional[str] = None, **kwargs) -> dict:
         agent_code = agent_code or self.app_code

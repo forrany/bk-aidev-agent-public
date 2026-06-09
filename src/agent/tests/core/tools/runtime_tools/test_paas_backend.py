@@ -57,8 +57,8 @@ def _make_backend(**kwargs) -> PaasSandboxBackend:
     """创建一个带默认参数的 PaasSandboxBackend 实例，用于测试 HTTP 方法。"""
     defaults = dict(
         app_code="test-app",
-        access_token="test-token",
         bk_username="test-username",
+        client=MagicMock(),
         snapshot="",
         snapshot_entrypoint=[],
         env_vars={},
@@ -83,7 +83,7 @@ class MockOps:
         self.exec_handler = lambda sandbox_id, cmd, **kw: ExecResult(stdout="", stderr="", exit_code=0)
         self.uploaded_files: dict[str, bytes] = {}
 
-    def create_sandbox(self, name=None, env_vars=None, snapshot=None, snapshot_entrypoint=None):
+    def create_sandbox(self, name=None, env_vars=None, snapshot=None, snapshot_entrypoint=None, **kwargs):
         self.sandbox_created = True
         return "mock-sandbox-id"
 
@@ -107,22 +107,13 @@ def mock_ops():
     return MockOps()
 
 
-@pytest.fixture(autouse=True)
-def _mock_paas_client(monkeypatch):
-    """自动 mock BkPaaSSandboxApi.get_client_by_username，避免 Django settings 依赖。"""
-    monkeypatch.setattr(
-        "aidev_agent.api.paas_client.BkPaaSSandboxApi.get_client_by_username",
-        lambda bk_username: MagicMock(),
-    )
-
-
 @pytest.fixture()
 def backend(mock_ops, monkeypatch):
     """创建 PaasSandboxBackend 实例，并将其所有 HTTP 方法替换为 mock_ops 的实现。"""
     b = PaasSandboxBackend(
         app_code="test-app",
-        access_token="test-token",
         bk_username="test-username",
+        client=MagicMock(),
         snapshot="test-snapshot",
         snapshot_entrypoint=["python", "-m", "server"],
         env_vars={},
@@ -652,22 +643,21 @@ class TestPaasSandboxBackendInit:
         """验证构造函数正确赋值所有属性。"""
         backend = PaasSandboxBackend(
             app_code="explicit-app",
-            access_token="explicit-token",
             bk_username="explicit-username",
+            client=MagicMock(),
             snapshot="test-snapshot",
             snapshot_entrypoint=["python", "-m", "server"],
             env_vars={},
         )
         assert backend._app_code == "explicit-app"
-        assert backend._access_token == "explicit-token"
         assert backend._sandbox_id is None
 
     def test_init_with_params(self):
         """验证 snapshot、snapshot_entrypoint、env_vars 等参数正确赋值。"""
         backend = PaasSandboxBackend(
             app_code="param-app",
-            access_token="param-token",
             bk_username="param-username",
+            client=MagicMock(),
             snapshot="param-snapshot",
             snapshot_entrypoint=["python", "-m", "server"],
             env_vars={"KEY": "VALUE"},
@@ -676,12 +666,40 @@ class TestPaasSandboxBackendInit:
         assert backend._snapshot_entrypoint == ["python", "-m", "server"]
         assert backend._env_vars == {"KEY": "VALUE"}
 
+    def test_init_with_workspace_ttl(self):
+        """验证 __init__ 新增 workspace/ttl_seconds 参数正确赋值。"""
+        backend = PaasSandboxBackend(
+            app_code="app",
+            bk_username="u",
+            client=MagicMock(),
+            snapshot="snap",
+            snapshot_entrypoint=[],
+            env_vars={},
+            workspace="/app",
+            ttl_seconds=3600,
+        )
+        assert backend._workspace == "/app"
+        assert backend._ttl_seconds == 3600
+
+    def test_init_workspace_ttl_defaults_to_none(self):
+        """验证 workspace/ttl_seconds 默认值为 None。"""
+        backend = PaasSandboxBackend(
+            app_code="app",
+            bk_username="u",
+            client=MagicMock(),
+            snapshot="snap",
+            snapshot_entrypoint=[],
+            env_vars={},
+        )
+        assert backend._workspace is None
+        assert backend._ttl_seconds is None
+
     def test_init_api_host_trailing_slash_stripped(self):
         """验证默认参数可以正常构造实例。"""
         backend = PaasSandboxBackend(
             app_code="app",
-            access_token="token",
             bk_username="username",
+            client=MagicMock(),
             snapshot="snap",
             snapshot_entrypoint=[],
             env_vars={},
@@ -696,10 +714,8 @@ class TestPaasSandboxBackendAuth:
         """所有配置项均通过构造函数显式注入，不依赖任何环境变量。"""
         backend = _make_backend(
             app_code="explicit-app",
-            access_token="explicit-token",
         )
         assert backend._app_code == "explicit-app"
-        assert backend._access_token == "explicit-token"
 
 
 class TestPaasSandboxBackendErrors:
@@ -736,7 +752,9 @@ class TestPaasSandboxBackendHTTPMethods:
 
         http_backend.destroy_sandbox("sb-123")
 
-        http_backend.client.delete_sandbox.request.assert_called_once_with(path_params={"sandbox_id": "sb-123"})
+        http_backend.client.delete_sandbox.request.assert_called_once_with(
+            path_params={"sandbox_id": "sb-123"}, timeout=10
+        )
 
     def test_exec_command(self, http_backend):
         http_backend.client.exec_command.request.return_value = _make_http_response(
@@ -777,6 +795,82 @@ class TestPaasSandboxBackendHTTPMethods:
             path_params={"sandbox_id": "sb-123"},
         )
 
+    def test_create_sandbox_full_params(self, http_backend):
+        """验证全部 7 参数正确传递到 API 请求。"""
+        http_backend.client.create_sandbox.request.return_value = _make_http_response(json_data={"uuid": "sb-full"})
+
+        sandbox_id = http_backend.create_sandbox(
+            name="test",
+            env_vars={"KEY": "VAL"},
+            snapshot="snap",
+            snapshot_entrypoint=["python"],
+            workspace="/app",
+            ttl_seconds=3600,
+            volume_mounts=[{"volume_id": "vol-uuid", "mount_path": "/data"}],
+        )
+        assert sandbox_id == "sb-full"
+
+        http_backend.client.create_sandbox.request.assert_called_once_with(
+            json={
+                "name": "test",
+                "env_vars": {"KEY": "VAL"},
+                "snapshot": "snap",
+                "snapshot_entrypoint": ["python"],
+                "workspace": "/app",
+                "ttl_seconds": 3600,
+                "volume_mounts": [{"volume_id": "vol-uuid", "mount_path": "/data"}],
+            },
+            path_params={"app_code": "test-app"},
+        )
+
+    def test_create_sandbox_workspace_fallback_to_init(self, http_backend):
+        """验证 workspace 未传入方法时回退到 __init__ 实例默认值。"""
+        backend = _make_backend(workspace="/default-workspace")
+        backend.client = MagicMock()
+        backend.client.create_sandbox.request.return_value = _make_http_response(json_data={"uuid": "sb-fallback"})
+
+        sandbox_id = backend.create_sandbox(name="test")
+        assert sandbox_id == "sb-fallback"
+
+        call_kwargs = backend.client.create_sandbox.request.call_args
+        assert call_kwargs.kwargs["json"]["workspace"] == "/default-workspace"
+
+    def test_create_sandbox_ttl_fallback_to_init(self, http_backend):
+        """验证 ttl_seconds 未传入方法时回退到 __init__ 实例默认值。"""
+        backend = _make_backend(ttl_seconds=7200)
+        backend.client = MagicMock()
+        backend.client.create_sandbox.request.return_value = _make_http_response(json_data={"uuid": "sb-fallback"})
+
+        sandbox_id = backend.create_sandbox(name="test")
+        assert sandbox_id == "sb-fallback"
+
+        call_kwargs = backend.client.create_sandbox.request.call_args
+        assert call_kwargs.kwargs["json"]["ttl_seconds"] == 7200
+
+    def test_create_sandbox_method_param_overrides_init(self, http_backend):
+        """验证方法参数优先于 __init__ 实例默认值。"""
+        backend = _make_backend(workspace="/init-workspace", ttl_seconds=3600)
+        backend.client = MagicMock()
+        backend.client.create_sandbox.request.return_value = _make_http_response(json_data={"uuid": "sb-override"})
+
+        sandbox_id = backend.create_sandbox(name="test", workspace="/method-workspace", ttl_seconds=7200)
+        assert sandbox_id == "sb-override"
+
+        call_kwargs = backend.client.create_sandbox.request.call_args
+        assert call_kwargs.kwargs["json"]["workspace"] == "/method-workspace"
+        assert call_kwargs.kwargs["json"]["ttl_seconds"] == 7200
+
+    def test_create_sandbox_volume_mounts(self, http_backend):
+        """验证 volume_mounts 正确传递到 API 请求。"""
+        http_backend.client.create_sandbox.request.return_value = _make_http_response(json_data={"uuid": "sb-vol"})
+
+        volume_mounts = [{"volume_id": "vol-uuid-1", "mount_path": "/data/shared"}]
+        sandbox_id = http_backend.create_sandbox(name="test", volume_mounts=volume_mounts)
+        assert sandbox_id == "sb-vol"
+
+        call_kwargs = http_backend.client.create_sandbox.request.call_args
+        assert call_kwargs.kwargs["json"]["volume_mounts"] == volume_mounts
+
 
 class TestEnsureSandboxConcurrency:
     """测试 _ensure_sandbox 的并发安全性。"""
@@ -788,8 +882,8 @@ class TestEnsureSandboxConcurrency:
 
         backend = PaasSandboxBackend(
             app_code="test-app",
-            access_token="token",
             bk_username="user",
+            client=MagicMock(),
             snapshot="snap",
             snapshot_entrypoint=[],
             env_vars={},
@@ -811,3 +905,46 @@ class TestEnsureSandboxConcurrency:
 
         assert mock_create.call_count == 1
         assert all(r == "sandbox-123" for r in results)
+
+    def test_ensure_sandbox_passes_workspace_ttl(self, monkeypatch):
+        """验证 _ensure_sandbox 将 workspace/ttl_seconds 传递给 create_sandbox。"""
+        backend = PaasSandboxBackend(
+            app_code="test-app",
+            bk_username="u",
+            client=MagicMock(),
+            snapshot="snap",
+            snapshot_entrypoint=[],
+            env_vars={},
+            workspace="/app",
+            ttl_seconds=3600,
+        )
+        mock_create = MagicMock(return_value="sandbox-123")
+        monkeypatch.setattr(backend, "create_sandbox", mock_create)
+        monkeypatch.setattr(
+            "aidev_agent.core.tools.runtime_tools.paas_backend.sleep",
+            lambda _: None,
+        )
+
+        backend._ensure_sandbox()
+        mock_create.assert_called_once_with(
+            snapshot="snap",
+            snapshot_entrypoint=[],
+            env_vars={},
+            workspace="/app",
+            ttl_seconds=3600,
+        )
+
+
+class TestConfigStatePassThrough:
+    """测试 PaasSandboxBackend 方法签名接受 config/state 参数。"""
+
+    def test_ls_info_accepts_config_state_kwargs(self):
+        """ls_info 应接受 keyword-only config/state 参数（签名验证）。"""
+        import inspect
+
+        sig = inspect.signature(PaasSandboxBackend.ls_info)
+        params = sig.parameters
+        assert "config" in params, "ls_info 缺少 config 参数"
+        assert "state" in params, "ls_info 缺少 state 参数"
+        assert params["config"].kind == inspect.Parameter.KEYWORD_ONLY, "config 应为 keyword-only"
+        assert params["state"].kind == inspect.Parameter.KEYWORD_ONLY, "state 应为 keyword-only"

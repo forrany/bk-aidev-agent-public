@@ -31,6 +31,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from langchain_core.runnables import RunnableConfig
+
 from .types import (
     EditResult,
     ExecuteResult,
@@ -38,6 +40,7 @@ from .types import (
     FileInfo,
     FileUploadResponse,
     GrepMatch,
+    RuntimeBackend,
     WriteResult,
 )
 from .utils import (
@@ -49,7 +52,7 @@ from .utils import (
 # ========== FilesystemBackend 实现 ==========
 
 
-class FilesystemBackend:
+class FilesystemBackend(RuntimeBackend):
     """直接从文件系统读写文件的后端。
 
     文件使用其实际的文件系统路径访问。相对路径相对于当前工作目录解析。
@@ -181,7 +184,7 @@ class FilesystemBackend:
             return path
         return (self.cwd / path).resolve()
 
-    def ls_info(self, path: str) -> list[FileInfo]:
+    def ls_info(self, path: str, *, config: RunnableConfig | None = None, state: dict | None = None) -> list[FileInfo]:
         """列出目录中的文件和目录（非递归）。
 
         Args:
@@ -295,6 +298,9 @@ class FilesystemBackend:
         file_path: str,
         offset: int = 0,
         limit: int = 2000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
     ) -> str:
         """读取文件内容（带行号）。
 
@@ -340,6 +346,9 @@ class FilesystemBackend:
         self,
         file_path: str,
         content: str,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
     ) -> WriteResult:
         """创建新文件并写入内容。
 
@@ -385,6 +394,9 @@ class FilesystemBackend:
         old_string: str,
         new_string: str,
         replace_all: bool = False,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
     ) -> EditResult:
         """通过替换字符串编辑文件。
 
@@ -437,6 +449,9 @@ class FilesystemBackend:
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
     ) -> list[GrepMatch] | str:
         """在文件中搜索正则表达式模式。
 
@@ -603,7 +618,9 @@ class FilesystemBackend:
 
         return results
 
-    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+    def glob_info(
+        self, pattern: str, path: str = "/", *, config: RunnableConfig | None = None, state: dict | None = None
+    ) -> list[FileInfo]:
         """查找匹配 glob 模式的文件。
 
         Args:
@@ -755,6 +772,9 @@ class FilesystemBackend:
         command: str,
         timeout: int = 120,
         max_output_size: int = 100000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
     ) -> ExecuteResult:
         """在沙箱环境中执行 shell 命令。
 
@@ -813,6 +833,9 @@ class FilesystemBackend:
         command: str,
         timeout: int = 120,
         max_output_size: int = 100000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
     ) -> ExecuteResult:
         """异步执行 shell 命令。
 

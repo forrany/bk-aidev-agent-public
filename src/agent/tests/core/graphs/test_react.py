@@ -121,7 +121,6 @@ class TestReActAgentBuilder:
         assert builder._non_thinking_llm is llm
         assert result is builder
 
-
     def test_set_llm_token_limit(self):
         builder = ReActAgentBuilder()
         result = builder.set_llm_token_limit(50000)
@@ -438,6 +437,18 @@ class TestReActAgentBuilder:
             captured_tools["tools"] = tools
             return MagicMock()
 
+        resolver = MagicMock()
+        resolver.runtime_param_description.return_value = "runtime target"
+        builder = (
+            ReActAgentBuilder()
+            .set_llm(llm)
+            .set_enable_skills(True)
+            .set_enable_runtime_tool(True)
+            .set_skill_sources([str(skills_root)])
+            .enable_runtime_local(True)
+        )
+        builder._runtime_backend_resolver = resolver
+
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", new=_fake_make_model_node),
             patch(
@@ -445,15 +456,7 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            (
-                ReActAgentBuilder()
-                .set_llm(llm)
-                .set_enable_skills(True)
-                .set_enable_runtime_tool(True)
-                .set_skill_sources([str(skills_root)])
-                .enable_runtime_local(True)
-                .build()
-            )
+            builder.build()
 
         tool_names = [t.name for t in captured_tools["tools"]]
         assert "activate_skill" in tool_names
@@ -470,6 +473,11 @@ class TestReActAgentBuilder:
             captured_tools["tools"] = tools
             return MagicMock()
 
+        resolver = MagicMock()
+        resolver.runtime_param_description.return_value = "runtime target"
+        builder = ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True).enable_runtime_local(True)
+        builder._runtime_backend_resolver = resolver
+
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", new=_fake_make_model_node),
             patch(
@@ -477,7 +485,7 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True).enable_runtime_local(True).build()
+            builder.build()
 
         tool_names = [t.name for t in captured_tools["tools"]]
         runtime_expected = {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute"}
@@ -504,10 +512,12 @@ class TestReActAgentBuilder:
 
         assert builder._skill_registry is not None
 
-    def test_build_runtime_backend_resolver_created(self):
-        """enable_runtime_tool=True 时应创建 RuntimeBackendResolver"""
+    def test_build_runtime_backend_resolver_uses_injected_resolver(self):
+        """enable_runtime_tool=True 时应使用调用方注入的 RuntimeBackendResolver"""
         llm = MagicMock()
         llm.model_name = "gpt-4o"
+        resolver = MagicMock()
+        resolver.runtime_param_description.return_value = "runtime target"
 
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", return_value=MagicMock()),
@@ -517,9 +527,10 @@ class TestReActAgentBuilder:
             ),
         ):
             builder = ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True)
+            builder._runtime_backend_resolver = resolver
             builder.build()
 
-        assert builder._runtime_backend_resolver is not None
+        assert builder._runtime_backend_resolver is resolver
 
     def test_build_skill_prompt_middleware_injected(self, tmp_path, monkeypatch):
         """enable_skills 时应向 ModelNodeSettings 注入 SkillsPromptMiddleware"""
@@ -609,17 +620,13 @@ class TestReActAgentBuilder:
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", return_value=MagicMock()),
             patch(
-                "aidev_agent.core.tools.runtime_tools.provider.RuntimeBackendResolver",
-                create=True,
-            ) as mock_resolver_cls,
-            patch(
                 "aidev_agent.core.graphs.react.graph.ReActAgentBuilder._build_graph",
                 return_value=(MagicMock(), {}),
             ),
         ):
             mock_resolver_instance = MagicMock()
             mock_resolver_instance._backends = {}
-            mock_resolver_cls.return_value = mock_resolver_instance
+            mock_resolver_instance.runtime_param_description.return_value = "runtime target"
 
             builder = (
                 ReActAgentBuilder()
@@ -629,12 +636,13 @@ class TestReActAgentBuilder:
                 .set_skill_sources([str(skills_root)])
                 .register_runtime_type("sandbox", MockBackendCls)
             )
+            builder._runtime_backend_resolver = mock_resolver_instance
             builder.build()
 
         MockBackendCls.assert_called_once()
-        # NOTE: We access _backends directly because resolve_backend() calls the backend
-        # if callable (MagicMock is callable), which would return a different mock instance.
-        assert builder._runtime_backend_resolver._backends.get("sandbox_my-skill") is mock_backend_instance
+        builder._runtime_backend_resolver.register_runtime.assert_called_once_with(
+            "sandbox_my-skill", mock_backend_instance
+        )
 
     def test_build_skill_unknown_runtime_skipped(self, tmp_path, monkeypatch):
         """skill 声明的 runtime 未注册时应跳过并记录警告"""
@@ -653,6 +661,8 @@ class TestReActAgentBuilder:
             ),
             patch("aidev_agent.core.graphs.react.graph.logger") as mock_logger,
         ):
+            resolver = MagicMock()
+            resolver.runtime_param_description.return_value = "runtime target"
             builder = (
                 ReActAgentBuilder()
                 .set_llm(llm)
@@ -661,6 +671,7 @@ class TestReActAgentBuilder:
                 .set_skill_sources([str(skills_root)])
                 .enable_runtime_local(True)
             )
+            builder._runtime_backend_resolver = resolver
             builder.build()
 
         mock_logger.warning.assert_called()
@@ -681,11 +692,13 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
+            resolver = MagicMock()
+            resolver._backends = {}
+            resolver.runtime_param_description.return_value = "runtime target"
             builder = ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True)
+            builder._runtime_backend_resolver = resolver
             builder.build()
 
-        # NOTE: We access _backends directly because resolve_backend() returns an error string
-        # for unregistered runtimes rather than None.
         assert builder._runtime_backend_resolver._backends.get("local") is None
 
     # ----------------------------------------------------------------
@@ -735,9 +748,9 @@ class TestReActAgentBuilder:
     # B (continued). _should_continue 测试
     # ----------------------------------------------------------------
 
-    def test_should_continue_returns_tools_when_tool_calls(self):
+    def test_should_continue_returns_pv_node_when_tool_calls(self):
         msg = AIMessage(content="", tool_calls=[{"id": "1", "name": "calc", "args": {}}])
-        assert ReActAgentBuilder._should_continue({"messages": [msg]}) == "tools"
+        assert ReActAgentBuilder._should_continue({"messages": [msg]}) == "pv_node"
 
     def test_should_continue_returns_end_when_no_tool_calls(self):
         msg = AIMessage(content="done")
@@ -968,10 +981,15 @@ class TestReActAgentBuilder:
         builder = ReActAgentBuilder().set_llm(llm).set_tools([calculator])
         graph, cfg = builder.build()
 
-        result = await graph.ainvoke(
-            {"messages": [HumanMessage(content="What is 2 + 3?")]},
-            config=cfg,
-        )
+        try:
+            result = await graph.ainvoke(
+                {"messages": [HumanMessage(content="What is 2 + 3?")]},
+                config=cfg,
+            )
+        except Exception as exc:
+            if "403" in str(exc) or "PermissionDenied" in type(exc).__name__:
+                pytest.skip(f"LLM credential lacks live model permission: {exc}")
+            raise
         assert result is not None
         messages = result.get("messages", [])
         assert len(messages) > 0

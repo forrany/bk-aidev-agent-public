@@ -42,8 +42,8 @@ from typing_extensions import Literal, TypedDict, TypeVar
 from aidev_agent.core.nodes.knowledge import make_knowledge_node
 from aidev_agent.core.nodes.model import ModelNodeSettings
 from aidev_agent.core.nodes.model import build_model_node as std_make_model_node
+from aidev_agent.core.nodes.pv import add_pv_info, make_pv_node
 from aidev_agent.core.nodes.tool import ToolNodeSettings, build_tool_node
-from aidev_agent.core.tools.add_image_to_chat_context import add_image_to_chat_context
 from aidev_agent.enums import Decision
 from aidev_agent.packages.langchain_core.models.utils import is_model_without_function_calling
 from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
@@ -53,8 +53,9 @@ if TYPE_CHECKING:
     from langchain_core.runnables import Runnable
     from langgraph.store.base import BaseStore
 
-from aidev_agent.core.tools.skill.bkai_provider import BKAiProvider
-from aidev_agent.core.tools.skill.types import SkillOptions, SkillProvider
+from aidev_agent.core.tools.skill.bkai_backend import BkAiBackend
+from aidev_agent.core.tools.skill.provider import SkillRegistry
+from aidev_agent.core.tools.skill.types import SkillOptions, SkillProviderBackend
 from aidev_agent.packages.resource_manager.registry import resource_manager
 
 ResponseT = TypeVar("ResponseT")
@@ -79,6 +80,7 @@ class DefaultState(TypedDict):
     knowledge_content: list
     knowledge_qa_content: list
     with_qa_response: list
+    runtime_paas_sbx_pv: Annotated[list[dict], add_pv_info]
 
 
 class KnowledgeInputState(TypedDict):
@@ -110,7 +112,7 @@ class ReActAgentBuilder:
         self._knowledge_bases: list[dict] | None = None
         # SKILL设置
         self._enable_skills: bool = False
-        self._skill_sources: list[str | SkillProvider] = []
+        self._skill_sources: list[str | SkillProviderBackend] = []
         self._skill_registry = None
         self._runtime_param_with_skill: dict[
             str, Callable[[SkillOptions, dict], dict]
@@ -138,6 +140,7 @@ class ReActAgentBuilder:
         self._enable_query_clarification: Optional[bool] = None
         self._langchain_middleware: Sequence[AgentMiddleware] = ()
         self._tool_node_options: ToolNodeSettings | None = None
+        self._resource_manager = None
 
     # ====================================================================================================
     # 模型设置
@@ -195,11 +198,11 @@ class ReActAgentBuilder:
         self._enable_skills = bool(enable_skills)
         return self
 
-    def set_skill_sources(self, skill_sources: list[str | SkillProvider]) -> "ReActAgentBuilder":
+    def set_skill_sources(self, skill_sources: list[str | SkillProviderBackend]) -> "ReActAgentBuilder":
         self._skill_sources = list(skill_sources)
         return self
 
-    def add_skill_sources(self, sources: list[str | SkillProvider]) -> "ReActAgentBuilder":
+    def add_skill_sources(self, sources: list[str | SkillProviderBackend]) -> "ReActAgentBuilder":
         self._skill_sources.extend(sources)
         return self
 
@@ -329,6 +332,7 @@ class ReActAgentBuilder:
 
     def set_bkai_options(self, options: AgentExecutorKwargs) -> "ReActAgentBuilder":
         """将 BkAi 平台通用配置（AgentExecutorKwargs）映射到 builder 内部状态。"""
+        self._resource_manager = options.resource_manager or resource_manager()
         if options.llm is not None:
             self._llm = options.llm
         if options.non_thinking_llm is not None:
@@ -359,17 +363,20 @@ class ReActAgentBuilder:
         if options.skills is not None and options.skills:
             self.set_enable_skills(True)
             # 优先使用 per-request resource_manager（含调试Agent自己的app_code / access_token），
-            _rm = options.resource_manager or resource_manager()
             self.add_skill_sources(
                 [
-                    BKAiProvider(
-                        client=_rm,
+                    BkAiBackend(
+                        client=self._resource_manager,
                         related_skills=options.skills,
                     )
                 ]
             )
             self.set_enable_runtime_tool(True)
             self.enable_runtime_paas(True)
+
+        # RuntimeBackendResolver（由调用方构造并注入）
+        if options.runtime_backend_resolver is not None:
+            self._runtime_backend_resolver = options.runtime_backend_resolver
 
         return self
 
@@ -523,9 +530,7 @@ class ReActAgentBuilder:
 
         # Skills tool injection
         if self._enable_skills and self._skill_registry is not None:
-            from aidev_agent.core.tools.skill.activate_skill import get_activate_skill_tool
-
-            tools.append(get_activate_skill_tool(self._skill_registry))
+            tools.append(self._skill_registry.get_activate_skill_tool())
 
         # Runtime client tools injection (ls/read_file/write_file/edit_file/glob/grep/execute)
         if self._enable_runtime_tool and self._runtime_backend_resolver is not None:
@@ -554,7 +559,6 @@ class ReActAgentBuilder:
         - 将 activate_skill 工具与 prompt middleware 所需的 registry 写入 self._skill_registry
         - 为每个 skill 根据其 runtime 创建并注册独立 backend 到 self._runtime_backend_resolver
         """
-        from aidev_agent.core.tools.skill.registry import SkillRegistry
 
         registry = SkillRegistry(self._skill_sources or [])
         self._skill_registry = registry
@@ -571,6 +575,9 @@ class ReActAgentBuilder:
             backend_cls = self._runtime_types[skill_runtime]
             extractor = self._runtime_param_with_skill.get(skill_runtime)
             params = extractor(skill, self._executor_info or {}) if extractor is not None else {}
+            if skill_runtime == "paas_sandbox" and self._resource_manager is not None:
+                client = self._resource_manager.get_paas_sbx_client(self._executor_info or {})
+                params["client"] = client
             logger.info(
                 f"[credential] skill_runtime={skill_runtime}, skill_name={skill_name}, "
                 f"executor_info_keys={list((self._executor_info or {}).keys())}, "
@@ -638,19 +645,41 @@ class ReActAgentBuilder:
             store = InMemoryStore()
         return store
 
+    def _prepare_agent_pv_node(self):
+        """构造 PV Node，用于惰性创建/获取持久卷。
+
+        仅在启用 paas_sandbox runtime 时注入真实的 BkPaaSSandboxApi client；
+        否则仍返回 pv_node callable（无 PV 支持），保持图结构一致。
+
+        Returns:
+            pv_node callable
+        """
+        paas_client = None
+        paas_app_code = ""
+        if self._enable_runtime_tool and "paas_sandbox" in self._runtime_types:
+            executor_info = self._executor_info or {}
+            paas_app_code = executor_info.get("app_code", "")
+            if paas_app_code and self._resource_manager is not None:
+                paas_client = self._resource_manager.get_paas_sbx_client(executor_info)
+        return make_pv_node(
+            client=paas_client,
+            app_code=paas_app_code,
+            resource_manager=self._resource_manager,
+        )
+
     @staticmethod
-    def _should_continue(state: dict) -> Literal["tools", "end"]:
+    def _should_continue(state: dict) -> Literal["pv_node", "end"]:
         """条件路由函数：决定 model 节点后的下一步。
 
         检查模型输出是否包含 tool_calls：
-        - 如果有 tool_calls，路由到 tools 节点执行工具
+        - 如果有 tool_calls，路由到 pv_node 节点（惰性创建 PV）
         - 否则路由到 end 结束对话
 
         Args:
             state: 当前状态字典
 
         Returns:
-            "tools" 或 "end"
+            "pv_node" 或 "end"
         """
         messages = state.get("messages", [])
         if not messages:
@@ -660,7 +689,7 @@ class ReActAgentBuilder:
 
         # 检查最后一条消息是否是 AIMessage 并且包含 tool_calls
         if isinstance(last_message, AIMessage) and last_message.tool_calls:
-            return "tools"
+            return "pv_node"
 
         return "end"
 
@@ -680,13 +709,14 @@ class ReActAgentBuilder:
         knowledge_node,
         model_node,
         tool_node,
+        pv_node=None,
     ) -> Tuple["Runnable", RunnableConfig]:
         """构建 LangGraph 图。
 
         图结构：
         - 无知识库配置: START → model → tools/END
         - 有知识库配置: START → knowledge → model → tools/END
-        - 如果有工具: model → (条件) → tools / END, tools → model
+        - 如果有工具: model → (条件) → pv_node / END, pv_node → tools → model
 
         Args:
             knowledge_settings: 知识库检索配置
@@ -702,6 +732,7 @@ class ReActAgentBuilder:
             knowledge_node: 知识库节点
             model_node: 模型节点
             tool_node: 工具节点
+            pv_node: PV 节点 callable，由 _prepare_agent_pv_node 构造
 
         Returns:
             (CompiledGraph, RunnableConfig) 元组
@@ -711,14 +742,14 @@ class ReActAgentBuilder:
         # 如果配置了知识库,添加 knowledge 节点
         if knowledge_node:
             graph.add_node("knowledge", knowledge_node)
-            graph.add_edge(START, "knowledge")
 
         # 添加模型节点
         graph.add_node("model", model_node)
 
         # 根据是否有知识库节点,连接不同的边
         if knowledge_node:
-            # 有知识库: knowledge → model
+            # 有知识库: START → knowledge → model
+            graph.add_edge(START, "knowledge")
             graph.add_edge("knowledge", "model")
         else:
             # 无知识库: START → model
@@ -726,17 +757,19 @@ class ReActAgentBuilder:
 
         # 如果有工具，添加工具节点和条件路由
         if tool_node:
+            graph.add_node("pv_node", pv_node)
             graph.add_node("tools", tool_node)
-            # model → (should_continue) → tools / end
+            # model → (should_continue) → pv_node / end
             graph.add_conditional_edges(
                 "model",
                 self._should_continue,
                 {
-                    "tools": "tools",
+                    "pv_node": "pv_node",
                     "end": END,
                 },
             )
-            # tools → model (形成 ReAct 循环)
+            # pv_node → tools → model (形成 ReAct 循环)
+            graph.add_edge("pv_node", "tools")
             graph.add_edge("tools", "model")
         else:
             # 无工具时直接结束
@@ -784,14 +817,12 @@ class ReActAgentBuilder:
 
         # Skills / runtime tools setup (must run before preparing tools)
         self._skill_registry = None
-        self._runtime_backend_resolver = None
 
-        if self._enable_runtime_tool or self._enable_skills:
-            from aidev_agent.core.tools.runtime_tools import RuntimeBackendResolver
-
-            # NOTE: 此处仅创建 resolver，不自动注入任何默认 backend。
-            # 运行时后端应由调用方显式注册，或由 skills 分支为每个 skill 单独注册。
-            self._runtime_backend_resolver = RuntimeBackendResolver(default_runtime="local")
+        if self._enable_runtime_tool and self._runtime_backend_resolver is None:
+            raise ValueError(
+                "ReActAgentBuilder 构建失败：启用了 runtime_tool 但未提供 runtime_backend_resolver，"
+                "请通过 AgentExecutorKwargs.runtime_backend_resolver 传入"
+            )
 
         if self._enable_skills:
             self._prepare_skills()
@@ -828,6 +859,9 @@ class ReActAgentBuilder:
         # 初始化 Store
         store = self._prepare_store(store=self._store, file_store=self._file_store)
 
+        # 构造 PV Node
+        pv_node = self._prepare_agent_pv_node()
+
         # 定制 ReAct chat prompt template
         state_schema = self._state_schema or DefaultState
 
@@ -846,6 +880,7 @@ class ReActAgentBuilder:
             knowledge_node=knowledge_node,
             model_node=model_node,
             tool_node=tool_node,
+            pv_node=pv_node,
         )
 
         # 添加适配器

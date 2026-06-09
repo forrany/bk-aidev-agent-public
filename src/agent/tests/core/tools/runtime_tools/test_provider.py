@@ -15,6 +15,7 @@ from aidev_agent.core.tools.runtime_tools.provider import (
     DEFAULT_READ_LIMIT,
     DEFAULT_READ_OFFSET,
     RuntimeBackendResolver,
+    _get_sensitive_values,
     get_client_tools_with_runtime,
     get_edit_file_tool,
     get_execute_tool,
@@ -130,7 +131,7 @@ class TestRuntimeBackendResolver:
             def __init__(self, label: str):
                 self.label = label
 
-            def execute(self, command: str) -> ExecuteResult:
+            def execute(self, command: str, **kwargs) -> ExecuteResult:
                 return ExecuteResult(output=f"{self.label}:{command}", exit_code=0, truncated=False)
 
         provider = RuntimeBackendResolver(default_runtime="sandbox_1")
@@ -149,7 +150,7 @@ class TestRuntimeBackendResolver:
 
     def test_invalid_runtime_returns_error_string(self):
         class FakeBackend:
-            def execute(self, command: str) -> ExecuteResult:
+            def execute(self, command: str, **kwargs) -> ExecuteResult:
                 return ExecuteResult(output=command, exit_code=0, truncated=False)
 
         provider = RuntimeBackendResolver(default_runtime="local")
@@ -845,3 +846,303 @@ class TestEmptyOutputHint:
             result = tool.invoke({"command": "echo hello", "target_runtime": "local"})
             assert "[harness]" not in result
             assert "hello" in result
+
+
+class TestConfigStateInjection:
+    """测试工具函数 config/state 注入签名。"""
+
+    def test_ls_tool_has_config_param(self):
+        """ls 工具函数签名应包含 config: RunnableConfig 参数（无 Optional）。"""
+        from typing import get_type_hints
+
+        from langchain_core.runnables import RunnableConfig
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            resolver = RuntimeBackendResolver(default_runtime="local")
+            resolver.register_runtime("local", backend)
+            tool = get_ls_tool(resolver)
+
+            hints = get_type_hints(tool.func, include_extras=True)
+            assert "config" in hints, "ls 工具函数缺少 config 参数"
+            assert hints["config"] is RunnableConfig, f"config 类型应为 RunnableConfig，实际为 {hints['config']}"
+
+    def test_ls_tool_has_state_param(self):
+        """ls 工具函数签名应包含 state: Annotated[dict, InjectedState] 参数。"""
+        from typing import get_type_hints
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            resolver = RuntimeBackendResolver(default_runtime="local")
+            resolver.register_runtime("local", backend)
+            tool = get_ls_tool(resolver)
+
+            hints = get_type_hints(tool.func, include_extras=True)
+            assert "state" in hints, "ls 工具函数缺少 state 参数"
+
+    def test_execute_tool_has_config_state_params(self):
+        """execute 工具函数签名应包含 config 和 state 参数。"""
+        from typing import get_type_hints
+
+        from langchain_core.runnables import RunnableConfig
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            resolver = RuntimeBackendResolver(default_runtime="local")
+            resolver.register_runtime("local", backend)
+            tool = get_execute_tool(resolver, enable_security=False)
+
+            hints = get_type_hints(tool.func, include_extras=True)
+            assert "config" in hints
+            assert hints["config"] is RunnableConfig
+            assert "state" in hints
+
+    def test_async_execute_has_config_state_params(self):
+        """async_execute 签名应与 execute 完全一致。"""
+        from typing import get_type_hints
+
+        from langchain_core.runnables import RunnableConfig
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            resolver = RuntimeBackendResolver(default_runtime="local")
+            resolver.register_runtime("local", backend)
+            tool = get_execute_tool(resolver, enable_security=False)
+
+            # 验证 coroutine (async_execute) 的签名
+            assert tool.coroutine is not None, "execute 工具缺少 coroutine"
+            sync_hints = get_type_hints(tool.func, include_extras=True)
+            async_hints = get_type_hints(tool.coroutine, include_extras=True)
+            assert "config" in async_hints
+            assert async_hints["config"] is RunnableConfig
+            assert "state" in async_hints
+            # 确保同步/异步 config 类型一致
+            assert sync_hints["config"] is async_hints["config"]
+
+    def test_tool_invoke_backward_compatible(self):
+        """工具不传 config/state 时仍可正常调用（向后兼容）。"""
+        with TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "test.txt").write_text("hello")
+            backend = FilesystemBackend(root_dir=tmpdir)
+            resolver = RuntimeBackendResolver(default_runtime="local")
+            resolver.register_runtime("local", backend)
+            tool = get_ls_tool(resolver)
+
+            # LangChain 自动注入空 RunnableConfig，不传 config/state 不会报错
+            result = tool.invoke({"path": "/", "target_runtime": "local"})
+            assert isinstance(result, str)
+
+    def test_all_tools_have_config_state(self):
+        """所有 7 个工具函数均应包含 config 和 state 参数。"""
+        from typing import get_type_hints
+
+        from langchain_core.runnables import RunnableConfig
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            resolver = RuntimeBackendResolver(default_runtime="local")
+            resolver.register_runtime("local", backend)
+
+            tools = get_client_tools_with_runtime(resolver, enable_security=False)
+            for tool in tools:
+                hints = get_type_hints(tool.func, include_extras=True)
+                assert "config" in hints, f"{tool.name} 缺少 config 参数"
+                assert hints["config"] is RunnableConfig, f"{tool.name} 的 config 类型应为 RunnableConfig"
+                assert "state" in hints, f"{tool.name} 缺少 state 参数"
+
+
+class TestGetSensitiveValues:
+    """测试 _get_sensitive_values 融合逻辑。"""
+
+    def test_with_backend_having_extra(self):
+        """_get_sensitive_values 应正确融合全局和额外敏感值。"""
+        from unittest.mock import MagicMock
+
+        from aidev_agent.config import settings
+
+        original = settings.SBX_SENSITIVE_VALUES
+        settings.SBX_SENSITIVE_VALUES = ["global1", "global2"]
+        try:
+            backend = MagicMock()
+            backend.extra_sensitive_values = ["extra1", "extra2"]
+            result = _get_sensitive_values(backend)
+            assert result == ["global1", "global2", "extra1", "extra2"]
+        finally:
+            settings.SBX_SENSITIVE_VALUES = original
+
+    def test_without_extra(self):
+        """_get_sensitive_values 对无 extra_sensitive_values 的 backend 应返回全局值。"""
+        from aidev_agent.config import settings
+
+        original = settings.SBX_SENSITIVE_VALUES
+        settings.SBX_SENSITIVE_VALUES = ["global1"]
+        try:
+            # FilesystemBackend 没有 extra_sensitive_values 属性
+            with TemporaryDirectory() as tmpdir:
+                backend = FilesystemBackend(root_dir=tmpdir)
+                result = _get_sensitive_values(backend)
+                assert result == ["global1"]
+        finally:
+            settings.SBX_SENSITIVE_VALUES = original
+
+    def test_with_error_string(self):
+        """_get_sensitive_values 对错误字符串（resolve_backend 返回 str）应返回全局值。"""
+        from aidev_agent.config import settings
+
+        original = settings.SBX_SENSITIVE_VALUES
+        settings.SBX_SENSITIVE_VALUES = ["global1"]
+        try:
+            result = _get_sensitive_values("Error: Unknown runtime")
+            assert result == ["global1"]
+        finally:
+            settings.SBX_SENSITIVE_VALUES = original
+
+    def test_backend_with_extra_sensitive_values_redacts(self):
+        """PaasSandboxBackend 的 extra_sensitive_values 应与 SBX_SENSITIVE_VALUES 融合脱敏。"""
+        from unittest.mock import MagicMock
+
+        from aidev_agent.config import settings
+        from aidev_agent.core.tools.runtime_tools.paas_backend import PaasSandboxBackend
+
+        original = settings.SBX_SENSITIVE_VALUES
+        settings.SBX_SENSITIVE_VALUES = ["global_secret"]
+        try:
+            mock_backend = MagicMock(spec=PaasSandboxBackend)
+            mock_backend.extra_sensitive_values = ["skill_secret"]
+            mock_backend.execute.return_value = ExecuteResult(
+                output="global_secret and skill_secret exposed", exit_code=0, truncated=False
+            )
+
+            provider = RuntimeBackendResolver(default_runtime="sandbox")
+            provider.register_runtime("sandbox", mock_backend)
+            tool = get_execute_tool(provider, enable_security=False)
+
+            result = tool.invoke({"command": "echo test", "target_runtime": "sandbox"})
+            assert "global_secret" not in result
+            assert "skill_secret" not in result
+            assert "__BKAI_AGENT_REDACTED__" in result
+        finally:
+            settings.SBX_SENSITIVE_VALUES = original
+
+
+class TestExtractPaasParamsEnvsMask:
+    """测试 _extract_paas_params 的 envs_mask 解析。"""
+
+    @staticmethod
+    def _get_extract_paas_params():
+        from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
+
+        return _extract_paas_params
+
+    def test_envs_mask_extracts_sensitive_values(self):
+        """envs_mask 指定的 env 变量值应被提取到 extra_sensitive_values。"""
+        _extract_paas_params = self._get_extract_paas_params()
+
+        skill = {
+            "name": "test_skill",
+            "metadata": {
+                "bkai_paas_sandbox": {
+                    "image": "test-image:1.0",
+                    "envs": {
+                        "API_KEY": "my-secret-key",
+                        "NORMAL_VAR": "normal-value",
+                        "DB_PASSWORD": "db-pass-123",
+                    },
+                    "envs_mask": ["API_KEY", "DB_PASSWORD"],
+                }
+            },
+        }
+        result = _extract_paas_params(skill, {"executor": "test_user"})
+        assert result["extra_sensitive_values"] == ["my-secret-key", "db-pass-123"]
+        assert "normal-value" not in result["extra_sensitive_values"]
+
+    def test_envs_mask_with_missing_key(self):
+        """envs_mask 中的 key 不在 envs 中时不应报错。"""
+        _extract_paas_params = self._get_extract_paas_params()
+
+        skill = {
+            "name": "test_skill",
+            "metadata": {
+                "bkai_paas_sandbox": {
+                    "image": "test-image:1.0",
+                    "envs": {"API_KEY": "secret123"},
+                    "envs_mask": ["API_KEY", "NONEXISTENT"],
+                }
+            },
+        }
+        result = _extract_paas_params(skill, {})
+        assert result["extra_sensitive_values"] == ["secret123"]
+
+    def test_envs_mask_with_empty_value(self):
+        """envs_mask 对应的 env 值为空字符串时应被过滤。"""
+        _extract_paas_params = self._get_extract_paas_params()
+
+        skill = {
+            "name": "test_skill",
+            "metadata": {
+                "bkai_paas_sandbox": {
+                    "image": "test-image:1.0",
+                    "envs": {"API_KEY": "secret", "EMPTY_VAR": ""},
+                    "envs_mask": ["API_KEY", "EMPTY_VAR"],
+                }
+            },
+        }
+        result = _extract_paas_params(skill, {})
+        assert result["extra_sensitive_values"] == ["secret"]
+
+    def test_envs_mask_empty_or_missing(self):
+        """envs_mask 为空列表或不存在时，extra_sensitive_values 应为空列表。"""
+        _extract_paas_params = self._get_extract_paas_params()
+
+        # 空 envs_mask
+        skill1 = {
+            "name": "test_skill",
+            "metadata": {
+                "bkai_paas_sandbox": {
+                    "image": "test-image:1.0",
+                    "envs": {"API_KEY": "secret"},
+                    "envs_mask": [],
+                }
+            },
+        }
+        result1 = _extract_paas_params(skill1, {})
+        assert result1["extra_sensitive_values"] == []
+
+        # 无 envs_mask
+        skill2 = {
+            "name": "test_skill",
+            "metadata": {
+                "bkai_paas_sandbox": {
+                    "image": "test-image:1.0",
+                    "envs": {"API_KEY": "secret"},
+                }
+            },
+        }
+        result2 = _extract_paas_params(skill2, {})
+        assert result2["extra_sensitive_values"] == []
+
+
+class TestPaasSandboxBackendExtraSensitiveValues:
+    """测试 PaasSandboxBackend 的 extra_sensitive_values 属性。"""
+
+    def test_default_extra_sensitive_values(self):
+        """不传 extra_sensitive_values 时默认为空列表。"""
+        from unittest.mock import patch
+
+        from aidev_agent.core.tools.runtime_tools.paas_backend import PaasSandboxBackend
+
+        with patch.object(PaasSandboxBackend, "__init__", lambda self, **kw: None):
+            backend = PaasSandboxBackend.__new__(PaasSandboxBackend)
+            backend._extra_sensitive_values = []
+            assert backend.extra_sensitive_values == []
+
+    def test_explicit_extra_sensitive_values(self):
+        """显式传入 extra_sensitive_values 时应可读取。"""
+        from unittest.mock import patch
+
+        from aidev_agent.core.tools.runtime_tools.paas_backend import PaasSandboxBackend
+
+        with patch.object(PaasSandboxBackend, "__init__", lambda self, **kw: None):
+            backend = PaasSandboxBackend.__new__(PaasSandboxBackend)
+            backend._extra_sensitive_values = ["secret1", "secret2"]
+            assert backend.extra_sensitive_values == ["secret1", "secret2"]

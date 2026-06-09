@@ -47,6 +47,27 @@ class Client(BaseClient):
         path="agent_sandbox/sandboxes/{sandbox_id}/files/download",
     )
 
+    list_agent_sandbox_volumes = bind_property(
+        Operation,
+        name="list_agent_sandbox_volumes",
+        method="GET",
+        path="agent_sandbox/applications/{app_code}/volumes/",
+    )
+
+    create_agent_sandbox_volume = bind_property(
+        Operation,
+        name="create_agent_sandbox_volume",
+        method="POST",
+        path="agent_sandbox/applications/{app_code}/volumes/",
+    )
+
+    delete_agent_sandbox_volume = bind_property(
+        Operation,
+        name="delete_agent_sandbox_volume",
+        method="DELETE",
+        path="agent_sandbox/applications/{app_code}/volumes/{volume_id}",
+    )
+
 
 class BkPaaSSandboxApi:
     _api_name = "paasv3" if settings.RUN_VER == "ieod" else "bkpaas3"

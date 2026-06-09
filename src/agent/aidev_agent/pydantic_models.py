@@ -347,6 +347,14 @@ class AgentExecutorKwargs(BaseModel):
         "缺省时 ReActAgentBuilder 回退到全局 resource_manager() 工厂。",
     )
 
+    # 运行时后端解析器（RuntimeBackendResolver 实例）
+    runtime_backend_resolver: Optional[Any] = Field(
+        default=None,
+        description="运行时后端解析器实例（RuntimeBackendResolver）；"
+        "由 ChatAgentBuilder 构造并传入，用于管理沙箱资源生命周期。"
+        "缺省时若 enable_runtime_tool=True，build() 将抛出异常。",
+    )
+
 
 class AgentConfig(BaseModel):
     """智能体配置"""

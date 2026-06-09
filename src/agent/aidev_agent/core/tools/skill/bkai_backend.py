@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
 """
-BK-AIDev 技能提供者 - 从 agent_info.related_skills 获取技能。
+BK-AIDev 技能后端 - 从 agent_info.related_skills 获取技能。
 
-此模块实现 SkillProvider Protocol，支持从蓝鲸 AIDev 平台
+此模块实现 SkillProviderBackend Protocol，支持从蓝鲸 AIDev 平台
 的 related_skills 列表中发现技能，并通过 API 获取完整指引。
 """
 
@@ -13,13 +13,14 @@ import logging
 import re
 from typing import Any
 
-from aidev_agent.core.tools.skill.types import SkillOptions
-from aidev_agent.core.tools.skill.utils import (
+from aidev_agent.packages.resource_manager import ResourceManagerProtocol
+
+from .types import SkillOptions
+from .utils import (
     apply_optional_frontmatter_fields,
     extract_instructions,
     parse_frontmatter,
 )
-from aidev_agent.packages.resource_manager import ResourceManagerProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +28,11 @@ logger = logging.getLogger(__name__)
 _PATH_PATTERN = re.compile(r"^api://([^/]+)/(.+)$")
 
 
-class BKAiProvider:
+class BkAiBackend:
     """
-    BK-AIDev 技能提供者 - 从预配置技能列表和 API 集成。
+    BK-AIDev 技能后端 - 从预配置技能列表和 API 集成。
 
-    该提供者从 Agent 构建时传入的 related_skills 列表（来自 agent_info）
+    该后端从 Agent 构建时传入的 related_skills 列表（来自 agent_info）
     直接构建技能元数据。在 ``convert_to_options`` 中会调用 API 获取
     frontmatter 可选字段（license, allowed_tools 等），结果通过类级别缓存
     避免重复请求。
@@ -62,7 +63,7 @@ class BKAiProvider:
         related_skills: list[dict[str, Any]],
     ) -> None:
         """
-        初始化 BKAiProvider。
+        初始化 BkAiBackend。
 
         Parameters
         ----------
@@ -84,9 +85,9 @@ class BKAiProvider:
         self.skill_options: list[SkillOptions] = self._build_skill_options(related_skills)
 
     def __repr__(self) -> str:
-        return f"BKAiProvider(skills={len(self.related_skills)})"
+        return f"BkAiBackend(skills={len(self.related_skills)})"
 
-    # -- SkillProvider Protocol -----------------------------------------------
+    # -- SkillProviderBackend Protocol -----------------------------------------------
 
     def discover(self) -> list[SkillOptions]:
         """
@@ -170,9 +171,9 @@ class BKAiProvider:
         """
         cache_key = (str(skill_id), str(version))
 
-        if cache_key in BKAiProvider._bkai_skill_cache:
+        if cache_key in BkAiBackend._bkai_skill_cache:
             logger.debug(f"使用缓存数据: skill_id={skill_id}, v={version}")
-            return BKAiProvider._bkai_skill_cache[cache_key]
+            return BkAiBackend._bkai_skill_cache[cache_key]
 
         logger.debug(f"调用 API 获取数据: skill_id={skill_id}, v={version}")
         api_response = self.client.retrieve_skill(skill_id=skill_id, version=version)
@@ -185,7 +186,7 @@ class BKAiProvider:
         api_response["_cache_instructions"] = instructions
         api_response["_cache_frontmatter"] = frontmatter or {}
 
-        BKAiProvider._bkai_skill_cache[cache_key] = api_response
+        BkAiBackend._bkai_skill_cache[cache_key] = api_response
         logger.debug(f"已缓存技能数据: skill_id={skill_id}, v={version} (instructions_len={len(instructions)})")
         return api_response
 
@@ -246,7 +247,7 @@ class BKAiProvider:
         skill_description: str = skill_data.get("skill_description") or skill_data.get("description", "")
         version = skill_data.get("version", "latest")
 
-        # 验证必需字段
+        # 验证必需字段（skill_id 从 1 开始，0 即为非法值）
         if not all([skill_id, skill_name, skill_description]):
             logger.debug(
                 f"技能记录缺少必需字段: id={skill_id}, skill_name={skill_name}, skill_description={skill_description}"
@@ -321,7 +322,7 @@ class BKAiProvider:
         """
         清空类级别的技能数据缓存。
 
-        所有 BKAiProvider 实例共享此缓存，清空后
+        所有 BkAiBackend 实例共享此缓存，清空后
         下次访问会重新从 API 拉取。
 
         在以下场景下使用：
@@ -329,4 +330,4 @@ class BKAiProvider:
         - 长期运行需要定期清理内存
         """
         cls._bkai_skill_cache.clear()
-        logger.info("已清空 BKAiProvider 类级别缓存")
+        logger.info("已清空 BkAiBackend 类级别缓存")

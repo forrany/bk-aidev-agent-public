@@ -33,15 +33,21 @@ to the current version of the project delivered to anyone in the future.
 
 from __future__ import annotations
 
-from typing import Annotated, Callable, Literal
+import contextlib
+import logging
+from typing import Annotated, Literal
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
+from langgraph.prebuilt import InjectedState
 
 from aidev_agent.config import settings
 
 from .security import redact_output, validate_path
 from .types import RuntimeBackend
 from .utils import format_grep_matches, truncate_if_too_long
+
+logger = logging.getLogger(__name__)
 
 # ========== 默认配置 ==========
 
@@ -59,6 +65,14 @@ def _ensure_non_empty(value: str) -> str:
     if not value or not value.strip():
         return _EMPTY_OUTPUT_HINT
     return value
+
+
+def _get_sensitive_values(backend: RuntimeBackend | str) -> list[str]:
+    """融合 SBX_SENSITIVE_VALUES 与 backend 的额外敏感值。"""
+    values = list(settings.SBX_SENSITIVE_VALUES)
+    if hasattr(backend, "extra_sensitive_values"):
+        values.extend(backend.extra_sensitive_values)
+    return values
 
 
 # ========== 工具描述常量 ==========
@@ -150,14 +164,6 @@ EXECUTE_TOOL_DESCRIPTION = """执行 shell 命令。
 """
 
 
-def _get_backend(backend: RuntimeBackend | Callable[[], RuntimeBackend]) -> RuntimeBackend:
-    """从后端实例或工厂函数获取解析后的后端实例。"""
-
-    if callable(backend):
-        return backend()
-    return backend
-
-
 class RuntimeBackendResolver:
     """运行时中间件（运行时解析器）。
 
@@ -173,8 +179,9 @@ class RuntimeBackendResolver:
     """
 
     def __init__(self, default_runtime: str = "local") -> None:
-        self._backends: dict[str, RuntimeBackend | Callable[[], RuntimeBackend]] = {}
+        self._backends: dict[str, RuntimeBackend] = {}
         self._default_runtime = default_runtime
+        self._exit_stack = contextlib.ExitStack()
 
     @property
     def default_runtime(self) -> str:
@@ -185,13 +192,13 @@ class RuntimeBackendResolver:
     def register_runtime(
         self,
         name: str,
-        backend: RuntimeBackend | Callable[[], RuntimeBackend],
+        backend: RuntimeBackend,
     ) -> "RuntimeBackendResolver":
         """注册一个命名运行时后端。
 
         Args:
             name: 运行时名称（如 "local"、"sandbox_1"）
-            backend: 对应运行时的后端实例（或返回后端实例的工厂函数）
+            backend: 对应运行时的后端实例
 
         Returns:
             self（便于链式调用）
@@ -224,7 +231,30 @@ class RuntimeBackendResolver:
             available = ", ".join(sorted(self._backends.keys()))
             return f"Error: Unknown runtime '{resolved_runtime}'. Available runtimes: {available or '(none)'}"
 
-        return _get_backend(self._backends[resolved_runtime])
+        backend = self._backends[resolved_runtime]
+        # 若后端尚未注册到 ExitStack，则注册以便统一关闭
+        if isinstance(backend, RuntimeBackend):
+            self._exit_stack.enter_context(backend)
+        return backend
+
+    def close(self) -> None:
+        """关闭所有已解析后端的远程资源。
+
+        通过 ExitStack 统一关闭所有注册的 RuntimeBackend 实例。
+        对于 RuntimeBackend 子类，将调用其 ``close()`` 方法
+        （PaasSandboxBackend 和 E2BSandboxBackend 的 ``close()`` 委托给 ``kill()``）。
+        FilesystemBackend 的 ``close()`` 为空操作。
+
+        此方法是幂等的 — 多次调用不会产生副作用。
+        适用于会话结束、进程退出前等需要显式释放远程沙箱资源的场景。
+        """
+        try:
+            self._exit_stack.close()
+        except Exception:
+            logger.warning("RuntimeBackendResolver.close: 关闭后端资源失败", exc_info=True)
+        finally:
+            # 关闭后重建 ExitStack，使 close() 幂等
+            self._exit_stack = contextlib.ExitStack()
 
 
 # ========== 工具生成器函数 ==========
@@ -236,18 +266,20 @@ def get_ls_tool(resolver: RuntimeBackendResolver, custom_description: str | None
     def ls(
         path: Annotated[str, "Absolute path to the directory to list. Must be absolute, not relative."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
     ) -> str:
         """列出目录中的文件。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(path)
-        infos = resolved_backend.ls_info(validated_path)
+        infos = resolved_backend.ls_info(validated_path, config=config, state=state)
         paths = [fi.get("path", "") for fi in infos]
         result = truncate_if_too_long(paths)
-        return redact_output(_ensure_non_empty(str(result)), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(_ensure_non_empty(str(result)), _get_sensitive_values(resolved_backend))
 
     ls.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -266,6 +298,8 @@ def get_read_file_tool(resolver: RuntimeBackendResolver, custom_description: str
     def read_file(
         file_path: Annotated[str, "Absolute path to the file to read. Must be absolute, not relative."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
         offset: Annotated[int, "Line number to start reading from (0-indexed). Use for pagination of large files."] = (
             DEFAULT_READ_OFFSET
         ),
@@ -277,14 +311,14 @@ def get_read_file_tool(resolver: RuntimeBackendResolver, custom_description: str
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(file_path)
-        result = resolved_backend.read(validated_path, offset=offset, limit=limit)
+        result = resolved_backend.read(validated_path, offset=offset, limit=limit, config=config, state=state)
         lines = result.splitlines(keepends=True)
         if len(lines) > limit:
             lines = lines[:limit]
-        return redact_output(_ensure_non_empty("".join(lines)), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(_ensure_non_empty("".join(lines)), _get_sensitive_values(resolved_backend))
 
     read_file.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -304,18 +338,20 @@ def get_write_file_tool(resolver: RuntimeBackendResolver, custom_description: st
         file_path: Annotated[str, "Absolute path where the file should be created. Must be absolute, not relative."],
         content: Annotated[str, "The text content to write to the file. This parameter is required."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
     ) -> str:
         """创建新文件。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(file_path)
-        res = resolved_backend.write(validated_path, content)
+        res = resolved_backend.write(validated_path, content, config=config, state=state)
         if res.error:
-            return redact_output(_ensure_non_empty(res.error), settings.SBX_SENSITIVE_VALUES)
-        return redact_output(_ensure_non_empty(f"Updated file {res.path}"), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(res.error), _get_sensitive_values(resolved_backend))
+        return redact_output(_ensure_non_empty(f"Updated file {res.path}"), _get_sensitive_values(resolved_backend))
 
     write_file.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -338,6 +374,8 @@ def get_edit_file_tool(resolver: RuntimeBackendResolver, custom_description: str
         ],
         new_string: Annotated[str, "The text to replace old_string with. Must be different from old_string."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
         replace_all: Annotated[
             bool, "If True, replace all occurrences of old_string. If False (default), old_string must be unique."
         ] = (False),
@@ -346,15 +384,17 @@ def get_edit_file_tool(resolver: RuntimeBackendResolver, custom_description: str
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(file_path)
-        res = resolved_backend.edit(validated_path, old_string, new_string, replace_all=replace_all)
+        res = resolved_backend.edit(
+            validated_path, old_string, new_string, replace_all=replace_all, config=config, state=state
+        )
         if res.error:
-            return redact_output(_ensure_non_empty(res.error), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(res.error), _get_sensitive_values(resolved_backend))
         return redact_output(
             _ensure_non_empty(f"Successfully replaced {res.occurrences} instance(s) of the string in '{res.path}'"),
-            settings.SBX_SENSITIVE_VALUES,
+            _get_sensitive_values(resolved_backend),
         )
 
     edit_file.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
@@ -374,18 +414,20 @@ def get_glob_tool(resolver: RuntimeBackendResolver, custom_description: str | No
     def glob(
         pattern: Annotated[str, "Glob pattern to match files (e.g., '**/*.py', '*.txt', '/subdir/**/*.md')."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
         path: Annotated[str, "Base directory to search from. Defaults to root '/'."] = "/",
     ) -> str:
         """查找匹配 glob 模式的文件。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
-        infos = resolved_backend.glob_info(pattern, path=path)
+        infos = resolved_backend.glob_info(pattern, path=path, config=config, state=state)
         paths = [fi.get("path", "") for fi in infos]
         result = truncate_if_too_long(paths)
-        return redact_output(_ensure_non_empty(str(result)), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(_ensure_non_empty(str(result)), _get_sensitive_values(resolved_backend))
 
     glob.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -404,6 +446,8 @@ def get_grep_tool(resolver: RuntimeBackendResolver, custom_description: str | No
     def grep(
         pattern: Annotated[str, "Text pattern to search for (literal string, not regex)."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
         path: Annotated[str | None, "Directory to search in. Defaults to current working directory."] = None,
         glob: Annotated[str | None, "Glob pattern to filter which files to search (e.g., '*.py')."] = None,
         output_mode: Annotated[
@@ -415,13 +459,15 @@ def get_grep_tool(resolver: RuntimeBackendResolver, custom_description: str | No
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
-        raw = resolved_backend.grep_raw(pattern, path=path, glob=glob)
+        raw = resolved_backend.grep_raw(pattern, path=path, glob=glob, config=config, state=state)
         if isinstance(raw, str):
-            return redact_output(_ensure_non_empty(raw), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(raw), _get_sensitive_values(resolved_backend))
         formatted = format_grep_matches(raw, output_mode)
-        return redact_output(_ensure_non_empty(truncate_if_too_long(formatted)), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(
+            _ensure_non_empty(truncate_if_too_long(formatted)), _get_sensitive_values(resolved_backend)
+        )
 
     grep.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
 
@@ -458,52 +504,56 @@ def get_execute_tool(
     def execute(
         command: Annotated[str, "Shell command to execute in the sandbox environment."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
     ) -> str:
         """在沙箱环境中执行 shell 命令。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         # 【新增】安全校验：命令白名单检查
         if enable_security:
             result = validate_command(command)
             if not result.is_allowed:
                 return redact_output(
-                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), settings.SBX_SENSITIVE_VALUES
+                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), _get_sensitive_values(resolved_backend)
                 )
 
-        result = resolved_backend.execute(command)
+        result = resolved_backend.execute(command, config=config, state=state)
 
         parts = [result.output]
         if result.truncated:
             parts.append("\n[Output was truncated due to size limits]")
-        return redact_output(_ensure_non_empty("".join(parts)), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(_ensure_non_empty("".join(parts)), _get_sensitive_values(resolved_backend))
 
     async def async_execute(
         command: Annotated[str, "Shell command to execute in the sandbox environment."],
         target_runtime: str,
+        config: RunnableConfig,
+        state: Annotated[dict, InjectedState] = None,
     ) -> str:
         """异步执行 shell 命令。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
         if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), settings.SBX_SENSITIVE_VALUES)
+            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         # 【新增】安全校验：命令白名单检查
         if enable_security:
             result = validate_command(command)
             if not result.is_allowed:
                 return redact_output(
-                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), settings.SBX_SENSITIVE_VALUES
+                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), _get_sensitive_values(resolved_backend)
                 )
 
-        result = await resolved_backend.aexecute(command)
+        result = await resolved_backend.aexecute(command, config=config, state=state)
 
         parts = [result.output]
         if result.truncated:
             parts.append("\n[Output was truncated due to size limits]")
-        return redact_output(_ensure_non_empty("".join(parts)), settings.SBX_SENSITIVE_VALUES)
+        return redact_output(_ensure_non_empty("".join(parts)), _get_sensitive_values(resolved_backend))
 
     execute.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
     async_execute.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
