@@ -80,7 +80,9 @@ export type BkFlowNode = {
   loop: number;
   name: string;
   retry: number;
+  retryable?: boolean; // 是否可重试
   skip: boolean;
+  skippable?: boolean; // 是否可跳过
   start_time: string;
   state: string;
   tab_order?: number; // 排序 越小 越在前
