@@ -329,6 +329,7 @@ export const useAgent = (mediator: IMediatorModule, protocol: ISSEProtocol) => {
     reset,
     pollResumeSession,
     userOperationStreamRequest,
+    streamRequest,
   };
 };
 
