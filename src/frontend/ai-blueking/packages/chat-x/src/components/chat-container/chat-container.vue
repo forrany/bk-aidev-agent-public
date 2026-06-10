@@ -315,7 +315,7 @@
   import ContentRender from '../chat-content/content-render/content-render.vue';
   import ChatInput, { type ChatInputEmits, type ChatInputProps } from '../chat-input/chat-input.vue';
   import InputInfoAlert from '../chat-input/input-info-alert.vue';
-  import { buildUserQuestionFreeTextResume, UserQuestionCard } from '../chat-message/interrupt-message/user-question';
+  import { buildSkipResumePayload, UserQuestionCard } from '../chat-message/interrupt-message/user-question';
   import MessageContainer, {
     type MessageContainerEmits,
     type MessageContainerProps,
@@ -560,12 +560,16 @@
    */
   const handleSendMessage = async (content: UserMessage['content'], docSchema: TagSchema) => {
     const activeQuestion = activeUserQuestionInterrupt.value;
-    if (props.onInterruptResume && activeQuestion && typeof content === 'string' && content.trim()) {
-      await props.onInterruptResume(buildUserQuestionFreeTextResume(activeQuestion, content.trim()), activeQuestion);
-      handleUpdateModelValue('', []);
-      return;
-    }
-    return props.onSendMessage?.(content, docSchema);
+    return props.onSendMessage?.(
+      content,
+      docSchema,
+      activeQuestion
+        ? {
+            payload: buildSkipResumePayload(activeQuestion), // 跳过中断时回传空答案
+            interrupt: activeQuestion, // 跳过中断时回传中断对象
+          }
+        : undefined,
+    );
   };
 
   const handleCollapse = () => {
