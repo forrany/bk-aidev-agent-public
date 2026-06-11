@@ -77,6 +77,10 @@ class ResourceManagerProtocol(Protocol):
         """按 skill_id + version 取回技能详情。"""
         ...
 
+    def check_agent_call_permission(self, caller_app_code: str, username: Optional[str] = None, **kwargs) -> dict:
+        """被调方校验主调方智能体调用权限，返回平台 ``data``（含 ``allowed`` 等字段）。"""
+        ...
+
     def construct_tool(self, tool_code: str, **kwargs) -> StructuredTool:
         """按 ``tool_code`` 装配 LangChain ``StructuredTool``（含凭证拼装）。"""
         ...

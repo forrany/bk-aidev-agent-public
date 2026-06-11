@@ -236,6 +236,23 @@ class BaseResourceManager(abc.ABC):
             agent_info=agent_info,
         )
 
+    def check_agent_call_permission(self, caller_app_code: str, username: Optional[str] = None, **kwargs) -> dict:
+        """被调方校验主调方智能体调用权限。
+
+        被调方（当前 resource manager 对应的 app_code）以自身身份调用平台接口，
+        传入主调方智能体 ``caller_app_code``；使用用户通过 ``X-BKAIDEV-USER`` 头透传。
+        返回平台 ``data``（含 ``allowed`` 等字段），调用方据 ``allowed`` 判定是否放行。
+        """
+        headers = dict(kwargs.pop("headers", None) or {})
+        if username:
+            headers["X-BKAIDEV-USER"] = username
+        if headers:
+            kwargs["headers"] = headers
+        client = self.get_client()
+        return client.api.check_agent_call_permission(data={"caller_app_code": caller_app_code}, **kwargs).get(
+            "data", {}
+        )
+
     def retrieve_skill(self, skill_id: str, version: str, **kwargs) -> dict:
         params = kwargs.pop("params", {})
         params["version"] = version

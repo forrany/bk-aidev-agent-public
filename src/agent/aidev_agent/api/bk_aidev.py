@@ -196,6 +196,13 @@ class OpenApiGroup(OperationGroup):
         path="/openapi/aidev/resource/v1/agent/{agent_code}/bind_space/",
     )
 
+    check_agent_call_permission = bind_property(
+        Operation,
+        name="check_agent_call_permission",
+        method="POST",
+        path="/openapi/aidev/resource/v1/agent/call_permission/check/",
+    )
+
     retrieve_resource_v1_prompt = bind_property(
         Operation,
         name="retrieve_resource_v1_prompt",
