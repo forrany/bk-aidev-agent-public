@@ -43,8 +43,14 @@ class AgentBuilder:
         self.session_manager = session_manager or SessionManager(username=username, agent_code=agent_code)
         self.turn_id = turn_id
 
-    def by_session_code(self, session_code: str, *, version: str | None = None) -> ChatCompletionAgent:
-        return self._build_session_agent_for_thread(session_code, version=version)
+    def by_session_code(
+        self,
+        session_code: str,
+        *,
+        version: str | None = None,
+        channel_type: str | None = None,
+    ) -> ChatCompletionAgent:
+        return self._build_session_agent_for_thread(session_code, version=version, channel_type=channel_type)
 
     def by_thread_id(
         self,
@@ -53,6 +59,7 @@ class AgentBuilder:
         *,
         save_content: bool = True,
         version: str | None = None,
+        channel_type: str | None = None,
     ) -> tuple[ChatCompletionAgent, str]:
         session_code = self.session_manager.get_or_create_by_thread_id(thread_id)
         if save_content and input_text:
@@ -65,7 +72,11 @@ class AgentBuilder:
             self.turn_id = (
                 (saved.get("property") or {}).get("turn_id") if isinstance(saved, dict) else ""
             ) or self.turn_id
-        return self._build_session_agent_for_thread(session_code, version=version), session_code
+        return self._build_session_agent_for_thread(
+            session_code,
+            version=version,
+            channel_type=channel_type,
+        ), session_code
 
     def by_thread_id_with_chat_history(
         self,
@@ -73,6 +84,7 @@ class AgentBuilder:
         chat_history: list[ChatPrompt],
         *,
         version: str | None = None,
+        channel_type: str | None = None,
     ) -> tuple[ChatCompletionAgent, str]:
         session_code = self.session_manager.get_or_create_by_thread_id(thread_id)
         if chat_history and chat_history[-1].role == PromptRole.USER.value:
@@ -90,9 +102,19 @@ class AgentBuilder:
             ) or self.turn_id
         else:
             self.session_manager.save_chat_history(session_code, chat_history)
-        return self._build_session_agent_for_thread(session_code, version=version), session_code
+        return self._build_session_agent_for_thread(
+            session_code,
+            version=version,
+            channel_type=channel_type,
+        ), session_code
 
-    def _build_session_agent_for_thread(self, session_code: str, *, version: str | None = None) -> ChatCompletionAgent:
+    def _build_session_agent_for_thread(
+        self,
+        session_code: str,
+        *,
+        version: str | None = None,
+        channel_type: str | None = None,
+    ) -> ChatCompletionAgent:
         """SESSION 路径 agent 装配；client 取自 ``AgentHelper.get_client()``（应用态）。"""
         agent_cls = common_agent_factory.get()
         event_handler = AGUISessionWriter(
@@ -108,4 +130,5 @@ class AgentBuilder:
             resource_manager=resource_manager,
             username=self.username,
             version=version,
+            channel_type=channel_type,
         )

@@ -252,6 +252,7 @@ class AgentExecutor:
         input_text: str,
         username: str,
         execute_kwargs: ExecuteKwargs,
+        channel_type: str,
         save_content: bool = True,
     ):
         """通过 ``thread_id`` 统一执行 ChatCompletion 并自动处理会话保存。
@@ -267,6 +268,7 @@ class AgentExecutor:
             input_text=input_text,
             save_content=save_content,
             version=execute_kwargs.version,
+            channel_type=channel_type,
         )
         turn_id = builder.turn_id
         execute_kwargs.session_code = session_code
