@@ -1,8 +1,8 @@
 import logging
+import uuid
 from typing import Any, Callable, List, Optional, cast
 
 from ag_ui.core import BaseEvent
-from blueapps.utils.request_provider import get_local_request_id
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -214,12 +214,21 @@ class AgentInstanceFactory:
         if not session_code:
             return None
 
+        try:
+            # 基于 blueapps 框架提供的 request_provider，中间件会自动维护 request_id
+            from blueapps.utils.request_provider import get_local_request_id
+
+            request_id = get_local_request_id()
+        except ImportError:
+            # 未使用 blueapps 框架时（例如纯 Django 环境），降级为自生成的随机串
+            request_id = uuid.uuid4().hex
+
         metadata = {
             "session_code": session_code,
             "agent_code": agent_code,
             "agent_version": self.version or "",
             "channel_type": channel_type or "",
-            "request_id": get_local_request_id(),
+            "request_id": request_id,
             "llm_code": llm_code,
             "created_by": self.username,
         }
