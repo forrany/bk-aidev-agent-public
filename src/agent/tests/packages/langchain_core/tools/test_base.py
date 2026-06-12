@@ -594,43 +594,48 @@ async def test_mcp_exception_wrapper_tool_exception():
         raise ToolException("Tool error occurred")
 
     wrapper = wrap_mcp_exception(mock_coro)
-    result = await wrapper()
 
-    assert isinstance(result, tuple)
-    assert "[ERROR]" in result[0]
-    assert "MCP工具调用失败" in result[0]
+    with pytest.raises(ToolException) as exc_info:
+        await wrapper()
+
+    assert "[ERROR]" in str(exc_info.value)
+    assert "MCP工具调用失败" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
 async def test_mcp_exception_wrapper_connection_error():
     """测试 wrap_mcp_exception 处理连接错误"""
     from aidev_agent.packages.langchain_core.tools.base import wrap_mcp_exception
+    from langchain_core.tools.base import ToolException
 
     async def mock_coro(*args, **kwargs):
         raise ConnectionError("Connection refused")
 
     wrapper = wrap_mcp_exception(mock_coro)
-    result = await wrapper()
 
-    assert isinstance(result, tuple)
-    assert "[ERROR]" in result[0]
-    assert "连接异常" in result[0]
+    with pytest.raises(ToolException) as exc_info:
+        await wrapper()
+
+    assert "[ERROR]" in str(exc_info.value)
+    assert "连接异常" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
 async def test_mcp_exception_wrapper_timeout_error():
     """测试 wrap_mcp_exception 处理超时错误"""
     from aidev_agent.packages.langchain_core.tools.base import wrap_mcp_exception
+    from langchain_core.tools.base import ToolException
 
     async def mock_coro(*args, **kwargs):
         raise TimeoutError("Request timeout")
 
     wrapper = wrap_mcp_exception(mock_coro)
-    result = await wrapper()
 
-    assert isinstance(result, tuple)
-    assert "[ERROR]" in result[0]
-    assert "超时异常" in result[0]
+    with pytest.raises(ToolException) as exc_info:
+        await wrapper()
+
+    assert "[ERROR]" in str(exc_info.value)
+    assert "超时异常" in str(exc_info.value)
 
 
 def test_make_structured_tool_with_inject_config_and_state():

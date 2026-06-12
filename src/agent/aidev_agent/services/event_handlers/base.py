@@ -471,7 +471,7 @@ class BaseSessionWriter(ABC):
             return
 
         # 映射状态：success -> success, error -> fail
-        platform_status = "fail" if output_message.status == "error" else "complete"
+        platform_status = "error" if output_message.status == "error" else "complete"
 
         self._create_session_content(
             message_id=output_message.id or tool_call_id,

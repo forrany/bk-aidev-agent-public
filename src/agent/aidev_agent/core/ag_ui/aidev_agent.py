@@ -75,7 +75,7 @@ class EventDispatcher:
                 content=tool_msg.content,
                 role="tool",
                 duration=tool_msg.additional_kwargs.get("duration", None),
-                error=is_error,
+                is_error=is_error,
             )
         )
 
@@ -107,7 +107,7 @@ class EventDispatcher:
                 content=tool_msg.content,
                 role="tool",
                 duration=tool_msg.additional_kwargs.get("duration", None),
-                error=is_error,
+                is_error=is_error,
             )
         )
 

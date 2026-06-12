@@ -295,18 +295,15 @@ class TestFilesystemBackendEdit:
             assert test_file.read_text() == "hi world\nhi python\nhi there"
 
     def test_edit_multiple_occurrences_without_replace_all(self):
-        """Test that editing multiple occurrences without replace_all fails."""
+        """Test that editing multiple occurrences without replace_all raises ValueError."""
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             test_file = tmppath / "test.txt"
             test_file.write_text("hello world\nhello python")
 
             backend = FilesystemBackend(root_dir=tmpdir)
-            result = backend.edit("test.txt", "hello", "hi", replace_all=False)
-
-            assert isinstance(result, EditResult)
-            assert result.error is not None
-            assert "匹配" in result.error or "occurrences" in result.error.lower()
+            with pytest.raises(ValueError, match="匹配"):
+                backend.edit("test.txt", "hello", "hi", replace_all=False)
 
 
 class TestFilesystemBackendGrep:

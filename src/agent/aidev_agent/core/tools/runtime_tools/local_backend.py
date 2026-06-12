@@ -425,11 +425,8 @@ class FilesystemBackend(RuntimeBackend):
             with os.fdopen(fd, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            result = perform_string_replacement(content, old_string, new_string, replace_all)
-            if isinstance(result, str):
-                return EditResult(error=result)
-
-            new_content, occurrences = result
+            # perform_string_replacement 失败时抛出 ValueError
+            new_content, occurrences = perform_string_replacement(content, old_string, new_string, replace_all)
 
             # 安全写入
             flags = os.O_WRONLY | os.O_TRUNC

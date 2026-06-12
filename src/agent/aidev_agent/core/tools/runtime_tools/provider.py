@@ -229,7 +229,7 @@ class RuntimeBackendResolver:
 
         if resolved_runtime not in self._backends:
             available = ", ".join(sorted(self._backends.keys()))
-            return f"Error: Unknown runtime '{resolved_runtime}'. Available runtimes: {available or '(none)'}"
+            raise ValueError(f"Unknown runtime '{resolved_runtime}'. Available runtimes: {available or '(none)'}")
 
         backend = self._backends[resolved_runtime]
         # 若后端尚未注册到 ExitStack，则注册以便统一关闭
@@ -272,8 +272,6 @@ def get_ls_tool(resolver: RuntimeBackendResolver, custom_description: str | None
         """列出目录中的文件。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(path)
         infos = resolved_backend.ls_info(validated_path, config=config, state=state)
@@ -310,8 +308,6 @@ def get_read_file_tool(resolver: RuntimeBackendResolver, custom_description: str
         """读取文件内容。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(file_path)
         result = resolved_backend.read(validated_path, offset=offset, limit=limit, config=config, state=state)
@@ -344,13 +340,11 @@ def get_write_file_tool(resolver: RuntimeBackendResolver, custom_description: st
         """创建新文件。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(file_path)
         res = resolved_backend.write(validated_path, content, config=config, state=state)
         if res.error:
-            return redact_output(_ensure_non_empty(res.error), _get_sensitive_values(resolved_backend))
+            raise ValueError(redact_output(_ensure_non_empty(res.error), _get_sensitive_values(resolved_backend)))
         return redact_output(_ensure_non_empty(f"Updated file {res.path}"), _get_sensitive_values(resolved_backend))
 
     write_file.__annotations__["target_runtime"] = Annotated[str, resolver.runtime_param_description()]
@@ -383,15 +377,13 @@ def get_edit_file_tool(resolver: RuntimeBackendResolver, custom_description: str
         """通过字符串替换编辑文件。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         validated_path = validate_path(file_path)
         res = resolved_backend.edit(
             validated_path, old_string, new_string, replace_all=replace_all, config=config, state=state
         )
         if res.error:
-            return redact_output(_ensure_non_empty(res.error), _get_sensitive_values(resolved_backend))
+            raise ValueError(redact_output(_ensure_non_empty(res.error), _get_sensitive_values(resolved_backend)))
         return redact_output(
             _ensure_non_empty(f"Successfully replaced {res.occurrences} instance(s) of the string in '{res.path}'"),
             _get_sensitive_values(resolved_backend),
@@ -421,8 +413,6 @@ def get_glob_tool(resolver: RuntimeBackendResolver, custom_description: str | No
         """查找匹配 glob 模式的文件。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         infos = resolved_backend.glob_info(pattern, path=path, config=config, state=state)
         paths = [fi.get("path", "") for fi in infos]
@@ -458,12 +448,10 @@ def get_grep_tool(resolver: RuntimeBackendResolver, custom_description: str | No
         """在文件中搜索文本模式。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         raw = resolved_backend.grep_raw(pattern, path=path, glob=glob, config=config, state=state)
         if isinstance(raw, str):
-            return redact_output(_ensure_non_empty(raw), _get_sensitive_values(resolved_backend))
+            raise ValueError(redact_output(_ensure_non_empty(raw), _get_sensitive_values(resolved_backend)))
         formatted = format_grep_matches(raw, output_mode)
         return redact_output(
             _ensure_non_empty(truncate_if_too_long(formatted)), _get_sensitive_values(resolved_backend)
@@ -510,15 +498,16 @@ def get_execute_tool(
         """在沙箱环境中执行 shell 命令。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         # 【新增】安全校验：命令白名单检查
         if enable_security:
             result = validate_command(command)
             if not result.is_allowed:
-                return redact_output(
-                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), _get_sensitive_values(resolved_backend)
+                raise ValueError(
+                    redact_output(
+                        _ensure_non_empty(f"命令执行被拒绝：{result.reason}"),
+                        _get_sensitive_values(resolved_backend),
+                    )
                 )
 
         result = resolved_backend.execute(command, config=config, state=state)
@@ -537,15 +526,16 @@ def get_execute_tool(
         """异步执行 shell 命令。"""
 
         resolved_backend = resolver.resolve_backend(target_runtime)
-        if isinstance(resolved_backend, str):
-            return redact_output(_ensure_non_empty(resolved_backend), _get_sensitive_values(resolved_backend))
 
         # 【新增】安全校验：命令白名单检查
         if enable_security:
             result = validate_command(command)
             if not result.is_allowed:
-                return redact_output(
-                    _ensure_non_empty(f"命令执行被拒绝：{result.reason}"), _get_sensitive_values(resolved_backend)
+                raise ValueError(
+                    redact_output(
+                        _ensure_non_empty(f"命令执行被拒绝：{result.reason}"),
+                        _get_sensitive_values(resolved_backend),
+                    )
                 )
 
         result = await resolved_backend.aexecute(command, config=config, state=state)

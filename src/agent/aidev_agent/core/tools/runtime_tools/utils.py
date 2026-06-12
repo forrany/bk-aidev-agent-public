@@ -238,11 +238,11 @@ def perform_string_replacement(
     old_string: str,
     new_string: str,
     replace_all: bool = False,
-) -> tuple[str, int] | str:
+) -> tuple[str, int]:
     """执行精确字符串替换。
 
     在内容中查找并替换指定的字符串。支持替换单个匹配项或所有匹配项。
-    当存在多个匹配项但未启用全部替换时，会返回错误信息以避免意外修改。
+    当存在多个匹配项但未启用全部替换时，会抛出 ValueError 以避免意外修改。
 
     Args:
         content: 原始内容字符串
@@ -251,8 +251,11 @@ def perform_string_replacement(
         replace_all: 是否替换所有匹配项，默认为 False
 
     Returns:
-        成功时返回 (新内容, 替换次数) 元组；
-        失败时返回错误消息字符串
+        成功时返回 (新内容, 替换次数) 元组
+
+    Raises:
+        ValueError: 当 old_string 为空、old_string 与 new_string 相同、
+                   未找到匹配项或找到多个匹配项但未启用全部替换时
 
     Example:
         >>> perform_string_replacement("hello world", "world", "python")
@@ -260,22 +263,26 @@ def perform_string_replacement(
         >>> perform_string_replacement("a b a", "a", "x", replace_all=True)
         ('x b x', 2)
         >>> perform_string_replacement("a b a", "a", "x")
-        '错误: 找到 2 个匹配项，请设置 replace_all=True 或提供更精确的匹配字符串'
+        Traceback (most recent call last):
+        ...
+        ValueError: 找到 2 个匹配项，请设置 replace_all=True 或提供更精确的匹配字符串
         >>> perform_string_replacement("hello", "", "x")
-        '错误: old_string 不能为空'
+        Traceback (most recent call last):
+        ...
+        ValueError: old_string 不能为空
     """
     if not old_string:
-        return "错误: old_string 不能为空"
+        raise ValueError("old_string 不能为空")
 
     if old_string == new_string:
-        return "错误: old_string 和 new_string 不能相同"
+        raise ValueError("old_string 和 new_string 不能相同")
 
     if old_string not in content:
-        return "错误: 在文件中未找到匹配的字符串"
+        raise ValueError("在文件中未找到匹配的字符串")
 
     count = content.count(old_string)
     if not replace_all and count > 1:
-        return f"错误: 找到 {count} 个匹配项，请设置 replace_all=True 或提供更精确的匹配字符串"
+        raise ValueError(f"找到 {count} 个匹配项，请设置 replace_all=True 或提供更精确的匹配字符串")
 
     if replace_all:
         new_content = content.replace(old_string, new_string)

@@ -97,7 +97,11 @@ def _paas_error_enhance(func):
     ``PaasSandboxError``，由 ``default_tool_call_handler`` 捕获后
     将 ``str(error)`` 直接返回给 LLM。
 
+    异常处理规则：
     - HTTPError：尝试从 response body 提取 message
+    - PaasSandboxError：直接透传
+    - FileNotFoundError/FileExistsError/IndexError/ValueError/OSError/re.error：
+      包装为 PaasSandboxError 并将 str(exc) 返回给 LLM
     - 其他 Exception：直接使用 str(exc)
     """
 
@@ -527,7 +531,7 @@ class PaasSandboxBackend(RuntimeBackend):
         res = self._run(["bash", "-c", cmd], state=state)
         if res.exit_code not in (0, None):
             logger.warning("ls_info 执行失败: path=%r, stdout=%r, exit_code=%s", path, res.stdout[:200], res.exit_code)
-            return []
+            raise OSError(f"Cannot list directory '{path}': exit code {res.exit_code}")
 
         base = path.rstrip("/") if path != "/" else "/"
         results: list[FileInfo] = []
@@ -562,7 +566,7 @@ class PaasSandboxBackend(RuntimeBackend):
         # 1) 存在性检查
         exists = self._run(f"test -f {qfile}", state=state)
         if exists.exit_code not in (0, None):
-            return f"Error: File '{file_path}' not found"
+            raise FileNotFoundError(f"File '{file_path}' not found")
 
         # 2) 行数检查（awk END{print NR} 正确计算无尾换行文件的行数，wc -l 不行）
         wc = self._run(f"awk 'END{{print NR}}' {qfile}", state=state)
@@ -575,7 +579,7 @@ class PaasSandboxBackend(RuntimeBackend):
             return check_empty_content("") or ""
 
         if offset >= total_lines:
-            return f"Error: Line offset {offset} exceeds file length ({total_lines} lines)"
+            raise IndexError(f"Line offset {offset} exceeds file length ({total_lines} lines)")
 
         # 3) 输出带行号的分页内容（offset 为 0-indexed）
         start_line = int(offset) + 1
@@ -597,11 +601,9 @@ class PaasSandboxBackend(RuntimeBackend):
         # 文件已存在则失败
         exists = self._run(f"test -e {qfile}", state=state)
         if exists.exit_code in (0, None):
-            return WriteResult(
-                error=(
-                    f"Cannot write to {file_path} because it already exists. "
-                    "Read and then make an edit, or write to a new path."
-                )
+            raise FileExistsError(
+                f"Cannot write to {file_path} because it already exists. "
+                "Read and then make an edit, or write to a new path."
             )
 
         # 创建父目录
@@ -613,8 +615,8 @@ class PaasSandboxBackend(RuntimeBackend):
         # 通过文件上传 API 写入
         file_bytes = content.encode("utf-8")
         if not file_bytes:
-            return WriteResult(
-                error="Cannot write empty content. Provide non-empty content or use execute to create the file."
+            raise ValueError(
+                "Cannot write empty content. Provide non-empty content or use execute to create the file."
             )
         self.upload_file(sandbox_id, file_path, file_bytes)
 
@@ -638,15 +640,11 @@ class PaasSandboxBackend(RuntimeBackend):
         qfile = shlex.quote(file_path)
         cat = self._run(f"cat {qfile}", state=state)
         if cat.exit_code not in (0, None):
-            return EditResult(error=f"Error: File '{file_path}' not found")
+            raise FileNotFoundError(f"File '{file_path}' not found")
         content = cat.stdout
 
-        # 2) 执行字符串替换
-        result = perform_string_replacement(content, old_string, new_string, replace_all)
-        if isinstance(result, str):
-            return EditResult(error=result)
-
-        new_content, occurrences = result
+        # 2) 执行字符串替换（失败时抛出 ValueError，由 @_paas_error_enhance 转为 PaasSandboxError）
+        new_content, occurrences = perform_string_replacement(content, old_string, new_string, replace_all)
 
         # 3) 写回文件（先删后传，使用 shell 命令删除而非不存在的网关 API）
         sandbox_id = self._ensure_sandbox(state=state)
@@ -667,10 +665,8 @@ class PaasSandboxBackend(RuntimeBackend):
     ) -> list[GrepMatch] | str:
         """在文件中搜索正则表达式模式（远程执行）。"""
 
-        try:
-            re.compile(pattern)
-        except re.error as e:
-            return f"Invalid regex pattern: {e}"
+        re.compile(pattern)
+        # 正则编译异常 re.error 由 @_paas_error_enhance 转为 PaasSandboxError
 
         base_path = self._resolve_path(path, state=state) if path else "/"
         qpattern = shlex.quote(pattern)

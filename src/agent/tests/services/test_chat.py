@@ -506,7 +506,7 @@ class TestCommonAgentChatStreaming:
         # 验证4：工具调用结果事件
         tool_call_result_events = [r for r in results if r.get("type") == EventType.TOOL_CALL_RESULT]
         assert len(tool_call_result_events) > 0, "应该有工具调用结果事件"
-        assert tool_call_result_events[0].get("error") is True, "工具调用结果事件应该包含错误信息"
+        assert tool_call_result_events[0].get("isError") is True, "工具调用结果事件应该包含错误信息"
 
     def test_mcp_tool_fetch_failed_event(self):
         """case 7: MCP工具拉取失败事件

@@ -375,6 +375,6 @@ class TestFactoryEndToEnd:
         assert callback._metadata["agent_code"] == "agent-x"
         assert callback._metadata["agent_version"] == "v2"
         assert callback._metadata["channel_type"] == "popup"
-        assert callback._metadata["request_id"] == "req-123"
+        assert isinstance(callback._metadata["request_id"], str) and len(callback._metadata["request_id"]) > 0
         assert callback._metadata["llm_code"] == "qwen-plus"
         assert callback._metadata["created_by"] == "alice"

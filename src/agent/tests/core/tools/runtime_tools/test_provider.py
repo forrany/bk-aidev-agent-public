@@ -148,7 +148,7 @@ class TestRuntimeBackendResolver:
         res = execute_tool.invoke({"command": "echo test", "target_runtime": "local"})
         assert "local:echo test" in res
 
-    def test_invalid_runtime_returns_error_string(self):
+    def test_invalid_runtime_raises_value_error(self):
         class FakeBackend:
             def execute(self, command: str, **kwargs) -> ExecuteResult:
                 return ExecuteResult(output=command, exit_code=0, truncated=False)
@@ -158,12 +158,9 @@ class TestRuntimeBackendResolver:
         provider.register_runtime("sandbox_1", FakeBackend())
 
         execute_tool = next(t for t in get_client_tools_with_runtime(provider) if t.name == "execute")
-        res = execute_tool.invoke({"command": "echo test", "target_runtime": "nope"})
 
-        assert "Unknown runtime" in res
-        assert "Available runtimes" in res
-        assert "local" in res
-        assert "sandbox_1" in res
+        with pytest.raises(ValueError, match="Unknown runtime"):
+            execute_tool.invoke({"command": "echo test", "target_runtime": "nope"})
 
 
 class TestLsToolGenerator:
@@ -329,9 +326,9 @@ class TestWriteFileToolGenerator:
             provider = _local_provider(backend)
             tool = get_write_file_tool(provider)
 
-            result = tool.invoke({"file_path": "/test.txt", "content": "new content", "target_runtime": "local"})
+            with pytest.raises(ValueError, match="already exists"):
+                tool.invoke({"file_path": "/test.txt", "content": "new content", "target_runtime": "local"})
 
-            assert "already exists" in result.lower()
             assert (Path(tmpdir) / "test.txt").read_text() == "old content"
 
 
@@ -584,27 +581,27 @@ class TestExecuteToolSecurity:
     """Test get_execute_tool security functionality."""
 
     def test_execute_with_enable_security_none_default_enabled(self):
-        """测试 enable_security=None 时默认启用校验（危险命令被拒绝）"""
+        """测试 enable_security=None 时默认启用校验（危险命令抛出 ValueError）"""
         with TemporaryDirectory() as tmpdir:
             backend = FilesystemBackend(root_dir=tmpdir)
             provider = _local_provider(backend)
             # enable_security=None 是默认值，应该启用安全校验
             tool = get_execute_tool(provider, enable_security=None)
 
-            # rm 是危险命令，不在白名单中，应被拒绝
-            result = tool.invoke({"command": "rm -rf /some/path", "target_runtime": "local"})
-            assert "命令执行被拒绝" in result
+            # rm 是危险命令，不在白名单中，应抛出 ValueError
+            with pytest.raises(ValueError, match="命令执行被拒绝"):
+                tool.invoke({"command": "rm -rf /some/path", "target_runtime": "local"})
 
     def test_execute_with_enable_security_true(self):
-        """测试 enable_security=True 时启用校验（危险命令被拒绝）"""
+        """测试 enable_security=True 时启用校验（危险命令抛出 ValueError）"""
         with TemporaryDirectory() as tmpdir:
             backend = FilesystemBackend(root_dir=tmpdir)
             provider = _local_provider(backend)
             tool = get_execute_tool(provider, enable_security=True)
 
-            # rm 是危险命令，不在白名单中，应被拒绝
-            result = tool.invoke({"command": "rm -rf /some/path", "target_runtime": "local"})
-            assert "命令执行被拒绝" in result
+            # rm 是危险命令，不在白名单中，应抛出 ValueError
+            with pytest.raises(ValueError, match="命令执行被拒绝"):
+                tool.invoke({"command": "rm -rf /some/path", "target_runtime": "local"})
 
     def test_execute_with_enable_security_false(self):
         """测试 enable_security=False 时禁用校验（危险命令可执行）"""
@@ -636,9 +633,9 @@ class TestExecuteToolSecurity:
             provider = _local_provider(backend)
             tool = get_execute_tool(provider, enable_security=True)
 
-            # 危险命令在异步执行时也应被拒绝
-            result = await tool.ainvoke({"command": "rm -rf /", "target_runtime": "local"})
-            assert "命令执行被拒绝" in result
+            # 危险命令在异步执行时应抛出 ValueError
+            with pytest.raises(ValueError, match="命令执行被拒绝"):
+                await tool.ainvoke({"command": "rm -rf /", "target_runtime": "local"})
 
     @pytest.mark.asyncio
     async def test_execute_async_with_security_disabled(self):
@@ -664,9 +661,9 @@ class TestGetClientToolsWithRuntimeSecurity:
             tools = get_client_tools_with_runtime(provider, enable_security=None)
 
             execute_tool = next(t for t in tools if t.name == "execute")
-            # 危险命令应被拒绝
-            result = execute_tool.invoke({"command": "rm -rf /", "target_runtime": "local"})
-            assert "命令执行被拒绝" in result
+            # 危险命令应抛出 ValueError
+            with pytest.raises(ValueError, match="命令执行被拒绝"):
+                execute_tool.invoke({"command": "rm -rf /", "target_runtime": "local"})
 
     def test_get_client_tools_with_runtime_security_true(self):
         """测试 get_client_tools_with_runtime enable_security=True 启用校验"""
@@ -676,9 +673,9 @@ class TestGetClientToolsWithRuntimeSecurity:
             tools = get_client_tools_with_runtime(provider, enable_security=True)
 
             execute_tool = next(t for t in tools if t.name == "execute")
-            # 危险命令应被拒绝
-            result = execute_tool.invoke({"command": "rm -rf /", "target_runtime": "local"})
-            assert "命令执行被拒绝" in result
+            # 危险命令应抛出 ValueError
+            with pytest.raises(ValueError, match="命令执行被拒绝"):
+                execute_tool.invoke({"command": "rm -rf /", "target_runtime": "local"})
 
     def test_get_client_tools_with_runtime_security_false(self):
         """测试 get_client_tools_with_runtime enable_security=False 禁用校验"""
@@ -791,24 +788,16 @@ class TestOutputRedaction:
         finally:
             settings.SBX_SENSITIVE_VALUES = original
 
-    def test_ls_tool_redacts_error_string_from_resolve(self):
-        """ls 工具在 resolve_backend 返回字符串时也应脱敏。"""
-        from aidev_agent.config import settings
+    def test_ls_tool_raises_value_error_for_unknown_runtime(self):
+        """ls 工具在 _resolve_backend 抛出 ValueError 时传播异常。"""
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir, virtual_mode=True)
+            provider = RuntimeBackendResolver(default_runtime="local").register_runtime("local", backend)
+            tool = get_ls_tool(provider)
 
-        original = settings.SBX_SENSITIVE_VALUES
-        settings.SBX_SENSITIVE_VALUES = ["secret_runtime"]
-        try:
-            with TemporaryDirectory() as tmpdir:
-                backend = FilesystemBackend(root_dir=tmpdir, virtual_mode=True)
-                provider = RuntimeBackendResolver(default_runtime="local").register_runtime("local", backend)
-                tool = get_ls_tool(provider)
-
-                # 传入不存在的 runtime，resolve_backend 返回错误字符串
-                result = tool.invoke({"path": "/", "target_runtime": "secret_runtime"})
-                assert "secret_runtime" not in result
-                assert "__BKAI_AGENT_REDACTED__" in result
-        finally:
-            settings.SBX_SENSITIVE_VALUES = original
+            # 传入不存在的 runtime，_resolve_backend 抛出 ValueError
+            with pytest.raises(ValueError, match="Unknown runtime"):
+                tool.invoke({"path": "/", "target_runtime": "secret_runtime"})
 
 
 class TestEmptyOutputHint:

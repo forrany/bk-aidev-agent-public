@@ -10,7 +10,7 @@
 6. RuntimeBackendResolver.close() 是幂等的
 7. RuntimeBackendResolver.close() 即使某个后端关闭失败也继续执行
 8. register_runtime 使重新注册的运行时生效
-9. _resolve_backend 对未知 runtime 返回错误字符串
+9. _resolve_backend 对未知 runtime 抛出 ValueError
 """
 
 from __future__ import annotations
@@ -182,13 +182,13 @@ class TestRegisterRuntime(unittest.TestCase):
 
 
 class TestResolveBackendUnknownRuntime(unittest.TestCase):
-    """测试 9：_resolve_backend 对未知 runtime 返回错误字符串。"""
+    """测试 9：_resolve_backend 对未知 runtime 抛出 ValueError。"""
 
-    def test_unknown_runtime_returns_error(self):
+    def test_unknown_runtime_raises_value_error(self):
         resolver = RuntimeBackendResolver()
-        result = resolver._resolve_backend("nonexistent")
-        assert isinstance(result, str)
-        assert "nonexistent" in result
+        with self.assertRaises(ValueError) as ctx:
+            resolver._resolve_backend("nonexistent")
+        assert "nonexistent" in str(ctx.exception)
 
 
 if __name__ == "__main__":

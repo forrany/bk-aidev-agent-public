@@ -582,7 +582,7 @@ class MCPExceptionWrapper:
             error_detail = self.extract_error_message(str(err))
             # 尝试获取重试引导
             retry_guide = self.get_mcp_tool_retry_guide(error_detail)
-            return (f"[ERROR] MCP工具调用失败: {error_detail} {retry_guide or ''}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: {error_detail} {retry_guide or ''}")
         except BaseExceptionGroup as err:
             # 提取所有非 ExceptionGroup 的底层异常
             all_errors = list(_extract_all_non_group_exceptions(err))
@@ -591,20 +591,20 @@ class MCPExceptionWrapper:
                     error_lines = []
                     for i, e in enumerate(all_errors, start=1):
                         error_lines.append(f"错误{i}: {type(e).__name__} - {e}")
-                    return (f"MCP工具调用失败，发现{len(all_errors)}个错误:\n" + "\n".join(error_lines), None)
+                    raise ToolException(f"MCP工具调用失败，发现{len(all_errors)}个错误:\n" + "\n".join(error_lines))
                 elif len(all_errors) == 1:
-                    return (f"MCP工具调用失败: {type(all_errors[0]).__name__} - {all_errors[0]}", None)
+                    raise ToolException(f"MCP工具调用失败: {type(all_errors[0]).__name__} - {all_errors[0]}")
             else:
-                return (f"[ERROR] MCP工具调用失败: {err}", None)
+                raise ToolException(f"[ERROR] MCP工具调用失败: {err}")
         except ConnectionError as err:
             _logger.exception(f"failed to run mcp: {err}")
-            return (f"[ERROR] MCP工具调用失败: 连接异常 {err}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: 连接异常 {err}")
         except TimeoutError as err:
             _logger.exception(f"failed to run mcp: {err}")
-            return (f"[ERROR] MCP工具调用失败: 超时异常 {err}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: 超时异常 {err}")
         except Exception as err:
             _logger.exception(f"failed to run mcp: {err}")
-            return (f"[ERROR] MCP工具调用失败: {err}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: {err}")
 
     def get_mcp_tool_retry_guide(self, error_detail):
         """根据预编译的正则表达式模式匹配错误详情获取重试引导"""
@@ -786,15 +786,15 @@ def wrap_mcp_exception(coro):
             return await coro(*args, **kwargs)
         except ToolException as err:
             _logger.exception(f"failed to run mcp: {err}")
-            return (f"[ERROR] MCP工具调用失败: {err}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: {err}")
         except ConnectionError as err:
             _logger.exception(f"failed to run mcp: {err}")
-            return (f"[ERROR] MCP工具调用失败: 连接异常 {err}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: 连接异常 {err}")
         except TimeoutError as err:
             _logger.exception(f"failed to run mcp: {err}")
-            return (f"[ERROR] MCP工具调用失败: 超时异常 {err}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: 超时异常 {err}")
         except Exception as err:
             _logger.exception(f"failed to run mcp: {err}")
-            return (f"[ERROR] MCP工具调用失败: {err}", None)
+            raise ToolException(f"[ERROR] MCP工具调用失败: {err}")
 
     return wrapper

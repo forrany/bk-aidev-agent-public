@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import threading
 from unittest.mock import MagicMock
 
@@ -110,7 +111,12 @@ def mock_ops():
 
 @pytest.fixture()
 def backend(mock_ops, monkeypatch):
-    """创建 PaasSandboxBackend 实例，并将其所有 HTTP 方法替换为 mock_ops 的实现。"""
+    """创建 PaasSandboxBackend 实例，并将其所有 HTTP 方法替换为 mock_ops 的实现。
+
+    同时绕过 _paas_error_enhance 装饰器，使方法直接抛出标准异常
+    (FileNotFoundError / FileExistsError / ValueError / IndexError / OSError / re.error)，
+    便于在测试中精确断言异常类型。
+    """
     b = PaasSandboxBackend(
         app_code="test-app",
         bk_username="test-username",
@@ -125,6 +131,20 @@ def backend(mock_ops, monkeypatch):
     monkeypatch.setattr(b, "exec_command", mock_ops.exec_command)
     monkeypatch.setattr(b, "upload_file", mock_ops.upload_file)
     monkeypatch.setattr(b, "download_file", mock_ops.download_file)
+
+    # 绕过 _paas_error_enhance 装饰器，使异常以原始类型抛出
+    _unwrapped_methods = ["ls_info", "read", "write", "edit", "grep_raw"]
+    for _name in _unwrapped_methods:
+        _unwrap = getattr(type(b), _name).__wrapped__
+
+        def _make_caller(name=_name, unwrapped=_unwrap):
+            def _call(*args, **kwargs):
+                return unwrapped(b, *args, **kwargs)
+
+            return _call
+
+        monkeypatch.setattr(b, _name, _make_caller())
+
     return b
 
 
@@ -192,7 +212,8 @@ class TestPaasSandboxBackendLsInfo:
             return ExecResult(stdout="", stderr="No such directory", exit_code=2)
 
         mock_ops.exec_handler = handler
-        assert backend.ls_info("/nonexistent") == []
+        with pytest.raises(OSError, match="Cannot list directory"):
+            backend.ls_info("/nonexistent")
 
 
 class TestPaasSandboxBackendRead:
@@ -220,8 +241,8 @@ class TestPaasSandboxBackendRead:
 
         mock_ops.exec_handler = handler
 
-        out = backend.read("/app/missing.txt")
-        assert "not found" in out
+        with pytest.raises(FileNotFoundError, match="not found"):
+            backend.read("/app/missing.txt")
 
     def test_read_empty_file(self, backend, mock_ops):
         def handler(sandbox_id, cmd, **kw):
@@ -246,8 +267,8 @@ class TestPaasSandboxBackendRead:
 
         mock_ops.exec_handler = handler
 
-        out = backend.read("/app/test.txt", offset=5)
-        assert "exceeds file length" in out
+        with pytest.raises(IndexError, match="exceeds file length"):
+            backend.read("/app/test.txt", offset=5)
 
 
 class TestPaasSandboxBackendWrite:
@@ -274,10 +295,8 @@ class TestPaasSandboxBackendWrite:
 
         mock_ops.exec_handler = handler
 
-        res = backend.write("/app/existing.txt", "hello")
-        assert isinstance(res, WriteResult)
-        assert res.error is not None
-        assert "already exists" in res.error
+        with pytest.raises(FileExistsError, match="already exists"):
+            backend.write("/app/existing.txt", "hello")
 
 
 class TestPaasSandboxBackendEdit:
@@ -307,10 +326,8 @@ class TestPaasSandboxBackendEdit:
 
         mock_ops.exec_handler = handler
 
-        res = backend.edit("/app/missing.txt", "old", "new")
-        assert isinstance(res, EditResult)
-        assert res.error is not None
-        assert "not found" in res.error
+        with pytest.raises(FileNotFoundError, match="not found"):
+            backend.edit("/app/missing.txt", "old", "new")
 
     def test_edit_string_not_found(self, backend, mock_ops):
         mock_ops.uploaded_files["/app/test.txt"] = b"hello world\n"
@@ -322,9 +339,8 @@ class TestPaasSandboxBackendEdit:
 
         mock_ops.exec_handler = handler
 
-        res = backend.edit("/app/test.txt", "nonexistent", "replacement")
-        assert isinstance(res, EditResult)
-        assert res.error is not None
+        with pytest.raises(ValueError, match="未找到匹配"):
+            backend.edit("/app/test.txt", "nonexistent", "replacement")
 
 
 class TestPaasSandboxBackendGrepGlob:
@@ -344,9 +360,8 @@ class TestPaasSandboxBackendGrepGlob:
         assert out[0]["text"] == "hello world"
 
     def test_grep_invalid_regex(self, backend):
-        out = backend.grep_raw("[invalid(regex")
-        assert isinstance(out, str)
-        assert "Invalid regex" in out
+        with pytest.raises(re.error):
+            backend.grep_raw("[invalid(regex")
 
     def test_grep_with_glob_filter(self, backend, mock_ops):
         def handler(sandbox_id, cmd, **kw):
@@ -595,15 +610,14 @@ class TestTildePathIntegration:
         assert "hello tilde" in r
 
     def test_write_tilde_duplicate_detected(self, backend, mock_ops):
-        """write('~/f.txt') 两次时，第二次应检测到文件已存在。"""
+        """write('~/f.txt') 两次时，第二次应抛出 FileExistsError。"""
         mock_ops.exec_handler = self._make_handler(mock_ops)
 
         w1 = backend.write("~/dup.txt", "first")
         assert w1.error is None
 
-        w2 = backend.write("~/dup.txt", "second")
-        assert w2.error is not None
-        assert "already exists" in w2.error
+        with pytest.raises(FileExistsError, match="already exists"):
+            backend.write("~/dup.txt", "second")
 
     def test_edit_tilde_path(self, backend, mock_ops):
         """edit('~/f.txt') 能正确读取、修改并写回文件。"""
@@ -630,13 +644,11 @@ class TestTildePathIntegration:
         assert down[0]["content"] == payload
 
     def test_write_empty_content(self, backend, mock_ops):
-        """write('', '') 应返回错误而非抛异常。"""
+        """write('', '') 应抛出 ValueError。"""
         mock_ops.exec_handler = self._make_handler(mock_ops)
 
-        res = backend.write("/app/empty.txt", "")
-        assert isinstance(res, WriteResult)
-        assert res.error is not None
-        assert "empty" in res.error.lower()
+        with pytest.raises(ValueError, match="empty"):
+            backend.write("/app/empty.txt", "")
 
 
 class TestPaasSandboxBackendInit:
