@@ -234,6 +234,34 @@ aiBluekingRef.value?.updateSize(600, 800);
 const info = await aiBluekingRef.value?.updateAgentInfo();
 ```
 
+#### reportSdkError - 统一错误上报（≥ v2.1.4-beta.25）
+
+供业务方在自定义拦截器或扩展逻辑中统一上报错误，自动触发 `sdk-error` 事件并可选弹出 toast：
+
+```typescript
+// 上报错误（默认弹出 toast）
+aiBluekingRef.value?.reportSdkError({
+  apiName: 'session',
+  error: new Error('会话创建失败'),
+});
+
+// 上报错误但不弹 toast（自行处理 UI 反馈）
+aiBluekingRef.value?.reportSdkError({
+  apiName: 'chat',
+  error: err,
+  shouldToast: false,
+  source: 'business',
+  action: 'send-message',
+});
+
+// 监听 sdk-error 事件进行自定义处理
+<AIBlueking
+  :error-toast="false"
+  :ignore-errors="['/api/health']"
+  @sdk-error="handleSdkError"
+/>
+```
+
 ### 完整示例
 
 ```vue

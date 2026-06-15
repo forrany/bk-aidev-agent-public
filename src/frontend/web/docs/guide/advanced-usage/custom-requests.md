@@ -472,6 +472,34 @@ const chatHelper = useChatHelper({
 
 在实际项目中，请求头往往需要动态生成。以下是几种常见场景：
 
+### 全局错误处理（≥ v2.1.4-beta.25）
+
+`FetchClient` 新增 `onError` 方法，可注册全局错误处理器，所有 HTTP 错误（普通请求与 SSE 流）均经过统一分发：
+
+```typescript
+import { useChatHelper } from '@blueking/chat-helper';
+
+const chatHelper = useChatHelper({
+  requestData: { urlPrefix: '/api/ai' },
+});
+
+// 注册全局错误处理器
+chatHelper.http.onError(
+  (error) => {
+    console.error('HTTP 错误:', error.message);
+    // 可用于日志上报、自定义 toast 等
+  },
+  {
+    // 忽略特定 URL 模式的错误（可选）
+    ignoreErrors: ['/api/health', /session\/upload/],
+  }
+);
+```
+
+**与拦截器的区别**：
+- **拦截器**：针对单个 `useChatHelper` 实例，可修改请求/响应
+- **`onError`**：全局错误出口，不可修改请求，适合统一错误上报和 UI 反馈
+
 ### Token 刷新
 
 ```typescript

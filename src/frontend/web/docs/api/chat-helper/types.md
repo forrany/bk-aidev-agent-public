@@ -227,6 +227,40 @@ interface RequestConfig {
 }
 ```
 
+## IRequestError
+
+请求错误接口（**≥ v2.1.4-beta.25**）。
+
+```typescript
+interface IRequestError extends Error {
+  /** 请求配置 */
+  config?: RequestConfig;
+  /** 错误码 */
+  code?: string;
+  /** 响应数据 */
+  data?: unknown;
+}
+```
+
+## GlobalErrorHandler
+
+全局错误处理器类型（**≥ v2.1.4-beta.25**）。
+
+```typescript
+type GlobalErrorHandler = (error: IRequestError) => void;
+```
+
+## ErrorHandlerOptions
+
+错误处理器配置（**≥ v2.1.4-beta.25**）。
+
+```typescript
+interface ErrorHandlerOptions {
+  /** 忽略的 URL 模式（字符串包含匹配或正则） */
+  ignoreErrors?: Array<string | RegExp>;
+}
+```
+
 ## AG-UI 事件接口
 
 以下是 AG-UI 协议中各事件的接口定义。

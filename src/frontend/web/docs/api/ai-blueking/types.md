@@ -43,6 +43,10 @@ interface AIBluekingProps {
   hideDefaultTrigger?: boolean;
   /** 是否禁用输入 */
   disabledInput?: boolean;
+  /** 接口错误时是否自动弹出 Message 提示，默认 true（≥ v2.1.4-beta.25） */
+  errorToast?: boolean;
+  /** 忽略的接口错误 URL 模式（≥ v2.1.4-beta.25） */
+  ignoreErrors?: Array<RegExp | string>;
 
   // 容器配置
   /** 渲染目标（CSS 选择器） */
@@ -153,6 +157,9 @@ interface AIBluekingExpose {
   /** 主动刷新 agentInfo 并更新内部状态（≥ v2.1.4-beta.14） */
   updateAgentInfo: () => Promise<IAgentInfo | null>;
 
+  /** 统一 SDK 错误出口（≥ v2.1.4-beta.25） */
+  reportSdkError: (options: ReportSdkErrorOptions) => void;
+
   // 其他
   /** 获取 chatHelper 实例，用于访问 agent/session/message 等底层模块 */
   getChatHelper: () => IChatHelper | null;
@@ -199,8 +206,63 @@ interface AIBluekingEmits {
   (e: 'transfer-messages', data: { messageIds: string[] }): void;
   (e: 'share-messages', data: { messageIds: string[] }): void;
 
-  // 错误事件
-  (e: 'sdk-error', data: { apiName: string; code: number; data: unknown; message: string }): void;
+  // 错误事件（apiName 为业务语义，非 HTTP 层接口名）
+  (e: 'sdk-error', data: SdkErrorPayload): void;
+}
+
+## SdkErrorApiName
+
+sdk-error 业务语义 apiName（**≥ v2.1.4-beta.25**）。
+
+```typescript
+type SdkErrorApiName = 'chat' | 'getAgentInfo' | 'init' | 'session' | 'share';
+```
+
+## SdkErrorSource
+
+sdk-error 错误来源（**≥ v2.1.4-beta.25**）。
+
+```typescript
+type SdkErrorSource = 'business' | 'http' | 'protocol';
+```
+
+## SdkErrorPayload
+
+sdk-error 事件 payload（**≥ v2.1.4-beta.25**）。
+
+```typescript
+interface SdkErrorPayload {
+  /** 业务动作标识（可选） */
+  action?: string;
+  /** 业务语义 apiName */
+  apiName: SdkErrorApiName;
+  /** 错误码 */
+  code: number;
+  /** 错误数据 */
+  data: unknown;
+  /** 错误消息 */
+  message: string;
+  /** 错误来源 */
+  source?: SdkErrorSource;
+}
+```
+
+## ReportSdkErrorOptions
+
+`reportSdkError` 方法选项（**≥ v2.1.4-beta.25**）。
+
+```typescript
+interface ReportSdkErrorOptions {
+  /** 业务动作标识（可选） */
+  action?: string;
+  /** 业务语义 apiName */
+  apiName: SdkErrorApiName;
+  /** 错误对象 */
+  error: unknown;
+  /** 是否弹出 toast，默认 true */
+  shouldToast?: boolean;
+  /** 错误来源 */
+  source?: SdkErrorSource;
 }
 ```
 
