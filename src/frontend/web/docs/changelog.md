@@ -2,9 +2,16 @@
 
 ## v2.1.4-beta.25
 
+### 新功能
+
+- **`reportSdkError` 方法**（**≥ v2.1.4-beta.25**）：`AIBlueking` 暴露 `reportSdkError(options)` 方法，供业务方在自定义拦截器或扩展逻辑中统一上报错误；自动触发 `sdk-error` 事件并可选弹出 toast，同一 Error 实例去重避免重复上报
+- **`errorToast` prop**（**≥ v2.1.4-beta.25**）：接口错误时是否自动弹出 Message 提示，默认 `true`；设为 `false` 可自行通过 `sdk-error` 事件处理
+- **`ignoreErrors` prop**（**≥ v2.1.4-beta.25**）：忽略的接口错误 URL 模式（字符串包含匹配或正则），匹配的接口错误不会弹出 toast
+
 ### 优化
 
 - **HTTP 错误统一处理**（**≥ v2.1.4-beta.25**）：`@blueking/chat-helper` 的 `FetchClient` 新增 `onError` 全局错误处理器，所有 HTTP 错误（普通请求与 SSE 流）均经过统一分发；支持 `ignoreErrors` 配置跳过特定 URL 模式的错误处理，便于业务方自定义错误展示（如 toast、日志上报）
+- **`sdk-error` 事件增强**（**≥ v2.1.4-beta.25**）：payload 新增 `source`（错误来源：`http` / `protocol` / `business`）和 `action`（可选业务动作标识），便于业务方区分错误类型并做差异化处理
 
 ### 修复
 

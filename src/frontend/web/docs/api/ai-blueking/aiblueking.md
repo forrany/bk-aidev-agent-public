@@ -60,6 +60,8 @@ function openAI() {
 | `hideNimbus` | `boolean` | `false` | 是否隐藏悬浮球 |
 | `hideDefaultTrigger` | `boolean` | `false` | 是否隐藏默认触发器 |
 | `disabledInput` | `boolean` | `false` | 是否禁用输入 |
+| `errorToast` | `boolean` | `true` | 接口错误时是否自动弹出 Message 提示（**≥ v2.1.4-beta.25**）；设为 `false` 可自行通过 `sdk-error` 事件处理 |
+| `ignoreErrors` | `Array<string \| RegExp>` | `[]` | 忽略的接口错误 URL 模式（**≥ v2.1.4-beta.25**）；字符串包含匹配或正则，匹配的接口错误不会弹出 toast |
 
 ### 容器配置
 
@@ -178,7 +180,7 @@ function openAI() {
 
 | 事件名 | 参数 | 说明 |
 | --- | --- | --- |
-| `sdk-error` | `({ apiName, code, data, message })` | SDK 层错误 |
+| `sdk-error` | `SdkErrorPayload` | SDK 层错误（**≥ v2.1.4-beta.25**：payload 新增 `source` 和 `action` 字段，详见 [SdkErrorPayload](/api/ai-blueking/types#sdkerrorpayload)） |
 
 ## Expose 方法
 
@@ -228,6 +230,12 @@ function openAI() {
 | 方法 | 类型 | 说明 |
 | --- | --- | --- |
 | `updateAgentInfo` | `() => Promise<IAgentInfo \| null>` | 主动刷新 agentInfo 并更新内部状态（如 shortcuts）；返回最新数据，失败返回 `null` |
+
+### 错误上报（≥ v2.1.4-beta.25）
+
+| 方法 | 类型 | 说明 |
+| --- | --- | --- |
+| `reportSdkError` | `(options: ReportSdkErrorOptions) => void` | 统一 SDK 错误出口；自动触发 `sdk-error` 事件并可选弹出 toast，同一 Error 实例去重避免重复上报。详见 [ReportSdkErrorOptions](/api/ai-blueking/types#reportsdkerroroptions) |
 
 ### 其他
 

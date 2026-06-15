@@ -208,6 +208,35 @@ const { shareUrl } = await message.shareMessages('session-123', selectedMessages
 
 AG-UI 协议处理器，负责解析流式响应中的事件并将其转换为消息更新。
 
+### FetchClient 全局错误处理（≥ v2.1.4-beta.25）
+
+`FetchClient` 新增 `onError` 方法，可注册全局错误处理器，所有 HTTP 错误（普通请求与 SSE 流）均经过统一分发：
+
+```typescript
+import { useChatHelper } from '@blueking/chat-helper';
+
+const chatHelper = useChatHelper({
+  requestData: { urlPrefix: '/api/ai' },
+});
+
+// 注册全局错误处理器
+chatHelper.http.onError(
+  (error) => {
+    console.error('HTTP 错误:', error.message);
+    // 可用于日志上报、自定义 toast 等
+  },
+  {
+    // 忽略特定 URL 模式的错误（可选）
+    ignoreErrors: ['/api/health', /session\/upload/],
+  }
+);
+```
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `handler` | `(error: IRequestError) => void` | 错误处理器 |
+| `options.ignoreErrors` | `Array<string \| RegExp>` | 忽略的 URL 模式（字符串包含匹配或正则） |
+
 ### 构造函数钩子
 
 ```typescript

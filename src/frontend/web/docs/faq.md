@@ -226,10 +226,17 @@ const handleError = (error: Error) => {
 ```
 
 ```ts
-const handleSdkError = (data: { apiName: string; code: number; message: string; data: unknown }) => {
-  console.error('SDK 错误:', data.apiName, data.message);
+// ≥ v2.1.4-beta.25：payload 新增 source 和 action 字段
+const handleSdkError = (data: { apiName: string; code: number; message: string; data: unknown; source?: string; action?: string }) => {
+  console.error('SDK 错误:', data.apiName, data.message, data.source);
   // 显示错误提示
 };
+
+// 禁用默认 toast，自行处理 UI 反馈
+<AIBlueking :error-toast="false" @sdk-error="handleSdkError" />
+
+// 忽略特定接口的错误 toast
+<AIBlueking :ignore-errors="['/api/health', /session\/upload/]"] />
 ```
 
 **原子组件模式**：在 `AGUIProtocol` 的 `onError` 回调中处理：
