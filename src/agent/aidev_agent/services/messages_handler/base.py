@@ -274,6 +274,31 @@ class BaseMessageQueueHandler(ABC):
         """
         return self.get_total_count(thread_id) == 0
 
+    def supports_replay_from_start(self) -> bool:
+        """是否支持多个消费者从同一会话日志独立 replay。
+
+        默认沿用旧的主队列 + DLQ 竞争消费模型。
+        """
+        return False
+
+    def get_messages_since(self, thread_id: str, offset: int, timeout: Optional[float] = None) -> tuple[list[Any], int]:
+        """从指定 offset 开始读取消息，且不破坏底层缓存。
+
+        仅支持 replay-from-start 的 handler 需要覆盖该方法。
+        """
+        raise NotImplementedError("get_messages_since is only available for replay-from-start handlers")
+
+    def acquire_producer(self, thread_id: str) -> bool:
+        """尝试获取会话级生产者写入权。
+
+        默认返回 True，保持旧 handler 行为不变。
+        """
+        return True
+
+    def release_producer(self, thread_id: str) -> None:
+        """释放会话级生产者写入权。默认无操作。"""
+        pass
+
     def size(self, thread_id: str) -> int:
         """获取主队列中的消息数量（get_cached_count 的别名）
 

@@ -9,6 +9,7 @@ import pytest
 from aidev_agent.enums import MessageHandlerType
 from aidev_agent.services.messages_handler import (
     CANCELLED_CHUNK,
+    EOD_CHUNK,
     GeneratorStreamingHelper,
     InMemoryQueueMessageHandler,
     message_handler_factory,
@@ -22,6 +23,172 @@ from aidev_agent.utils.event import RunId, emit_run_finished_event
 def _make_run_finished_chunk(thread_id: str, run_id: str) -> str:
     """生成 RUN_FINISHED SSE 字符串，用于测试期望值对比。"""
     return emit_run_finished_event(thread_id=thread_id, run_id=run_id)
+
+
+class ReplayFromStartHandler:
+    """测试用 replay handler：模拟 RabbitMQ 的非破坏性会话日志读取。"""
+
+    def __init__(self):
+        self.messages: dict[str, list] = {}
+        self.active_consumers: set[tuple[str, str]] = set()
+        self.producer_locks: set[str] = set()
+        self.completed_threads: list[str] = []
+        self._consumer_seq = 0
+        self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+
+    def supports_replay_from_start(self) -> bool:
+        return True
+
+    def put(self, thread_id, message):
+        with self._condition:
+            self.messages.setdefault(thread_id, []).append(message)
+            self._condition.notify_all()
+
+    def flush(self, thread_id):
+        pass
+
+    def get_messages_since(self, thread_id, offset, timeout=None):
+        start = time.time()
+        with self._condition:
+            while True:
+                current = list(self.messages.get(thread_id, []))
+                if len(current) > offset:
+                    return current[offset:], len(current)
+                if timeout is not None:
+                    remaining = timeout - (time.time() - start)
+                    if remaining <= 0:
+                        raise TimeoutError("No message available within timeout")
+                    self._condition.wait(timeout=remaining)
+                else:
+                    self._condition.wait()
+
+    def has_pending_messages(self, thread_id):
+        with self._lock:
+            return bool(self.messages.get(thread_id))
+
+    def acquire_producer(self, thread_id):
+        with self._lock:
+            if thread_id in self.producer_locks:
+                return False
+            self.producer_locks.add(thread_id)
+            return True
+
+    def release_producer(self, thread_id):
+        with self._lock:
+            self.producer_locks.discard(thread_id)
+
+    def acquire_consumer(self, thread_id):
+        with self._lock:
+            consumer_id = f"consumer-{self._consumer_seq}"
+            self._consumer_seq += 1
+            self.active_consumers.add((thread_id, consumer_id))
+        return consumer_id
+
+    def wait_for_previous_consumer(self, thread_id, timeout=3.0):
+        return True
+
+    def check_consumer(self, thread_id, consumer_id):
+        pass
+
+    def release_consumer(self, thread_id, consumer_id):
+        with self._lock:
+            self.active_consumers.discard((thread_id, consumer_id))
+
+    def has_active_consumer(self, thread_id):
+        with self._lock:
+            return any(tid == thread_id for tid, _ in self.active_consumers)
+
+    def is_stopped(self, thread_id):
+        return False
+
+    def clear_stopped(self, thread_id):
+        pass
+
+    def mark_completed(self, thread_id):
+        with self._condition:
+            self.completed_threads.append(thread_id)
+            self.messages.pop(thread_id, None)
+            self._condition.notify_all()
+
+    def clear(self, thread_id):
+        with self._condition:
+            self.messages.pop(thread_id, None)
+            self._condition.notify_all()
+
+    def clear_cancel_signal(self, thread_id):
+        pass
+
+    def check_cancel_signal(self, thread_id):
+        return False
+
+    def set_cancel_signal(self, thread_id):
+        return False
+
+    def notify_consumer_cancelled(self, thread_id):
+        return True
+
+
+class BarrierReplayFromStartHandler(ReplayFromStartHandler):
+    """测试用 replay handler：等待多个 consumer 同时注册后再开始消费。"""
+
+    def __init__(self, parties: int):
+        super().__init__()
+        self._barrier = threading.Barrier(parties)
+
+    def acquire_consumer(self, thread_id):
+        consumer_id = super().acquire_consumer(thread_id)
+        try:
+            self._barrier.wait(timeout=2)
+        except threading.BrokenBarrierError as exc:
+            raise AssertionError("Timed out waiting for concurrent replay consumers to register") from exc
+        return consumer_id
+
+
+class TestReplayFromStartStreamingHelper:
+    def test_concurrent_consumers_replay_same_cached_stream_without_draining_each_other(self):
+        thread_id = "test_replay_multi_consumer"
+        handler = BarrierReplayFromStartHandler(parties=2)
+        handler.put(thread_id, "chunk_0")
+        handler.put(thread_id, "chunk_1")
+        handler.put(thread_id, EOD_CHUNK)
+
+        results = []
+        errors = []
+
+        def consume():
+            try:
+                results.append(list(GeneratorStreamingHelper(handler, thread_id=thread_id).stream(iter(()))))
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=consume) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+
+        assert errors == []
+        assert all(not thread.is_alive() for thread in threads)
+        assert results == [["chunk_0", "chunk_1"], ["chunk_0", "chunk_1"]]
+        assert thread_id not in handler.messages
+        assert handler.completed_threads == [thread_id]
+
+    def test_replay_mode_runs_on_complete_in_producer_once(self):
+        thread_id = "test_replay_on_complete_once"
+        handler = ReplayFromStartHandler()
+        completed = []
+
+        result = list(
+            GeneratorStreamingHelper(handler, thread_id=thread_id).stream(
+                iter(["chunk_0"]),
+                on_complete=lambda: completed.append(True),
+            )
+        )
+
+        assert result == ["chunk_0"]
+        assert completed == [True]
+        assert thread_id not in handler.producer_locks
 
 
 class TestInMemoryQueueMessageHandler:

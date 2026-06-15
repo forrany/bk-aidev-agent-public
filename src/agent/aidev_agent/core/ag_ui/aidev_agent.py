@@ -25,7 +25,13 @@ from .events import (
     ExtendToolCallResultEvent,
     ExtendToolCallStartEvent,
 )
-from .types import CustomEventNames, CustomMessageType, MessagesInProgressRecord, SessionPersistenceEventNames
+from .types import (
+    CustomEventNames,
+    CustomMessageType,
+    MessageSnapshotEventExtend,
+    MessagesInProgressRecord,
+    SessionPersistenceEventNames,
+)
 
 logger = getLogger(__name__)
 
@@ -184,25 +190,28 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
         temp_message_emitted = False
         skip_encode_custom = frozenset({SessionPersistenceEventNames.ChatModelEnd.value})
 
+        # 每次 SSE 连接先下发完整消息快照，让前端重置到 DB 中的会话状态；
+        # 后续 RabbitMQ replay 只负责补当前 run 的流式增量。
+        yield event_encoder.encode(
+            MessageSnapshotEventExtend(
+                type=EventType.MESSAGES_SNAPSHOT,
+                messages=list(getattr(input, "messages", []) or []),
+            )
+        )
+
         async for event in super().run(input):
             try:
+                event_type = getattr(event, "type", "")
                 # 特殊处理：不输出 message snapshot 事件
-                if getattr(event, "type", "") == EventType.MESSAGES_SNAPSHOT.value:
+                if event_type == EventType.MESSAGES_SNAPSHOT:
                     logger.debug(f"message snapshot: {event}")
-                elif (
-                    getattr(event, "type", "") == EventType.CUSTOM.value
-                    and getattr(event, "name", "") in skip_encode_custom
-                ):
+                elif event_type == EventType.CUSTOM and getattr(event, "name", "") in skip_encode_custom:
                     continue
                 else:
                     yield event_encoder.encode(event)
 
                 # MCP 工具拉取失败消息需要紧跟在 RUN_STARTED 后返回
-                if (
-                    not temp_message_emitted
-                    and getattr(event, "type", "") == EventType.RUN_STARTED.value
-                    and self._mcp_fetch_failures
-                ):
+                if not temp_message_emitted and event_type == EventType.RUN_STARTED and self._mcp_fetch_failures:
                     custom_event = CustomEvent(
                         type=EventType.CUSTOM,
                         name=CustomMessageType.TEMP_MESSAGE.value,
