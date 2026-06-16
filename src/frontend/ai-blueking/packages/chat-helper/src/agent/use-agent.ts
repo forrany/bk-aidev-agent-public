@@ -366,6 +366,7 @@ export const useAgent = (mediator: IMediatorModule, protocol: ISSEProtocol) => {
     getAgentInfo,
     reset,
     pollResumeSession,
+    clearLongPollTimer,
     userOperationStreamRequest,
     streamRequest,
   };
