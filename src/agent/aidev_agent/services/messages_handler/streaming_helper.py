@@ -253,6 +253,29 @@ class GeneratorStreamingHelper:
             cancel_event=cancel_event,
         )
 
+    def _supports_replay_from_start(self) -> bool:
+        """当前 handler 是否支持多消费者从会话日志独立 replay。"""
+        try:
+            return self.message_handler.supports_replay_from_start()
+        except Exception:
+            return False
+
+    def _get_consumer_messages(
+        self,
+        *,
+        timeout: float,
+        replay_offset: int,
+    ) -> tuple[list[Any], int]:
+        """读取当前消费者可见的消息。
+
+        replay-from-start handler 使用连接内 offset 做非破坏性读取；
+        旧 handler 继续使用 get() 的竞争消费语义。
+        """
+        if self._supports_replay_from_start():
+            return self.message_handler.get_messages_since(self.thread_id, replay_offset, timeout=timeout)
+
+        return self.message_handler.get(self.thread_id, timeout=timeout), replay_offset
+
     def _consume_stopped_session(
         self,
         consumer_id: str,
@@ -269,20 +292,23 @@ class GeneratorStreamingHelper:
         """
         max_empty_rounds = 3  # 最多空轮询3次就结束
         empty_rounds = 0
+        replay_offset = 0
+        supports_replay_from_start = self._supports_replay_from_start()
 
         while True:
             try:
-                self.message_handler.check_consumer(self.thread_id, consumer_id)
-                messages = self.message_handler.get(self.thread_id, timeout=0.3)
+                if not supports_replay_from_start:
+                    self.message_handler.check_consumer(self.thread_id, consumer_id)
+                messages, replay_offset = self._get_consumer_messages(timeout=0.3, replay_offset=replay_offset)
 
                 if not messages:
                     empty_rounds += 1
                     if empty_rounds >= max_empty_rounds:
-                        # 没有更多消息了，发送 RUN_FINISHED 事件并结束
                         # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
                         yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.STOPPED)
-                        # 清理队列（因为已经展示完了）
-                        self.message_handler.mark_completed(self.thread_id)
+                        # 旧竞争消费模型展示完即可清理；replay 模式由完成清理或 TTL 兜底回收。
+                        if not supports_replay_from_start:
+                            self.message_handler.mark_completed(self.thread_id)
                         # 清除停止标记
                         self.message_handler.clear_stopped(self.thread_id)
                         return
@@ -305,7 +331,8 @@ class GeneratorStreamingHelper:
                 if empty_rounds >= max_empty_rounds:
                     # 发送 RUN_FINISHED 事件，确保前端收到标准的结束信号
                     yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.STOPPED)
-                    self.message_handler.mark_completed(self.thread_id)
+                    if not supports_replay_from_start:
+                        self.message_handler.mark_completed(self.thread_id)
                     self.message_handler.clear_stopped(self.thread_id)
                     return
                 continue
@@ -353,6 +380,12 @@ class GeneratorStreamingHelper:
         if not is_stopped:
             return False, has_pending
 
+        if self._supports_replay_from_start():
+            if not has_pending:
+                self.message_handler.clear_stopped(self.thread_id)
+                return False, False
+            return True, True
+
         # Stop 后再次进入：优先展示已有内容
         self.message_handler.wait_for_previous_consumer(self.thread_id, timeout=1.0)
         restored = self.message_handler.restore_messages(self.thread_id)
@@ -385,20 +418,45 @@ class GeneratorStreamingHelper:
         generator: Generator[Any, None, None],
         cancel_event: threading.Event,
         has_pending: bool,
+        on_complete: Callable[[], None] | None = None,
     ) -> tuple[threading.Thread | None, bool, bool]:
         """根据队列状态决定启动生产者还是恢复旧消息。"""
         producer_thread: threading.Thread | None = None
         is_resuming = False
         enable_heartbeat_check = False
+        supports_replay_from_start = self._supports_replay_from_start()
 
         if not has_pending:
-            self.message_handler.clear(self.thread_id)
-            self.message_handler.clear_stopped(self.thread_id)
+            if not self.message_handler.acquire_producer(self.thread_id):
+                logger.info(
+                    "Producer already active for thread_id=%s, consuming existing replay stream",
+                    self.thread_id,
+                )
+                return producer_thread, True, True
 
-            producer_thread = threading.Thread(target=self._producer, args=(generator, cancel_event), daemon=True)
+            try:
+                self.message_handler.clear(self.thread_id)
+                self.message_handler.clear_stopped(self.thread_id)
+            except Exception:
+                self.message_handler.release_producer(self.thread_id)
+                raise
+
+            producer_thread = threading.Thread(
+                target=self._producer,
+                args=(generator, cancel_event, on_complete, True),
+                daemon=True,
+            )
             producer_thread.start()
             logger.info(f"Started producer for thread_id={self.thread_id}")
             enable_heartbeat_check = True
+            return producer_thread, is_resuming, enable_heartbeat_check
+
+        if supports_replay_from_start:
+            is_resuming = True
+            logger.info(
+                "Pending messages exist for thread_id=%s, replaying cached stream from start",
+                self.thread_id,
+            )
             return producer_thread, is_resuming, enable_heartbeat_check
 
         self.message_handler.wait_for_previous_consumer(self.thread_id, timeout=3.0)
@@ -425,7 +483,7 @@ class GeneratorStreamingHelper:
         is_resuming: bool,
         enable_heartbeat_check: bool,
         on_complete: Callable[[], None] | None = None,
-    ) -> Generator[Any, None, None]:
+    ) -> Generator[Any, None, str]:
         """消费者循环：读取队列、处理控制消息并向上游产出业务消息。
 
         纯观测日志（零行为改动）：
@@ -443,6 +501,8 @@ class GeneratorStreamingHelper:
         yielded_total = 0
         exit_reason = "unknown"
         last_progress_ts = time.time()
+        replay_offset = 0
+        supports_replay_from_start = self._supports_replay_from_start()
 
         logger.info(
             "[RabbitMQ] consumer loop enter thread_id=%s consumer_id=%s is_resuming=%s heartbeat_check=%s",
@@ -491,21 +551,22 @@ class GeneratorStreamingHelper:
                         yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.CANCELLED)
                         yielded_total += 1
                         exit_reason = "drain_timeout"
-                        return
+                        return exit_reason
 
-                    t_check = time.time()
-                    self.message_handler.check_consumer(self.thread_id, consumer_id)
-                    check_elapsed = time.time() - t_check
-                    if check_elapsed > self._CHECK_CONSUMER_SLOW_SEC:
-                        logger.warning(
-                            "[RabbitMQ] check_consumer slow thread_id=%s consumer_id=%s elapsed=%.2fs",
-                            self.thread_id,
-                            consumer_id_short,
-                            check_elapsed,
-                        )
+                    if not supports_replay_from_start:
+                        t_check = time.time()
+                        self.message_handler.check_consumer(self.thread_id, consumer_id)
+                        check_elapsed = time.time() - t_check
+                        if check_elapsed > self._CHECK_CONSUMER_SLOW_SEC:
+                            logger.warning(
+                                "[RabbitMQ] check_consumer slow thread_id=%s consumer_id=%s elapsed=%.2fs",
+                                self.thread_id,
+                                consumer_id_short,
+                                check_elapsed,
+                            )
 
                     t_get = time.time()
-                    messages = self.message_handler.get(self.thread_id, timeout=0.5)
+                    messages, replay_offset = self._get_consumer_messages(timeout=0.5, replay_offset=replay_offset)
                     get_elapsed = time.time() - t_get
                     if get_elapsed > self._GET_SLOW_SEC:
                         logger.warning(
@@ -525,18 +586,19 @@ class GeneratorStreamingHelper:
                             continue
                         if item == EOD_CHUNK:
                             should_notify_cancelled = self._should_notify_consumer_cancelled_on_complete(cancel_event)
-                            if on_complete:
+                            if on_complete and not supports_replay_from_start:
                                 try:
                                     on_complete()
                                 except Exception as e:
                                     logger.exception(f"on_complete callback error: {e}")
-                            self.message_handler.mark_completed(self.thread_id)
+                            if not supports_replay_from_start:
+                                self.message_handler.mark_completed(self.thread_id)
                             logger.info(f"Stream completed for thread_id={self.thread_id}")
                             if should_notify_cancelled:
                                 # cancel 可能已发出但 Agent 恰好也完成了，此时仍需通知 stop 接口。
                                 self._notify_consumer_cancelled_safely()
                             exit_reason = "completed"
-                            return
+                            return exit_reason
                         if item == CANCELLED_CHUNK:
                             if hasattr(self.message_handler, "mark_stopped"):
                                 self.message_handler.mark_stopped(self.thread_id)
@@ -545,7 +607,7 @@ class GeneratorStreamingHelper:
                             yield emit_run_finished_event(thread_id=self.thread_id, run_id=RunId.CANCELLED)
                             yielded_total += 1
                             exit_reason = "cancelled"
-                            return
+                            return exit_reason
                         if is_resuming and self._should_filter_on_resume(item):
                             logger.debug(f"Filtered thinking event in resume mode for thread_id={self.thread_id}")
                             continue
@@ -603,6 +665,20 @@ class GeneratorStreamingHelper:
                 loop_iter,
             )
 
+    def _cleanup_replay_session_if_idle(self) -> None:
+        """replay 模式下，最后一个正常完成的消费者负责清理会话日志。"""
+        if not self._supports_replay_from_start():
+            return
+
+        try:
+            has_pending = self.message_handler.has_pending_messages(self.thread_id)
+            has_active_consumer = self.message_handler.has_active_consumer(self.thread_id)
+            if has_pending and not has_active_consumer:
+                self.message_handler.mark_completed(self.thread_id)
+                logger.info("[RabbitMQ] replay session completed and cleaned thread_id=%s", self.thread_id)
+        except Exception:
+            logger.exception("Error cleaning completed replay session for thread_id=%s", self.thread_id)
+
     def stream(
         self,
         generator: Generator[Any, None, None],
@@ -610,13 +686,13 @@ class GeneratorStreamingHelper:
     ) -> Generator[Any, None, None]:
         """使用队列处理器缓存流式请求
 
-        支持消费者抢占：当新消费者（如断点续传的新窗口）到来时，
-        旧消费者会被优雅地抢占并退出，新消费者接管队列。
+        replay-from-start handler 支持多个消费者各自从会话日志开头 replay；
+        旧 handler 仍使用竞争消费语义，新消费者会抢占旧消费者。
 
         Args:
             generator: 数据生成器
-            on_complete: 流完成时的回调函数（在 mark_completed 之前调用），
-                        用于及时更新 session status 等外部状态
+            on_complete: 流完成时的回调函数，用于及时更新 session status 等外部状态。
+                replay-from-start handler 在 producer 完成时调用；旧 handler 在消费到 EOD 后调用。
 
         Yields:
             生成器产生的数据
@@ -635,6 +711,7 @@ class GeneratorStreamingHelper:
         # 注册为当前活跃消费者
         consumer_id = self.message_handler.acquire_consumer(self.thread_id)
         producer_thread: threading.Thread | None = None
+        consumer_exit_reason: str | None = None
 
         should_consume_stopped, has_pending = self._resolve_stopped_or_pending_state()
 
@@ -648,8 +725,9 @@ class GeneratorStreamingHelper:
                 generator=generator,
                 cancel_event=cancel_event,
                 has_pending=has_pending,
+                on_complete=on_complete,
             )
-            yield from self._consume_stream_messages(
+            consumer_exit_reason = yield from self._consume_stream_messages(
                 consumer_id=consumer_id,
                 cancel_event=cancel_event,
                 is_resuming=is_resuming,
@@ -672,6 +750,8 @@ class GeneratorStreamingHelper:
                     producer_thread.join(timeout=self.CANCEL_DRAIN_TIMEOUT + 2.0)
                 except Exception as e:
                     logger.exception(f"Error joining producer thread for thread_id={self.thread_id}: {e}")
+            if consumer_exit_reason == "completed":
+                self._cleanup_replay_session_if_idle()
 
     def _schedule_session_cleanup(self, done_event_seen: bool = False) -> None:
         """生产者完成后延迟清理孤立的会话资源。
@@ -742,7 +822,13 @@ class GeneratorStreamingHelper:
             name=f"session-cleanup-{thread_id[:8]}",
         ).start()
 
-    def _producer(self, generator: Generator[Any, None, None], cancel_event: threading.Event | None = None) -> None:
+    def _producer(
+        self,
+        generator: Generator[Any, None, None],
+        cancel_event: threading.Event | None = None,
+        on_complete: Callable[[], None] | None = None,
+        release_producer: bool = False,
+    ) -> None:
         """生产者线程：将生成器产生的消息推送到队列
 
         即使消费者断开连接，生产者也会继续运行直到完成。
@@ -761,6 +847,7 @@ class GeneratorStreamingHelper:
         draining = False
         drain_start_time = 0.0
         done_event_seen = False
+        producer_error = False
 
         def _heartbeat_worker() -> None:
             """独立心跳线程：即使 generator 阻塞也保持心跳。"""
@@ -829,6 +916,7 @@ class GeneratorStreamingHelper:
         except GeneratorExit:
             logger.info(f"Generator closed for thread_id={self.thread_id}")
         except Exception as e:
+            producer_error = True
             logger.exception(f"Producer error for thread_id={self.thread_id}: {e}")
             # 将错误信息作为 SSE error event 推送到队列，让消费者能感知并传播给前端
             try:
@@ -845,6 +933,12 @@ class GeneratorStreamingHelper:
                 except Exception as e:
                     logger.exception(f"Error joining heartbeat thread for thread_id={self.thread_id}: {e}")
 
+            if on_complete and self._supports_replay_from_start() and not producer_error:
+                try:
+                    on_complete()
+                except Exception as e:
+                    logger.exception(f"on_complete callback error in producer: {e}")
+
             # 无论是正常结束还是取消，都推送 EOD_CHUNK 让消费者知道流已结束
             self.message_handler.put(self.thread_id, EOD_CHUNK)
             self.message_handler.flush(self.thread_id)
@@ -853,3 +947,5 @@ class GeneratorStreamingHelper:
             # 延迟清理：如果消费者已断开且未重连，主动释放队列资源
             # 不能立即清理，否则会与正在读取 EOD_CHUNK 的活跃消费者竞争
             self._schedule_session_cleanup(done_event_seen=done_event_seen)
+            if release_producer:
+                self.message_handler.release_producer(self.thread_id)

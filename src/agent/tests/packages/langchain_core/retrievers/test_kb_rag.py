@@ -19,13 +19,9 @@ to the current version of the project delivered to anyone in the future.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from aidev_agent.enums import FineGrainedScoreType
+from aidev_agent.enums import Decision, FineGrainedScoreType
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag
-from aidev_agent.pydantic_models import (
-    AgentOptions,
-    IntentRecognition,
-    KnowledgebaseSettings,
-)
+from aidev_agent.pydantic_models import KnowledgeSettings
 from langchain_core.documents import Document
 
 
@@ -36,24 +32,26 @@ def create_mock_llm_response(content: str):
     return mock_response
 
 
-def create_agent_options(
+def create_knowledge_settings(
     with_index_specific_search: bool = True,
     with_rrf: bool = False,
     knowledge_resource_reject_threshold: tuple = (0.3, 0.7),
-) -> AgentOptions:
-    """创建 AgentOptions 配置"""
-    knowledge_settings = KnowledgebaseSettings(
+) -> KnowledgeSettings:
+    """创建 KnowledgeSettings 配置"""
+    return KnowledgeSettings(
         knowledge_bases=[],
         with_index_specific_search=with_index_specific_search,
         with_rrf=with_rrf,
         knowledge_resource_reject_threshold=knowledge_resource_reject_threshold,
     )
-    intent_settings = IntentRecognition(
-        with_index_specific_search_init=False,
-        with_index_specific_search_translation=False,
-        with_index_specific_search_keywords=False,
-    )
-    return AgentOptions(knowledge_query_options=knowledge_settings, intent_recognition_options=intent_settings)
+
+
+def create_multimodal_query(text: str = "蓝鲸是什么") -> list[dict]:
+    """创建图文混合 query。"""
+    return [
+        {"type": "image_url", "image_url": {"url": "https://example.com/test.png"}},
+        {"type": "text", "text": text},
+    ]
 
 
 class TestKnowledgeRag:
@@ -87,9 +85,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
-        result = rag.extract_query_keywords(agent_options=agent_options, query="什么是蓝鲸智云平台", llm=mock_llm)
+        result = rag.extract_query_keywords(query="什么是蓝鲸智云平台", llm=mock_llm)
 
         assert isinstance(result, list)
         assert len(result) == 3
@@ -104,9 +101,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
-        result = rag.query_translation(agent_options=agent_options, query="blueking platform", llm=mock_llm)
+        result = rag.query_translation(query="blueking platform", llm=mock_llm)
 
         assert result == "蓝鲸智云平台"
         mock_invoke_func.assert_called_once()
@@ -119,9 +115,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
-        result = rag.query_translation(agent_options=agent_options, query="蓝鲸智云平台", llm=mock_llm)
+        result = rag.query_translation(query="蓝鲸智云平台", llm=mock_llm)
 
         assert result is None
 
@@ -134,10 +129,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.query_rewrite_for_independence(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='我的手机号xxx存在经常被无故停机的问题')]",
             query="手机号123也是",
             llm=mock_llm,
@@ -156,10 +149,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.sum_chat_history_for_query(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='我的手机号经常被停机')]",
             query="为什么",
             llm=mock_llm,
@@ -173,11 +164,8 @@ class TestKnowledgeRag:
         """测试 sum_chat_history_for_query 方法 - 空历史记录"""
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
-        result = rag.sum_chat_history_for_query(
-            agent_options=agent_options, chat_history="", query="什么是蓝鲸", llm=mock_llm
-        )
+        result = rag.sum_chat_history_for_query(chat_history="", query="什么是蓝鲸", llm=mock_llm)
 
         assert result is None
         mock_invoke_decorator.assert_not_called()
@@ -250,12 +238,9 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
         doc = Document(page_content="蓝鲸是腾讯开发的运维平台", metadata={})
 
-        result = rag.llm_relevance_determiner(
-            agent_options=agent_options, query="什么是蓝鲸", doc=doc, llm=mock_llm, input="什么是蓝鲸"
-        )
+        result = rag.llm_relevance_determiner(query="什么是蓝鲸", doc=doc, llm=mock_llm, input="什么是蓝鲸")
 
         assert result is True
 
@@ -273,15 +258,12 @@ class TestKnowledgeRag:
         mock_executor.submit.side_effect = [mock_future1, mock_future2]
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
         docs = [
             Document(page_content="content1", metadata={}),
             Document(page_content="content2", metadata={}),
         ]
 
-        result = rag.llm_relevance_determiner_parallel(
-            agent_options=agent_options, query="test query", fusion_docs=docs, llm=mock_llm
-        )
+        result = rag.llm_relevance_determiner_parallel(query="test query", fusion_docs=docs, llm=mock_llm)
 
         assert result == [1.0, 0.0]
 
@@ -293,10 +275,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.llm_context_compressor(
-            agent_options=agent_options,
             provided_chat_history="[]",
             query="什么是蓝鲸",
             candidate_context="蓝鲸是腾讯开发的运维平台，具有很多功能...",
@@ -311,11 +291,9 @@ class TestKnowledgeRag:
         """测试 llm_context_compressor 方法 - 不支持的压缩类型"""
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         with pytest.raises(ValueError, match="不支持的知识库知识压缩方式"):
             rag.llm_context_compressor(
-                agent_options=agent_options,
                 provided_chat_history="[]",
                 query="test",
                 candidate_context="content",
@@ -336,10 +314,8 @@ class TestKnowledgeRag:
         mock_executor.submit.side_effect = [mock_future1, mock_future2]
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.llm_context_compressor_parallel(
-            agent_options=agent_options,
             provided_chat_history="[]",
             query="test",
             context=["内容1", "内容2"],
@@ -353,7 +329,7 @@ class TestKnowledgeRag:
         """测试 calculate_fine_grained_scores 方法 - EMBEDDING 类型"""
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
+        knowledge_settings = create_knowledge_settings()
 
         doc = Document(page_content="test content", metadata={})
         context_docs_with_scores = [(doc, 0.85)]
@@ -363,7 +339,7 @@ class TestKnowledgeRag:
             query_for_search="test query",
             llm=mock_llm,
             context_docs_with_scores=context_docs_with_scores,
-            agent_options=agent_options,
+            knowledge_query_options=knowledge_settings,
             input="test query",
         )
 
@@ -374,7 +350,7 @@ class TestKnowledgeRag:
         """测试 calculate_fine_grained_scores 方法 - 无效的类型"""
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
+        knowledge_settings = create_knowledge_settings()
 
         doc = Document(page_content="test content", metadata={})
         context_docs_with_scores = [(doc, 0.85)]
@@ -385,7 +361,7 @@ class TestKnowledgeRag:
                 query_for_search="test query",
                 llm=mock_llm,
                 context_docs_with_scores=context_docs_with_scores,
-                agent_options=agent_options,
+                knowledge_query_options=knowledge_settings,
                 input="test query",
             )
 
@@ -394,8 +370,13 @@ class TestKnowledgeRag:
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
 
-        knowledge_settings = KnowledgebaseSettings(qa_response_kb_ids=[100])
-        agent_options = AgentOptions(knowledge_query_options=knowledge_settings)
+        knowledge_settings = KnowledgeSettings(
+            knowledge_bases=[],
+            with_index_specific_search=True,
+            with_rrf=False,
+            knowledge_resource_reject_threshold=(0.3, 0.7),
+            qa_response_kb_ids=[100],
+        )
 
         # 新的方法签名直接接收文档列表
         docs_list = [
@@ -405,7 +386,7 @@ class TestKnowledgeRag:
 
         result = rag.handle_knowledge_resources(
             recog_results_with_knowledge_resource_type=docs_list,
-            agent_options=agent_options,
+            knowledge_query_options=knowledge_settings,
         )
 
         assert "knowledge_content" in result
@@ -419,7 +400,7 @@ class TestKnowledgeRag:
         """测试 handle_knowledge_resources 方法 - 缺少 knowledge_base_id"""
         mock_llm = MagicMock()
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = AgentOptions()
+        knowledge_settings = KnowledgeSettings()
 
         # 新的方法签名直接接收文档列表
         docs_list = [
@@ -429,7 +410,7 @@ class TestKnowledgeRag:
         with pytest.raises(ValueError, match="Document metadata missing required field: knowledge_base_id"):
             rag.handle_knowledge_resources(
                 recog_results_with_knowledge_resource_type=docs_list,
-                agent_options=agent_options,
+                knowledge_query_options=knowledge_settings,
             )
 
     def test_search_knowledge_self_query_not_implemented(self):
@@ -447,22 +428,39 @@ class TestKnowledgeRag:
         rag = KnowledgeRag(llm=mock_llm)
 
         # 所有召回选项都为 False
-        knowledge_settings = KnowledgebaseSettings(
+        knowledge_settings = KnowledgeSettings(
             with_index_specific_search=False,
-            with_es_search_query=False,
-            with_es_search_keywords=False,
-        )
-        intent_settings = IntentRecognition(
             with_index_specific_search_init=False,
             with_index_specific_search_translation=False,
             with_index_specific_search_keywords=False,
-        )
-        agent_options = AgentOptions(
-            knowledge_query_options=knowledge_settings, intent_recognition_options=intent_settings
+            with_es_search_query=False,
+            with_es_search_keywords=False,
         )
 
         with pytest.raises(RuntimeError, match="请至少选择一种召回方式"):
-            rag.retrieve(query="test query", agent_options=agent_options)
+            rag.retrieve(query="test query", knowledge_query_options=knowledge_settings)
+
+    @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.dispatch_rag_event_chunk")
+    def test_retrieve_normalizes_non_string_result_before_search(self, mock_dispatch_rag_event):
+        """测试非字符串 res 会在召回前归一化为文本。"""
+        mock_llm = MagicMock()
+        mock_retriever = MagicMock()
+        mock_retriever.search_knowledge_index_specific.return_value = []
+        rag = KnowledgeRag(llm=mock_llm, kb_retriever=mock_retriever)
+        knowledge_settings = KnowledgeSettings(
+            knowledge_items=[{"id": 1}],
+            with_index_specific_search_init=False,
+        )
+        query = create_multimodal_query()
+
+        result = rag.retrieve(
+            query="蓝鲸是什么",
+            knowledge_query_options=knowledge_settings,
+            input=query,
+        )
+
+        assert result["decision"] == Decision.GENERAL_QA
+        assert mock_retriever.search_knowledge_index_specific.call_args.kwargs["query"] == "蓝鲸是什么"
 
     @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.conditional_dispatch_custom_event")
     @patch("aidev_agent.packages.langchain_core.retrievers.kb_rag.invoke_decorator")
@@ -473,10 +471,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.latest_query_classification(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="你好",
             llm=mock_llm,
@@ -494,10 +490,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.latest_query_classification(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="那绿屏怎么解决",
             llm=mock_llm,
@@ -515,10 +509,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.latest_query_classification(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="谢谢",
             llm=mock_llm,
@@ -536,10 +528,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.query_cls_with_resp_or_rewrite(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="你好",
             llm=mock_llm,
@@ -559,10 +549,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.query_cls_with_resp_or_rewrite(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="那绿屏怎么解决",
             llm=mock_llm,
@@ -582,10 +570,8 @@ class TestKnowledgeRag:
         mock_invoke_decorator.return_value = mock_invoke_func
 
         rag = KnowledgeRag(llm=mock_llm)
-        agent_options = create_agent_options()
 
         result = rag.query_cls_with_resp_or_rewrite(
-            agent_options=agent_options,
             chat_history="[HumanMessage(content='云桌面黑屏处理方法')]",
             query="谢谢",
             llm=mock_llm,

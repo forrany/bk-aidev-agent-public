@@ -1,0 +1,267 @@
+"""Unit tests for X-BKAIDEV-Attributes header construction and injection (Phase 13)."""
+
+import json
+import warnings
+from unittest.mock import MagicMock, patch
+
+from aidev_agent.pydantic_models import ExecuteKwargs
+from aidev_agent.services.agent import ChatCompletionAgent
+from aidev_agent.services.agent.chat import ChatAgentBuilder
+from aidev_agent.services.agent.registry import AgentBuildContext, ChatBuildExtras
+from langchain_core.language_models import BaseChatModel
+
+
+def _make_builder_ctx(agent_info: dict | None = None, non_thinking_llm: str | None = None):
+    """Construct minimal ctx for ChatAgentBuilder with configurable agent_info."""
+    ctx = MagicMock(spec=AgentBuildContext)
+    ctx.session_context_data = []
+    ctx.agent_config.agent_info = agent_info
+    ctx.agent_config.chat_model = "test-model"
+    ctx.agent_config.non_thinking_llm = non_thinking_llm
+    ctx.agent_config.temperature = None
+    ctx.agent_config.max_tokens = None
+    ctx.chat = ChatBuildExtras()
+    return ctx
+
+
+class TestBuildChatModel:
+    """Test build_chat_model constructs ChatModel correctly (no header at build time)."""
+
+    @patch("aidev_agent.services.agent.chat.ChatModel.get_setup_instance")
+    def test_no_bkaidev_header_at_build_time(self, mock_setup):
+        """X-BKAIDEV-Attributes is NOT injected at build time (injected at execute time)."""
+        agent_info = {
+            "agent_code": "test-code",
+            "agent_name": "TestAgent",
+            "service_catalogue": "svc/cat",
+        }
+        ctx = _make_builder_ctx(agent_info=agent_info)
+        mock_setup.return_value = MagicMock(spec=BaseChatModel)
+        builder = ChatAgentBuilder(ctx)
+        builder.build_chat_model()
+
+        mock_setup.assert_called_once()
+        call_kwargs = mock_setup.call_args[1]
+        # No X-BKAIDEV-Attributes at build time
+        if "default_headers" in call_kwargs:
+            assert "X-BKAIDEV-Attributes" not in call_kwargs["default_headers"]
+
+
+class TestBuildChatModelNonThinking:
+    """Test build_chat_model_non_thinking returns ChatModel or None."""
+
+    @patch("aidev_agent.services.agent.chat.ChatModel.get_setup_instance")
+    def test_returns_chat_model_instance(self, mock_setup):
+        """When non_thinking_llm is set, returns ChatModel instance."""
+        ctx = _make_builder_ctx(agent_info={}, non_thinking_llm="nt-model-v1")
+        mock_setup.return_value = MagicMock(spec=BaseChatModel)
+        builder = ChatAgentBuilder(ctx)
+        result = builder.build_chat_model_non_thinking()
+
+        assert result is not None
+        mock_setup.assert_called_once()
+        call_kwargs = mock_setup.call_args[1]
+        assert call_kwargs["model"] == "nt-model-v1"
+
+    def test_returns_none_when_no_model(self):
+        """When non_thinking_llm is None, returns None."""
+        ctx = _make_builder_ctx(agent_info={"agent_code": "x"}, non_thinking_llm=None)
+        builder = ChatAgentBuilder(ctx)
+        result = builder.build_chat_model_non_thinking()
+        assert result is None
+
+
+class TestBuildNonThinkingLlmDeprecation:
+    """Test build_non_thinking_llm emits DeprecationWarning."""
+
+    def test_emits_deprecation_warning(self):
+        """Calling build_non_thinking_llm raises DeprecationWarning."""
+        ctx = _make_builder_ctx(agent_info={}, non_thinking_llm="old-model")
+        builder = ChatAgentBuilder(ctx)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = builder.build_non_thinking_llm()
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "build_chat_model_non_thinking" in str(w[0].message)
+        assert result == "old-model"
+
+
+class TestUpdateBkaidevSessionHeader:
+    """Test _update_bkaidev_session_header builds complete header (agent.info + session)."""
+
+    def _make_agent_with_model(self, agent_info: dict | None = None):
+        """Create ChatCompletionAgent with mocked chat_model."""
+        agent = ChatCompletionAgent()
+        mock_model = MagicMock()
+        mock_model.default_headers = {}
+        agent.chat_model = mock_model
+        agent.chat_model_non_thinking = None
+        agent.agent_info = agent_info
+        return agent
+
+    def test_builds_complete_header_with_info_and_session(self):
+        """Builds X-BKAIDEV-Attributes with both agent.info and session fields."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": "Agent",
+                "service_catalogue": "svc/cat",
+            }
+        )
+        kwargs = ExecuteKwargs(
+            stream=False,
+            caller_bk_app_code="app-001",
+            caller_bk_biz_env="public",
+            caller_bk_biz_id=6000086,
+            caller_executor="user-a",
+            executor="user-b",
+            caller_order_type="ai-auto",
+            session_code="sess-xyz",
+        )
+        agent._update_aidev_agent_header(kwargs)
+
+        result = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
+        # agent.info fields
+        assert result["agent.info.code"] == "my-agent"
+        assert result["agent.info.name"] == "Agent"
+        assert result["agent.info.service_catalogue"] == "svc/cat"
+        # session fields
+        assert result["agent.session.caller_bk_app_code"] == "app-001"
+        assert result["agent.session.caller_bk_biz_env"] == "public"
+        assert result["agent.session.caller_bk_biz_id"] == "6000086"  # int -> str
+        assert result["agent.session.caller_executor"] == "user-a"
+        assert result["agent.session.executor"] == "user-b"
+        assert result["agent.session.caller_order_type"] == "ai-auto"
+        assert result["agent.session.session_code"] == "sess-xyz"
+
+    def test_none_values_become_empty_string(self):
+        """Fields with None value are set to empty string in JSON."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": None,
+            }
+        )
+        kwargs = ExecuteKwargs(
+            stream=False,
+            caller_bk_app_code="app-001",
+            caller_bk_biz_env=None,
+            caller_bk_biz_id=None,
+            caller_executor=None,
+            executor=None,
+            caller_order_type=None,
+            session_code=None,
+        )
+        agent._update_aidev_agent_header(kwargs)
+
+        result = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
+        # Has value
+        assert result["agent.info.code"] == "my-agent"
+        assert result["agent.session.caller_bk_app_code"] == "app-001"
+        # Empty string (not omitted)
+        assert result["agent.info.name"] == ""
+        assert result["agent.info.service_catalogue"] == ""
+        assert result["agent.session.caller_bk_biz_env"] == ""
+        assert result["agent.session.caller_bk_biz_id"] == ""
+
+    def test_updates_chat_model_non_thinking_too(self):
+        """Both chat_model and chat_model_non_thinking headers are updated."""
+        agent = self._make_agent_with_model(agent_info={"agent_code": "x"})
+        mock_nt = MagicMock()
+        mock_nt.default_headers = {}
+        agent.chat_model_non_thinking = mock_nt
+
+        kwargs = ExecuteKwargs(stream=False, session_code="sess-1")
+        agent._update_aidev_agent_header(kwargs)
+
+        # Both models updated
+        result_main = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
+        result_nt = json.loads(agent.chat_model_non_thinking.default_headers["X-BKAIDEV-Attributes"])
+        assert result_main["agent.session.session_code"] == "sess-1"
+        assert result_nt["agent.session.session_code"] == "sess-1"
+
+    def test_caller_bk_biz_id_int_to_str(self):
+        """caller_bk_biz_id (int) is serialized as string in JSON."""
+        agent = self._make_agent_with_model(agent_info={})
+        kwargs = ExecuteKwargs(stream=False, caller_bk_biz_id=12345)
+        agent._update_aidev_agent_header(kwargs)
+
+        result = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
+        assert result["agent.session.caller_bk_biz_id"] == "12345"
+        assert isinstance(result["agent.session.caller_bk_biz_id"], str)
+
+    def test_all_empty_when_no_data(self):
+        """All fields are empty string when agent_info is empty and execute_kwargs has no values."""
+        agent = self._make_agent_with_model(agent_info={})
+        kwargs = ExecuteKwargs(stream=False)
+        agent._update_aidev_agent_header(kwargs)
+
+        result = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
+        assert result["agent.info.code"] == ""
+        assert result["agent.session.session_code"] == ""
+
+    def test_ensure_ascii_no_raw_chinese_in_header_value(self):
+        """Header value uses ASCII-only encoding; Chinese chars are escaped as \\uXXXX
+        to comply with W3C baggage header percent-encoding requirements."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": "智能助手",
+                "service_catalogue": "服务目录/智能服务",
+            }
+        )
+        kwargs = ExecuteKwargs(
+            stream=False,
+            caller_executor="张三",
+            executor="李四",
+        )
+        agent._update_aidev_agent_header(kwargs)
+
+        header_value = agent.chat_model.default_headers["X-BKAIDEV-Attributes"]
+        # The raw JSON string MUST NOT contain unescaped Chinese characters
+        assert "智能助手" not in header_value
+        assert "服务目录" not in header_value
+        assert "智能服务" not in header_value
+        assert "张三" not in header_value
+        assert "李四" not in header_value
+        # It SHOULD contain \\u escapes
+        assert "\\u" in header_value
+
+    def test_ensure_ascii_round_trip_chinese_values(self):
+        """Unicode-escaped JSON can be parsed back to the original Chinese values."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": "智能助手",
+                "service_catalogue": "服务目录/智能服务",
+            }
+        )
+        kwargs = ExecuteKwargs(
+            stream=False,
+            caller_executor="张三",
+            executor="李四",
+        )
+        agent._update_aidev_agent_header(kwargs)
+
+        result = json.loads(agent.chat_model.default_headers["X-BKAIDEV-Attributes"])
+        assert result["agent.info.name"] == "智能助手"
+        assert result["agent.info.service_catalogue"] == "服务目录/智能服务"
+        assert result["agent.session.caller_executor"] == "张三"
+        assert result["agent.session.executor"] == "李四"
+
+    def test_ensure_ascii_no_control_chars(self):
+        """Header value must not contain any character with code point > 127
+        (i.e., no raw non-ASCII bytes)."""
+        agent = self._make_agent_with_model(
+            agent_info={
+                "agent_code": "my-agent",
+                "agent_name": "中文名称",
+            }
+        )
+        kwargs = ExecuteKwargs(stream=False)
+        agent._update_aidev_agent_header(kwargs)
+
+        header_value = agent.chat_model.default_headers["X-BKAIDEV-Attributes"]
+        for ch in header_value:
+            assert ord(ch) <= 127, f"Found non-ASCII char U+{ord(ch):04X} in header value"

@@ -126,17 +126,9 @@ class ModelNodeSettings(BaseModel):
         default="抱歉，没有找到相关信息。",
         description="当智能体决定拒绝回答时使用的兜底消息",
     )
-    role_prompt: str = Field(
-        default="你是一个智能助手。",
-        description="注入到聊天提示词模板中的角色/系统提示词",
-    )
     use_general_knowledge_on_miss: bool = Field(
         default=False,
         description="当检索/记忆未命中时，是否允许使用通用知识回答。如果为 False，智能体应使用 rejection_message 响应",
-    )
-    prefix: Optional[str] = Field(
-        default=None,
-        description="注入到提示词中的可选前缀（例如产品/领域上下文）",
     )
     use_deepseek_r1_models_process: bool = Field(
         default=True,
@@ -178,5 +170,11 @@ class ModelNodeSettings(BaseModel):
     extra_template_middlewares: list[Any] = Field(
         default_factory=list,
         description="(internal) Extra template pipeline middlewares injected by graph layer.",
+        exclude=True,
+    )
+
+    extra_tool_middlewares: list[Any] = Field(
+        default_factory=list,
+        description="(internal) Extra tool pipeline middlewares injected by graph layer.",
         exclude=True,
     )

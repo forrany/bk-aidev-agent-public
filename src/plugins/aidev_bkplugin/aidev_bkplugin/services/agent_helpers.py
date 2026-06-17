@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from aidev_agent.api.bk_aidev import Client
 
 logger = getLogger(__name__)
+memory_checkpointer = MemorySaver()
 
 
 class AgentHelper:
@@ -43,7 +44,7 @@ class AgentHelper:
     @classmethod
     def get_checkpointer(cls):
         """LangGraph 内存 checkpointer；当前与历史行为保持一致（每次新建 ``MemorySaver``）。"""
-        return MemorySaver()
+        return memory_checkpointer
 
     @classmethod
     def build_session_detail_url(cls, session_code: str, username: str | None = None) -> str:

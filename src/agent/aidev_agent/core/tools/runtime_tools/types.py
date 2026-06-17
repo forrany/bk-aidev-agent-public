@@ -30,9 +30,9 @@ to the current version of the project delivered to anyone in the future.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import NotRequired, Protocol
 
-from typing_extensions import TypedDict
+from langchain_core.runnables import RunnableConfig
+from typing_extensions import NotRequired, TypedDict
 
 
 class FileInfo(TypedDict):
@@ -138,18 +138,36 @@ class FileDownloadResponse(TypedDict):
     """错误信息，成功时为 None"""
 
 
-class RuntimeBackend(Protocol):
-    """运行时后端抽象（基于 tool_provider 的实际使用定义）。
+class RuntimeBackend:
+    """运行时后端基类，提供统一的方法签名和生命周期管理接口。
 
-    说明：该 Protocol 仅描述 runtime tool provider 调用到的最小方法集合。
-    具体后端实现可提供更多能力，但至少需要满足这些方法签名。
+    所有运行时后端（PaasSandboxBackend、E2BSandboxBackend、FilesystemBackend）
+    应继承此基类，以支持统一的方法签名和上下文管理器协议。
+
+    子类可根据需要重写 ``close()`` 方法以实现自定义清理逻辑。
+    对于远程沙箱后端，``close()`` 通常调用 ``kill()`` 销毁远程实例。
     """
 
-    def ls_info(self, path: str) -> list[FileInfo]: ...
+    # --- 文件操作方法（子类应重写） ---
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str: ...
+    def ls_info(self, path: str, *, config: RunnableConfig | None = None, state: dict | None = None) -> list[FileInfo]:
+        raise NotImplementedError
 
-    def write(self, file_path: str, content: str) -> WriteResult: ...
+    def read(
+        self,
+        file_path: str,
+        offset: int = 0,
+        limit: int = 2000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> str:
+        raise NotImplementedError
+
+    def write(
+        self, file_path: str, content: str, *, config: RunnableConfig | None = None, state: dict | None = None
+    ) -> WriteResult:
+        raise NotImplementedError
 
     def edit(
         self,
@@ -157,20 +175,77 @@ class RuntimeBackend(Protocol):
         old_string: str,
         new_string: str,
         replace_all: bool = False,
-    ) -> EditResult: ...
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> EditResult:
+        raise NotImplementedError
 
-    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]: ...
+    def glob_info(
+        self, pattern: str, path: str = "/", *, config: RunnableConfig | None = None, state: dict | None = None
+    ) -> list[FileInfo]:
+        raise NotImplementedError
 
     def grep_raw(
         self,
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str: ...
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> list[GrepMatch] | str:
+        raise NotImplementedError
 
-    def execute(self, command: str, timeout: int = 120, max_output_size: int = 100000) -> ExecuteResult: ...
+    def execute(
+        self,
+        command: str,
+        timeout: int = 120,
+        max_output_size: int = 100000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> ExecuteResult:
+        raise NotImplementedError
 
-    async def aexecute(self, command: str, timeout: int = 120, max_output_size: int = 100000) -> ExecuteResult: ...
+    async def aexecute(
+        self,
+        command: str,
+        timeout: int = 120,
+        max_output_size: int = 100000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> ExecuteResult:
+        raise NotImplementedError
+
+    # --- 生命周期管理 ---
+
+    def close(self) -> None:
+        """释放后端持有的资源。
+
+        默认实现为空操作。远程沙箱后端应重写此方法以销毁远程实例。
+        此方法应是幂等的 — 多次调用不应产生副作用。
+        """
+
+    async def aclose(self) -> None:
+        """异步释放后端持有的资源。
+
+        默认实现委托给同步的 close()。子类可重写以提供更高效的异步实现。
+        """
+        self.close()
+
+    def __enter__(self) -> "RuntimeBackend":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    async def __aenter__(self) -> "RuntimeBackend":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.aclose()
 
 
 __all__ = [

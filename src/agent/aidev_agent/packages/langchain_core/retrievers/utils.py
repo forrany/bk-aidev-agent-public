@@ -1,18 +1,41 @@
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from aidev_agent.core.ag_ui.types import CustomMessageType
-from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.models.utils import is_deepseek_r1_series_models, remove_thinking_process
 from aidev_agent.packages.model_management.registry import RegistryPluginMixIn
-from aidev_agent.pydantic_models import AgentOptions
 from aidev_agent.utils.decorator import timeit
 
 HUNYUAN_SPECIFIC_RESPONSE = "很抱歉，我还未学习到如何回答这个问题的内容，暂时无法提供相关信息。"
 reg = RegistryPluginMixIn()
+
+
+def normalize_query_for_search(query: Any) -> str:
+    """将多模态 content 归一化为知识库可检索文本。"""
+    if query is None:
+        return ""
+    if isinstance(query, str):
+        return query
+    if isinstance(query, list):
+        text_parts = []
+        for item in query:
+            if isinstance(item, str):
+                text_parts.append(item)
+            elif isinstance(item, dict):
+                item_type = item.get("type")
+                text = item.get("text") or item.get("content")
+                if (
+                    item_type == "text"
+                    and isinstance(text, str)
+                    or item_type not in {"image_url", "input_image"}
+                    and isinstance(text, str)
+                ):
+                    text_parts.append(text)
+        return "\n".join(part for part in text_parts if part.strip())
+    return str(query)
 
 
 def is_structured_data(doc):
@@ -52,21 +75,12 @@ def filter_and_select_topk(items, score_threshold, topk):
     return sorted_items[:topk]
 
 
-def invoke_decorator(agent_options: AgentOptions, invoke_func, llm):
+def invoke_decorator(invoke_func, llm):
     def wrapper(*args, **kwargs):
-        nonlocal llm
         # 根据 https://huggingface.co/deepseek-ai/DeepSeek-R1#usage-recommendations 的建议：
         # Avoid adding a system prompt; all instructions should be contained within the user prompt.
         # NOTE: 目前假设只有第 1 个 message 才可能是 SystemMessage
-        if global_llm_model_name := agent_options.intent_recognition_options.non_thinking_llm:
-            global_llm = ChatModel.get_setup_instance(
-                model=global_llm_model_name,
-                streaming=True,
-            )
-            invoke_func_to_use = global_llm.invoke
-            llm = global_llm
-        else:
-            invoke_func_to_use = invoke_func
+        invoke_func_to_use = invoke_func
 
         if (
             is_deepseek_r1_series_models(llm)

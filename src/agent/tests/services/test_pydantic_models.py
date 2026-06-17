@@ -5,6 +5,8 @@ from aidev_agent.pydantic_models import (
     AgentOptions,
     ChatPrompt,
     ExecuteKwargs,
+    IntentRecognition,
+    KnowledgebaseSettings,
     SessionContentExtra,
 )
 from aidev_agent.services.common_agent import CommonQAAgent
@@ -16,6 +18,17 @@ def test_chat_prompt():
 
     chat_prompt = ChatPrompt(role="system", content="aaa")
     assert chat_prompt.content == "aaa"
+
+
+def test_legacy_agent_options_allow_extra_fields():
+    options = AgentOptions(
+        intent_recognition_options=IntentRecognition(agent_type="deepseek_r1"),
+        knowledge_query_options=KnowledgebaseSettings(document_fragment_count=3),
+    )
+
+    assert options.intent_recognition_options.model_extra["agent_type"] == "deepseek_r1"
+    assert options.knowledge_query_options.model_extra["document_fragment_count"] == 3
+    assert KnowledgebaseSettings().rejection_message
 
 
 class TestAgentExecutorKwargs:
@@ -40,7 +53,6 @@ class TestAgentExecutorKwargs:
         mock_callbacks = [MagicMock()]
         mock_file_store = MagicMock()
         mock_checkpointer = MagicMock()
-        agent_options = AgentOptions()
         execute_kwargs = ExecuteKwargs(stream=True)
 
         config = AgentExecutorKwargs(
@@ -49,13 +61,10 @@ class TestAgentExecutorKwargs:
             non_thinking_llm="gpt-4",
             extra_tools=mock_tools,
             chat_history=[],
-            role_prompt="You are a helpful assistant.",
-            agent_prompt="Agent prompt here.",
             tool_execution_interval=5,
             support_vision=True,
             file_store=mock_file_store,
             callbacks=mock_callbacks,
-            agent_options=agent_options,
             execute_kwargs=execute_kwargs,
             checkpointer=mock_checkpointer,
         )
@@ -65,13 +74,10 @@ class TestAgentExecutorKwargs:
         assert config.non_thinking_llm == "gpt-4"
         assert config.extra_tools == mock_tools
         assert config.chat_history == []
-        assert config.role_prompt == "You are a helpful assistant."
-        assert config.agent_prompt == "Agent prompt here."
         assert config.tool_execution_interval == 5
         assert config.support_vision is True
         assert config.file_store == mock_file_store
         assert config.callbacks == mock_callbacks
-        assert config.agent_options == agent_options
         assert config.execute_kwargs == execute_kwargs
         assert config.checkpointer == mock_checkpointer
 
@@ -80,13 +86,13 @@ class TestAgentExecutorKwargs:
         mock_llm = MagicMock()
         config = AgentExecutorKwargs(
             llm=mock_llm,
-            role_prompt="Test prompt",
+            tool_execution_interval=5,
         )
 
         dumped = config.model_dump(exclude_none=True)
 
         assert "llm" in dumped
-        assert "role_prompt" in dumped
+        assert "tool_execution_interval" in dumped
         assert "knowledge_llm" not in dumped
         assert "extra_tools" not in dumped
         assert "file_store" not in dumped
@@ -95,14 +101,12 @@ class TestAgentExecutorKwargs:
         """Test that model_dump produces valid kwargs for ReActAgentBuilder."""
         mock_llm = MagicMock()
         mock_tools = [MagicMock()]
-        agent_options = AgentOptions()
 
         config = AgentExecutorKwargs(
             llm=mock_llm,
             knowledge_llm=mock_llm,
             extra_tools=mock_tools,
             support_vision=True,
-            agent_options=agent_options,
         )
 
         dumped = config.model_dump(exclude_none=True)
@@ -112,7 +116,6 @@ class TestAgentExecutorKwargs:
         assert "knowledge_llm" in dumped
         assert "extra_tools" in dumped
         assert "support_vision" in dumped
-        assert "agent_options" in dumped
 
     def test_arbitrary_types_allowed(self):
         """Test that config accepts arbitrary types like BaseChatModel."""

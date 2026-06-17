@@ -308,7 +308,6 @@ def build_model_node(
             use_structured_response=use_structured_response,
             use_general_knowledge_on_miss=node_options.use_general_knowledge_on_miss,
             rejection_message=node_options.rejection_message,
-            role_prompt=node_options.role_prompt,
             enable_parallel_tool_calls=enable_parallel_tool_calls,
         ),
     )
@@ -358,6 +357,10 @@ def build_model_node(
             token_margin=node_options.token_margin,
         ),
     )
+
+    # Extension: allow graph layer to inject additional tool middlewares
+    for m in getattr(node_options, "extra_tool_middlewares", []) or []:
+        context_assembly.add_middleware("tool", m)
 
     def model_node(
         state: ModelState,

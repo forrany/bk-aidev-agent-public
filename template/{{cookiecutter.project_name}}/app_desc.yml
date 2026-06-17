@@ -86,7 +86,7 @@ modules:
             description: bkpaas grant apps
           {% endif %}
           - name: MESSAGE_HANDLER_TYPE
-            value: "inmemory"
+            value: "rabbitmq"
             description: message handler type for multi-process mode
       processes:
         - name: web
@@ -100,3 +100,6 @@ modules:
                 name: bk/http
               targetPort: 5000
               port: 80
+        - name: celery
+          procCommand: celery -A blueapps.core.celery worker -P threads -Q plugin_schedule -l INFO -c 2 --max-tasks-per-child 256
+          targetReplicas: 1

@@ -51,6 +51,14 @@ class ResourceManagerProtocol(Protocol):
         """取回会话上下文消息列表（业务返回结构 = 后端 ``data`` 字段）"""
         ...
 
+    def retrieve_chat_session(self, session_code: str, **kwargs) -> dict:
+        """取回会话详情（业务返回结构 = 后端 ``data`` 字段）。"""
+        ...
+
+    def update_chat_session_sandbox_pv_id(self, session_code: str, sandbox_pv_id: str, **kwargs) -> dict:
+        """更新会话 ``session_property.sandbox_pv_id`` 并返回后端 ``data`` 字段。"""
+        ...
+
     def retrieve_agent_config(self, agent_code: str, version: Optional[str] = None, **kwargs) -> dict:
         """取回 agent 配置原始字典。
 
@@ -69,6 +77,10 @@ class ResourceManagerProtocol(Protocol):
         """按 skill_id + version 取回技能详情。"""
         ...
 
+    def check_agent_call_permission(self, caller_app_code: str, username: Optional[str] = None, **kwargs) -> dict:
+        """被调方校验主调方智能体调用权限，返回平台 ``data``（含 ``allowed`` 等字段）。"""
+        ...
+
     def construct_tool(self, tool_code: str, **kwargs) -> StructuredTool:
         """按 ``tool_code`` 装配 LangChain ``StructuredTool``（含凭证拼装）。"""
         ...
@@ -81,20 +93,28 @@ class ResourceManagerProtocol(Protocol):
         """
         ...
 
-    def construct_mcp(self, mcp_config: dict, agent_options: Any = None, username: str = None, **kwargs) -> Any:
-        """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
+    def get_paas_sbx_client(self, executor_info: dict, **kwargs) -> Any:
+        """Create a PaaS Sandbox API client authenticated with executor_info.
 
-        使用 ``langchain_mcp_adapters`` 连接 MCP 服务器并获取工具列表。
+        Uses explicit app_code/app_secret credential when both are present
+        (preferred — avoids Django settings mismatch in platform processes),
+        otherwise falls back to username-based authentication.
+
+        Always calls update_bkapi_authorization() with access_token and
+        bk_username for X-Bkapi-Authorization header.
+
+        Args:
+            executor_info: Dict with keys executor, access_token (optional),
+                           app_code (optional), app_secret (optional).
+        Returns:
+            Authenticated BkPaaSSandboxApi client instance.
         """
         ...
 
-    def build_skill_env(self, skill_config: dict, username: str = None) -> dict:
-        """按 skill 配置生成沙箱环境变量。
+    def construct_mcp(self, mcp_config: dict, username: str = None, **kwargs) -> Any:
+        """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
 
-        逻辑与 ``skill_middleware._extract_paas_params`` 中 env_vars 处理保持一致：
-        1. 从 ``metadata.bkai_paas_sandbox.envs`` 提取环境变量
-        2. 特殊规则：值为 ``None`` 时从环境变量获取
-        3. 赋值 ``ACCESS_TOKEN``
+        使用 ``langchain_mcp_adapters`` 连接 MCP 服务器并获取工具列表。
         """
         ...
 

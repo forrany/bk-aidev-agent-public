@@ -19,7 +19,7 @@ to the current version of the project delivered to anyone in the future.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Annotated, Callable, List, Optional, Sequence, Tuple, get_type_hints
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -39,24 +39,41 @@ from langgraph.graph.state import StateGraph
 from langgraph.store.memory import InMemoryStore
 from typing_extensions import Literal, TypedDict, TypeVar
 
+from aidev_agent.config import settings
+from aidev_agent.core.graphs.react.skill_middleware import (
+    SkillsPromptMiddleware,
+    _extract_e2b_params,
+    _extract_local_params,
+    _extract_paas_params,
+)
+from aidev_agent.core.graphs.react.team_middleware import TeamInfo, TeamPromptMiddleware
 from aidev_agent.core.nodes.knowledge import make_knowledge_node
 from aidev_agent.core.nodes.model import ModelNodeSettings
 from aidev_agent.core.nodes.model import build_model_node as std_make_model_node
+from aidev_agent.core.nodes.pv import add_pv_info, make_pv_node
 from aidev_agent.core.nodes.tool import ToolNodeSettings, build_tool_node
-from aidev_agent.core.tools.add_image_to_chat_context import add_image_to_chat_context
+from aidev_agent.core.tools.a2a_tools.bkai_backend import BkaiBackend
+from aidev_agent.core.tools.a2a_tools.local_backend import LocalBackend
+from aidev_agent.core.tools.a2a_tools.provider import AgentBackendResolver, get_agent_tools
+from aidev_agent.core.tools.runtime_tools import get_client_tools_with_runtime
+from aidev_agent.core.tools.runtime_tools.e2b_backend import E2BSandboxBackend
+from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
+from aidev_agent.core.tools.runtime_tools.paas_backend import PaasSandboxBackend
+from aidev_agent.core.tools.skill.bkai_backend import BkAiBackend
+from aidev_agent.core.tools.skill.provider import SkillRegistry
+from aidev_agent.core.tools.skill.types import SkillOptions, SkillProviderBackend
+from aidev_agent.core.tools.task import TeamTaskRecord, get_task_tools
 from aidev_agent.enums import Decision
-from aidev_agent.packages.langchain_core.models import ChatModel
 from aidev_agent.packages.langchain_core.models.utils import is_model_without_function_calling
 from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
-from aidev_agent.pydantic_models import AgentExecutorKwargs, AgentOptions
+from aidev_agent.pydantic_models import AgentExecutorKwargs, KnowledgeSettings, ModelContextSettings
 
 if TYPE_CHECKING:
     from langchain_core.runnables import Runnable
     from langgraph.store.base import BaseStore
 
-from aidev_agent.core.tools.skill.bkai_provider import BKAiProvider
-from aidev_agent.core.tools.skill.types import SkillOptions, SkillProvider
-from aidev_agent.packages.resource_manager.registry import resource_manager
+    from aidev_agent.core.tools.a2a_tools.types import AgentSpec
+
 
 ResponseT = TypeVar("ResponseT")
 
@@ -66,6 +83,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Runtime 参数提取函数（模块级，供 enable_runtime_* 注册到 _runtime_param_with_skill）
 # ---------------------------------------------------------------------------
+
+
+def _resolve_task_state_schema(schemas: List[type]) -> type:
+    """Resolve state schema by merging multiple TypedDict schemas.
+
+    Args:
+        schemas: List of TypedDict schemas to merge
+
+    Returns:
+        A new TypedDict class with all fields from input schemas
+    """
+    all_annotations = {}
+    for schema in schemas:
+        hints = get_type_hints(schema, include_extras=True)
+        all_annotations.update(hints)
+
+    return TypedDict("FinalState", all_annotations)  # type: ignore[misc]
 
 
 class DefaultState(TypedDict):
@@ -80,6 +114,7 @@ class DefaultState(TypedDict):
     knowledge_content: list
     knowledge_qa_content: list
     with_qa_response: list
+    runtime_paas_sbx_pv: Annotated[list[dict], add_pv_info]
 
 
 class KnowledgeInputState(TypedDict):
@@ -100,20 +135,26 @@ class ReActAgentBuilder:
         # 模型设置
         self._llm: BaseChatModel | None = None
         self._knowledge_llm: BaseChatModel | None = None
-        self._non_thinking_llm: BaseChatModel | str | None = None
+        self._non_thinking_llm: BaseChatModel | None = None
         self._support_vision: bool = False
         self._llm_token_limit: int = 28000
         # 对话设置
-        self._prefix: str | None = None
-        self._role_prompt: str | None = None
         self._suffix: str | None = None
         self._chat_history: list[BaseMessage] | None = None
+        # 多智能体设置
+        self._enable_a2a_tool: bool = False
+        self._a2a_specs: list[AgentSpec] = []
+        self._a2a_backend_types: dict[str, type] = {}  # 后端类型名称 -> 后端类
+        self._a2a_resolver: AgentBackendResolver | None = None
+        self._enable_team: bool = False
+        self._team_config = None  # TeamConfig | None
+        self._enable_task: bool = False
         # 知识库设置
-        self._knowledge_items: list[Dict] | None = None
-        self._knowledge_bases: list[Dict] | None = None
+        self._knowledge_items: list[dict] | None = None
+        self._knowledge_bases: list[dict] | None = None
         # SKILL设置
         self._enable_skills: bool = False
-        self._skill_sources: list[str | SkillProvider] = []
+        self._skill_sources: list[str | SkillProviderBackend] = []
         self._skill_registry = None
         self._runtime_param_with_skill: dict[
             str, Callable[[SkillOptions, dict], dict]
@@ -125,8 +166,8 @@ class ReActAgentBuilder:
         self._runtime_types: dict[str, type] = {}  # runtime_name -> backend_class
         self._enable_security_runtime: bool = True  # 默认启用安全校验
         # Graph 运行时参数设置
-        self._agent_options: AgentOptions | None = None
-        self._intent_recognition_kwargs: Dict | None = None
+        self._model_context_options: ModelContextSettings | None = None
+        self._knowledge_query_options: KnowledgeSettings | None = None
         self._executor_info: dict | None = None
         self._callbacks: list | None = None
         self._file_store: ByteStore | None = None
@@ -141,6 +182,7 @@ class ReActAgentBuilder:
         self._enable_query_clarification: Optional[bool] = None
         self._langchain_middleware: Sequence[AgentMiddleware] = ()
         self._tool_node_options: ToolNodeSettings | None = None
+        self._resource_manager = None
 
     # ====================================================================================================
     # 模型设置
@@ -153,7 +195,7 @@ class ReActAgentBuilder:
         self._knowledge_llm = knowledge_llm
         return self
 
-    def set_non_thinking_llm(self, non_thinking_llm: BaseChatModel | str | None) -> "ReActAgentBuilder":
+    def set_non_thinking_llm(self, non_thinking_llm: BaseChatModel | None) -> "ReActAgentBuilder":
         self._non_thinking_llm = non_thinking_llm
         return self
 
@@ -168,14 +210,6 @@ class ReActAgentBuilder:
     # ====================================================================================================
     # 对话设置
     # ====================================================================================================
-    def set_role_prompt(self, role_prompt: str | None) -> "ReActAgentBuilder":
-        self._role_prompt = role_prompt
-        return self
-
-    def set_prefix(self, prefix: str | None) -> "ReActAgentBuilder":
-        self._prefix = prefix
-        return self
-
     def set_suffix(self, suffix: str | None) -> "ReActAgentBuilder":
         self._suffix = suffix
         return self
@@ -185,13 +219,137 @@ class ReActAgentBuilder:
         return self
 
     # ====================================================================================================
+    # 多智能体设置
+    # ====================================================================================================
+    def enable_a2a_tool(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 A2A 工具用于多智能体交互。
+
+        启用后，将根据注册的 AgentSpec 注入 A2A Agent 工具。
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._enable_a2a_tool = bool(enable)
+        return self
+
+    def enable_team(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 Team 模式插件。
+
+        注意：对于新的 AgentSpec+AgentBackend 范式，请使用 add_subagent_specs() 替代。
+        此方法保留用于向后兼容，仅设置内部标志。
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._enable_team = bool(enable)
+        # Team 模式隐式启用任务管理
+        if enable:
+            self._enable_task = True
+        return self
+
+    def set_team_config(self, config) -> "ReActAgentBuilder":
+        """设置 Team 配置。
+
+        Args:
+            config: TeamConfig 实例（或 None 清除配置）
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._team_config = config
+        return self
+
+    def enable_task(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用任务管理工具。
+
+        启用后，将注入任务工具（TaskCreate、TaskGet、TaskUpdate、TaskList）
+        并将 TaskState 字段合并到状态 schema 中。
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        self._enable_task = bool(enable)
+        return self
+
+    def enable_a2a_backend_local(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 A2A 本地后端类型（local）。
+
+        - enable=True：注册 a2a 后端类型 ``local`` -> ``LocalBackend``
+        - enable=False：移除 a2a 后端类型 ``local``
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        if enable:
+            self._a2a_backend_types["local"] = LocalBackend
+            return self
+
+        self._a2a_backend_types.pop("local", None)
+        return self
+
+    def enable_a2a_backend_bkai(self, enable: bool = True) -> "ReActAgentBuilder":
+        """启用/禁用 A2A 蓝鲸智能体后端类型（bkai）。
+
+        - enable=True：注册 a2a 后端类型 ``bkai`` -> ``BkaiBackend``
+        - enable=False：移除 a2a 后端类型 ``bkai``
+
+        Args:
+            enable: True 启用（默认），False 禁用。
+
+        Returns:
+            self（支持链式调用）。
+        """
+        if enable:
+            self._a2a_backend_types["bkai"] = BkaiBackend
+            return self
+
+        self._a2a_backend_types.pop("bkai", None)
+        return self
+
+    def add_subagent_specs(self, specs: list[AgentSpec]) -> "ReActAgentBuilder":
+        """添加子 Agent 规格。
+
+        使用 AgentSpec+AgentBackend 新范式替代旧的 enable_team() 路径。
+        仅负责将 specs 添加到内部列表，后端注册和工具注入由 _prepare_a2a 在 build() 时统一处理。
+
+        Args:
+            specs: AgentSpec 列表，定义可调用的子 Agent
+
+        Returns:
+            self（支持链式调用）
+
+        Example:
+            builder.enable_a2a_backend_bkai().add_subagent_specs([
+                AgentSpec(name="helper", description="...", backend_type=AgentBackendType.BKAI, params={"agent_code": "xxx"}),
+                AgentSpec(name="local_worker", description="...", backend_type=AgentBackendType.LOCAL, params={"prompt_overrides": {...}}),
+            ])
+        """
+        if not specs:
+            return self
+
+        self._a2a_specs.extend(specs)
+        return self
+
+    # ====================================================================================================
     # 知识库设置
     # ====================================================================================================
-    def set_knowledge_items(self, knowledge_items: list[Dict] | None) -> "ReActAgentBuilder":
+    def set_knowledge_items(self, knowledge_items: list[dict] | None) -> "ReActAgentBuilder":
         self._knowledge_items = knowledge_items
         return self
 
-    def set_knowledge_bases(self, knowledge_bases: list[Dict] | None) -> "ReActAgentBuilder":
+    def set_knowledge_bases(self, knowledge_bases: list[dict] | None) -> "ReActAgentBuilder":
         self._knowledge_bases = knowledge_bases
         return self
 
@@ -206,11 +364,11 @@ class ReActAgentBuilder:
         self._enable_skills = bool(enable_skills)
         return self
 
-    def set_skill_sources(self, skill_sources: list[str | SkillProvider]) -> "ReActAgentBuilder":
+    def set_skill_sources(self, skill_sources: list[str | SkillProviderBackend]) -> "ReActAgentBuilder":
         self._skill_sources = list(skill_sources)
         return self
 
-    def add_skill_sources(self, sources: list[str | SkillProvider]) -> "ReActAgentBuilder":
+    def add_skill_sources(self, sources: list[str | SkillProviderBackend]) -> "ReActAgentBuilder":
         self._skill_sources.extend(sources)
         return self
 
@@ -256,9 +414,6 @@ class ReActAgentBuilder:
         - enable=False：移除 runtime type `local`
         """
         if enable:
-            from aidev_agent.core.graphs.react.skill_middleware import _extract_local_params
-            from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
-
             self._runtime_param_with_skill["local"] = _extract_local_params
             return self.register_runtime_type("local", FilesystemBackend)
 
@@ -272,9 +427,6 @@ class ReActAgentBuilder:
         - enable=False：移除 runtime type `sandbox`
         """
         if enable:
-            from aidev_agent.core.graphs.react.skill_middleware import _extract_e2b_params
-            from aidev_agent.core.tools.runtime_tools.e2b_backend import E2BSandboxBackend
-
             self._runtime_param_with_skill["agent_run"] = _extract_e2b_params
             return self.register_runtime_type("agent_run", E2BSandboxBackend)
 
@@ -288,9 +440,6 @@ class ReActAgentBuilder:
         - enable=False：移除 runtime type `paas_sandbox`
         """
         if enable:
-            from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-            from aidev_agent.core.tools.runtime_tools.paas_backend import PaasSandboxBackend
-
             self._runtime_param_with_skill["paas_sandbox"] = _extract_paas_params
             return self.register_runtime_type("paas_sandbox", PaasSandboxBackend)
 
@@ -318,10 +467,6 @@ class ReActAgentBuilder:
     # ====================================================================================================
     # Graph 运行时参数设置
     # ====================================================================================================
-    def set_agent_options(self, agent_options: AgentOptions | None) -> "ReActAgentBuilder":
-        self._agent_options = agent_options
-        return self
-
     def set_callbacks(self, callbacks: list | None) -> "ReActAgentBuilder":
         self._callbacks = callbacks
         return self
@@ -344,42 +489,42 @@ class ReActAgentBuilder:
 
     def set_bkai_options(self, options: AgentExecutorKwargs) -> "ReActAgentBuilder":
         """将 BkAi 平台通用配置（AgentExecutorKwargs）映射到 builder 内部状态。"""
+        if options.resource_manager is not None:
+            self._resource_manager = options.resource_manager
         if options.llm is not None:
             self._llm = options.llm
+        if options.non_thinking_llm is not None:
+            self._non_thinking_llm = options.non_thinking_llm
+            self._knowledge_llm = options.non_thinking_llm
         if options.knowledge_llm is not None:
             self._knowledge_llm = options.knowledge_llm
-        if options.non_thinking_llm is not None and isinstance(options.non_thinking_llm, str):
-            self._non_thinking_llm = ChatModel.get_setup_instance(model=options.non_thinking_llm)
-        if options.non_thinking_llm is not None and isinstance(options.non_thinking_llm, BaseChatModel):
-            self._non_thinking_llm = options.non_thinking_llm
         if options.extra_tools is not None:
             self._extra_tools = list(options.extra_tools)
         if options.chat_history is not None:
             self._chat_history = list(options.chat_history)
-        if options.role_prompt is not None:
-            self._role_prompt = options.role_prompt
         if options.support_vision is not None:
             self._support_vision = bool(options.support_vision)
         if options.file_store is not None:
             self._file_store = options.file_store
         if options.callbacks is not None:
             self._callbacks = list(options.callbacks)
-        if options.agent_options is not None:
-            self._agent_options = options.agent_options
         if options.checkpointer is not None:
             self._checkpointer = options.checkpointer
         if options.executor_info is not None:
             self._executor_info = options.executor_info
+        if options.knowledge_query_options is not None:
+            self._knowledge_query_options = options.knowledge_query_options
+        if options.model_context_options is not None:
+            self._model_context_options = options.model_context_options
 
         # Skills（从配置链路传入的关联技能配置 list）
         if options.skills is not None and options.skills:
             self.set_enable_skills(True)
             # 优先使用 per-request resource_manager（含调试Agent自己的app_code / access_token），
-            _rm = options.resource_manager or resource_manager()
             self.add_skill_sources(
                 [
-                    BKAiProvider(
-                        client=_rm,
+                    BkAiBackend(
+                        client=self._resource_manager,
                         related_skills=options.skills,
                     )
                 ]
@@ -387,10 +532,18 @@ class ReActAgentBuilder:
             self.set_enable_runtime_tool(True)
             self.enable_runtime_paas(True)
 
-        return self
+        # RuntimeBackendResolver（由调用方构造并注入）
+        if options.runtime_backend_resolver is not None:
+            self._runtime_backend_resolver = options.runtime_backend_resolver
 
-    def set_intent_recognition_kwargs(self, intent_recognition_kwargs: Dict | None) -> "ReActAgentBuilder":
-        self._intent_recognition_kwargs = intent_recognition_kwargs
+        # Subagents（子 Agent 规格，注册后端 + 注入 A2A 工具）
+        if options.subagent_specs is not None and options.subagent_specs:
+            self.enable_a2a_tool(settings.BKAI_TOOL_A2A_ENABLED)
+            self.enable_team(settings.BKAI_TOOL_TEAM_ENABLED)
+            self.enable_task(settings.BKAI_TOOL_TASK_ENABLED)
+            self.enable_a2a_backend_local(True).enable_a2a_backend_bkai(True)
+            self.add_subagent_specs(options.subagent_specs)
+
         return self
 
     def set_state_schema(self, state_schema: type[AgentState[ResponseT]] | None) -> "ReActAgentBuilder":
@@ -420,45 +573,43 @@ class ReActAgentBuilder:
     # ====================================================================================================
     # 预处理，将配置信息标准化处理
     # ====================================================================================================
-    def _prepare_agent_options(
-        self,
-        agent_options: Optional[AgentOptions],
-        *,
-        knowledge_items: Optional[List[Dict]] = None,
-        knowledge_bases: Optional[List[Dict]] = None,
-        role_prompt: Optional[str] = None,
-        intent_recognition_kwargs: Optional[Dict] = None,
-    ) -> AgentOptions:
-        options = agent_options or AgentOptions()
+    def _compute_use_structured_response(self) -> bool:
+        """判断是否使用结构化输出模式。"""
+        llm_code_agent_type = self._model_context_options.llm_code_agent_type if self._model_context_options else None
+        if llm_code_agent_type:
+            return bool("deepseek" in llm_code_agent_type)
+        return bool(is_model_without_function_calling(self._llm) and self._extra_tools)
 
-        ir_options = options.intent_recognition_options
-        kq_options = options.knowledge_query_options
-        if intent_recognition_kwargs:
-            if "tool_output_compress_thrd" in intent_recognition_kwargs:
-                # aidev_agent/services/pydantic_models.py 中，默认配置为 5000
-                ir_options.tool_output_compress_thrd = intent_recognition_kwargs["tool_output_compress_thrd"]
-            if "token_limit_margin" in intent_recognition_kwargs:
-                # aidev_agent/services/pydantic_models.py 中，默认配置为 100
-                kq_options.token_limit_margin = intent_recognition_kwargs["token_limit_margin"]
-            if "max_tool_output_len" in intent_recognition_kwargs:
-                # aidev_agent/services/pydantic_models.py 中，默认配置为 500
-                ir_options.max_tool_output_len = intent_recognition_kwargs["max_tool_output_len"]
-        if knowledge_bases:
-            kq_options.knowledge_bases = knowledge_bases
-        if knowledge_items:
-            kq_options.knowledge_items = knowledge_items
-        if role_prompt:
-            kq_options.role_prompt = role_prompt
+    def _prepare_agent_options(self):
+        # knowledge_settings
+        knowledge_settings = self._knowledge_query_options
+        if knowledge_settings is not None and not isinstance(knowledge_settings, KnowledgeSettings):
+            raise ValueError(
+                "ReActAgentBuilder 构建失败：knowledge_query_options 必须为 KnowledgeSettings 类型，"
+                f"实际类型为 {type(knowledge_settings).__name__}"
+            )
+        # 将 knowledge_bases / knowledge_items / enable_query_clarification 赋值到 knowledge_settings
+        if self._knowledge_bases or self._knowledge_items or self._enable_query_clarification is not None:
+            if knowledge_settings is None:
+                knowledge_settings = KnowledgeSettings()
+            if self._knowledge_bases:
+                knowledge_settings.knowledge_bases = self._knowledge_bases
+            if self._knowledge_items:
+                knowledge_settings.knowledge_items = self._knowledge_items
+            if self._enable_query_clarification is not None:
+                knowledge_settings.enable_query_clarification = self._enable_query_clarification
+        self._knowledge_query_options = knowledge_settings
 
-        return options
-
-    def _prepare_agent_knowledge_node(self, *, knowledge_llm, agent_options, chat_history):
-        knowledge_query_options = agent_options.knowledge_query_options
+    def _prepare_agent_knowledge_node(
+        self, *, knowledge_llm, knowledge_query_options: KnowledgeSettings | None, chat_history
+    ):
+        if knowledge_query_options is None:
+            return None
         has_knowledge = knowledge_query_options.knowledge_bases or knowledge_query_options.knowledge_items
         if has_knowledge:
             return make_knowledge_node(
                 llm=knowledge_llm,
-                agent_options=agent_options,
+                knowledge_query_options=knowledge_query_options,
                 chat_history=chat_history,
             )
         return None
@@ -469,73 +620,56 @@ class ReActAgentBuilder:
         llm: BaseChatModel,
         non_thinking_llm: BaseChatModel,
         tools: List[BaseTool],
-        use_structured_response: bool,
-        enable_query_clarification: bool,
-        agent_options: AgentOptions,
     ):
         """创建模型节点。
 
         构建 ModelNodeSettings 并创建 model_node，用于 LLM 推理。
+        ModelNodeSettings 的参数从 self._model_context_options / self._knowledge_query_options 中提取。
 
         Args:
             llm: 语言模型
+            non_thinking_llm: 非深度思考模型
             tools: 工具列表
-            use_structured_response: 是否使用结构化输出模式
-            enable_query_clarification: 是否启用查询澄清
-            agent_options: Agent 配置选项
 
         Returns:
             model_node: 模型节点
         """
-        # 处理 enable_query_clarification 的默认值
-        if enable_query_clarification is None:
-            model_name = getattr(llm, "model_name", "")
-            enable_query_clarification = model_name == "gpt-4o" or "deepseek" in model_name or "qwq" in model_name
-        # 从 agent_options 获取配置
-        knowledge_query_options = agent_options.knowledge_query_options
-        default_node_options = ModelNodeSettings()
-        rejection_message = (
-            knowledge_query_options.rejection_message
-            if knowledge_query_options.rejection_message is not None
-            else default_node_options.rejection_message
-        )
-        role_prompt = (
-            knowledge_query_options.role_prompt
-            if knowledge_query_options.role_prompt is not None
-            else default_node_options.role_prompt
-        )
-        use_general_knowledge_on_miss = knowledge_query_options.is_response_when_no_knowledgebase_match
-        token_limit = (
-            knowledge_query_options.llm_token_limit
-            if knowledge_query_options.llm_token_limit is not None
-            else default_node_options.token_limit
-        )
-        token_margin = (
-            knowledge_query_options.token_limit_margin
-            if knowledge_query_options.token_limit_margin is not None
-            else default_node_options.token_margin
-        )
-        node_options = ModelNodeSettings(
-            use_structured_response=use_structured_response,
-            enable_query_clarification=enable_query_clarification,
-            rejection_message=rejection_message,
-            role_prompt=role_prompt,
-            use_general_knowledge_on_miss=use_general_knowledge_on_miss,
-            tool_output_compress_thrd=agent_options.intent_recognition_options.tool_output_compress_thrd,
-            token_limit=token_limit,
-            token_margin=token_margin,
-        )
+        # 判断 use_structured_response
+        node_options_kwargs = {"use_structured_response": self._compute_use_structured_response()}
+
+        # 从 model_context_options 提取参数
+        model_context_options = self._model_context_options
+        if model_context_options is not None:
+            if model_context_options.llm_token_limit is not None:
+                node_options_kwargs["token_limit"] = model_context_options.llm_token_limit
+            if model_context_options.token_limit_margin is not None:
+                node_options_kwargs["token_margin"] = model_context_options.token_limit_margin
+            if model_context_options.tool_output_compress_thrd is not None:
+                node_options_kwargs["tool_output_compress_thrd"] = model_context_options.tool_output_compress_thrd
+
+        # 从 knowledge_query_options 提取参数
+        knowledge_query_options = self._knowledge_query_options
+        if knowledge_query_options is not None:
+            if knowledge_query_options.rejection_message is not None:
+                node_options_kwargs["rejection_message"] = knowledge_query_options.rejection_message
+            node_options_kwargs["use_general_knowledge_on_miss"] = (
+                knowledge_query_options.is_response_when_no_knowledgebase_match
+            )
+            node_options_kwargs["enable_query_clarification"] = knowledge_query_options.enable_query_clarification
+
+        node_options = ModelNodeSettings(**node_options_kwargs)
 
         if self._enable_skills and self._skill_registry is not None:
-            from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware
-
             node_options.extra_template_middlewares.append(
                 SkillsPromptMiddleware(
                     registry=self._skill_registry,
-                    skill_sources=list(self._skill_sources or ["./.agent/skills"]),
                     enable_runtime_tool=self._enable_runtime_tool,
                 )
             )
+
+        # Team middleware registration (A2A Agent paradigm)
+        if self._a2a_specs and self._a2a_resolver is not None:
+            node_options.extra_template_middlewares.append(TeamPromptMiddleware(specs=self._a2a_specs))
 
         # 创建模型节点
         model_node = std_make_model_node(
@@ -562,22 +696,27 @@ class ReActAgentBuilder:
         middleware_tools = [t for m in langchain_middleware for t in getattr(m, "tools", [])]
         tools.extend(middleware_tools)
 
-        # Skills tool injection
+        # 加载 SKILL 工具
         if self._enable_skills and self._skill_registry is not None:
-            from aidev_agent.core.tools.skill.activate_skill import get_activate_skill_tool
+            tools.append(self._skill_registry.get_activate_skill_tool())
 
-            tools.append(get_activate_skill_tool(self._skill_registry))
-
-        # Runtime client tools injection (ls/read_file/write_file/edit_file/glob/grep/execute)
+        # 加载 Runtime 工具 (ls/read_file/write_file/edit_file/glob/grep/execute)
         if self._enable_runtime_tool and self._runtime_backend_resolver is not None:
-            from aidev_agent.core.tools.runtime_tools import get_client_tools_with_runtime
-
             tools.extend(
                 get_client_tools_with_runtime(
                     self._runtime_backend_resolver,
                     enable_security=self._enable_security_runtime,
                 )
             )
+
+        # 加载 Task 工具
+        if self._enable_task:
+            tools.extend(get_task_tools())
+
+        # 加载 A2A Agent 工具
+        if self._a2a_specs and self._a2a_resolver is not None:
+            a2a_tools = get_agent_tools(self._a2a_specs, self._a2a_resolver)
+            tools.extend(a2a_tools)
 
         # 为所有工具添加忽略错误表示
         if ignore_errors:
@@ -595,7 +734,6 @@ class ReActAgentBuilder:
         - 将 activate_skill 工具与 prompt middleware 所需的 registry 写入 self._skill_registry
         - 为每个 skill 根据其 runtime 创建并注册独立 backend 到 self._runtime_backend_resolver
         """
-        from aidev_agent.core.tools.skill.registry import SkillRegistry
 
         registry = SkillRegistry(self._skill_sources or [])
         self._skill_registry = registry
@@ -612,6 +750,9 @@ class ReActAgentBuilder:
             backend_cls = self._runtime_types[skill_runtime]
             extractor = self._runtime_param_with_skill.get(skill_runtime)
             params = extractor(skill, self._executor_info or {}) if extractor is not None else {}
+            if skill_runtime == "paas_sandbox" and self._resource_manager is not None:
+                client = self._resource_manager.get_paas_sbx_client(self._executor_info or {})
+                params["client"] = client
             logger.info(
                 f"[credential] skill_runtime={skill_runtime}, skill_name={skill_name}, "
                 f"executor_info_keys={list((self._executor_info or {}).keys())}, "
@@ -625,6 +766,20 @@ class ReActAgentBuilder:
                 f"{skill_runtime}_{skill_name}",
                 skill_backend,
             )
+
+    def _prepare_a2a(self) -> None:
+        """准备 A2A 多智能体系统。
+
+        - 根据 self._a2a_backend_types 创建 AgentBackendResolver 并注册所有后端类型
+        - 将 resolver 写入 self._a2a_resolver，供后续工具注入和 prompt middleware 使用
+        """
+        if not self._a2a_backend_types:
+            return
+
+        resolver = AgentBackendResolver()
+        for backend_type_name, backend_cls in self._a2a_backend_types.items():
+            resolver.register(backend_type_name, backend_cls)
+        self._a2a_resolver = resolver
 
     def _prepare_agent_tool_node(
         self,
@@ -679,19 +834,70 @@ class ReActAgentBuilder:
             store = InMemoryStore()
         return store
 
+    def _prepare_state_schema(self, _TaskState: type | None = None) -> type:
+        """根据 builder 内部状态构造 state_schema。
+
+        逻辑：
+        1. 收集需要合并的 schema 类列表
+        2. 如果有 _TaskState 需求（enable_task / a2a_specs / enable_team），合并 TeamInfo + _TaskState
+        3. 如果用户提供了 _state_schema，追加到列表末尾（而非替换）
+        4. 调用 _resolve_task_state_schema 合并
+
+        Args:
+            _TaskState: 仅在 build() 中有条件定义的 _TaskState TypedDict
+
+        Returns:
+            合并后的 state_schema 类型
+        """
+        schemas: list[type] = [DefaultState]
+
+        if _TaskState is not None and (self._enable_task or self._a2a_specs or self._enable_team):
+            if self._a2a_specs or self._enable_team:
+                schemas.append(TeamInfo)
+            schemas.append(_TaskState)
+
+        if self._state_schema is not None:
+            schemas.append(self._state_schema)
+
+        if len(schemas) == 1:
+            return schemas[0]
+        return _resolve_task_state_schema(schemas)
+
+    def _prepare_agent_pv_node(self):
+        """构造 PV Node，用于惰性创建/获取持久卷。
+
+        仅在启用 paas_sandbox runtime 时注入真实的 BkPaaSSandboxApi client；
+        否则仍返回 pv_node callable（无 PV 支持），保持图结构一致。
+
+        Returns:
+            pv_node callable
+        """
+        paas_client = None
+        paas_app_code = ""
+        if self._enable_runtime_tool and "paas_sandbox" in self._runtime_types:
+            executor_info = self._executor_info or {}
+            paas_app_code = executor_info.get("app_code", "")
+            if paas_app_code and self._resource_manager is not None:
+                paas_client = self._resource_manager.get_paas_sbx_client(executor_info)
+        return make_pv_node(
+            client=paas_client,
+            app_code=paas_app_code,
+            resource_manager=self._resource_manager,
+        )
+
     @staticmethod
-    def _should_continue(state: dict) -> Literal["tools", "end"]:
+    def _should_continue(state: dict) -> Literal["pv_node", "end"]:
         """条件路由函数：决定 model 节点后的下一步。
 
         检查模型输出是否包含 tool_calls：
-        - 如果有 tool_calls，路由到 tools 节点执行工具
+        - 如果有 tool_calls，路由到 pv_node 节点（惰性创建 PV）
         - 否则路由到 end 结束对话
 
         Args:
             state: 当前状态字典
 
         Returns:
-            "tools" 或 "end"
+            "pv_node" 或 "end"
         """
         messages = state.get("messages", [])
         if not messages:
@@ -701,14 +907,14 @@ class ReActAgentBuilder:
 
         # 检查最后一条消息是否是 AIMessage 并且包含 tool_calls
         if isinstance(last_message, AIMessage) and last_message.tool_calls:
-            return "tools"
+            return "pv_node"
 
         return "end"
 
     def _build_graph(
         self,
         *,
-        agent_options: AgentOptions,
+        knowledge_settings: KnowledgeSettings,
         state_schema,
         callbacks: List,
         debug: bool,
@@ -721,16 +927,17 @@ class ReActAgentBuilder:
         knowledge_node,
         model_node,
         tool_node,
+        pv_node=None,
     ) -> Tuple["Runnable", RunnableConfig]:
         """构建 LangGraph 图。
 
         图结构：
         - 无知识库配置: START → model → tools/END
         - 有知识库配置: START → knowledge → model → tools/END
-        - 如果有工具: model → (条件) → tools / END, tools → model
+        - 如果有工具: model → (条件) → pv_node / END, pv_node → tools → model
 
         Args:
-            agent_options: Agent 配置选项
+            knowledge_settings: 知识库检索配置
             state_schema: 状态模式
             callbacks: 回调列表
             debug: 是否开启调试模式
@@ -743,6 +950,7 @@ class ReActAgentBuilder:
             knowledge_node: 知识库节点
             model_node: 模型节点
             tool_node: 工具节点
+            pv_node: PV 节点 callable，由 _prepare_agent_pv_node 构造
 
         Returns:
             (CompiledGraph, RunnableConfig) 元组
@@ -752,14 +960,14 @@ class ReActAgentBuilder:
         # 如果配置了知识库,添加 knowledge 节点
         if knowledge_node:
             graph.add_node("knowledge", knowledge_node)
-            graph.add_edge(START, "knowledge")
 
         # 添加模型节点
         graph.add_node("model", model_node)
 
         # 根据是否有知识库节点,连接不同的边
         if knowledge_node:
-            # 有知识库: knowledge → model
+            # 有知识库: START → knowledge → model
+            graph.add_edge(START, "knowledge")
             graph.add_edge("knowledge", "model")
         else:
             # 无知识库: START → model
@@ -767,17 +975,19 @@ class ReActAgentBuilder:
 
         # 如果有工具，添加工具节点和条件路由
         if tool_node:
+            graph.add_node("pv_node", pv_node)
             graph.add_node("tools", tool_node)
-            # model → (should_continue) → tools / end
+            # model → (should_continue) → pv_node / end
             graph.add_conditional_edges(
                 "model",
                 self._should_continue,
                 {
-                    "tools": "tools",
+                    "pv_node": "pv_node",
                     "end": END,
                 },
             )
-            # tools → model (形成 ReAct 循环)
+            # pv_node → tools → model (形成 ReAct 循环)
+            graph.add_edge("pv_node", "tools")
             graph.add_edge("tools", "model")
         else:
             # 无工具时直接结束
@@ -795,67 +1005,49 @@ class ReActAgentBuilder:
 
         cfg = RunnableConfig()
         cfg["configurable"] = {
-            "agent_options": agent_options,
             "debug": debug,
         }
         cfg["recursion_limit"] = 1000
         if callbacks:
             cfg["callbacks"] = callbacks
-            compile_graph = compile_graph.with_config({"callbacks": callbacks})
-            logger.info(f"react graph callbacks: {callbacks}")
+        compile_graph = compile_graph.with_config({"callbacks": callbacks})
+        logger.info(f"react graph callbacks: {callbacks}")
         return compile_graph, cfg
 
     def build(self) -> Tuple["Runnable", RunnableConfig]:
         """构建并返回 compiled graph 与 runnable config。"""
         if self._llm is None:
             raise ValueError("ReActAgentBuilder 构建失败：缺少 llm，请先调用 set_llm(...) 或 set_bkai_options(...)")
-
         callbacks = list(self._callbacks or [])
         non_thinking_llm = self._non_thinking_llm or self._llm
-        if (
-            self._agent_options
-            and self._agent_options.intent_recognition_options
-            and self._agent_options.intent_recognition_options.agent_type
-        ):
-            use_structured_response = bool("deepseek" in self._agent_options.intent_recognition_options.agent_type)
-        else:
-            use_structured_response = bool(is_model_without_function_calling(self._llm) and self._extra_tools)
-        # 统一处理 agent_options
-        prepared_agent_options = self._prepare_agent_options(
-            self._agent_options,
-            knowledge_items=self._knowledge_items,
-            knowledge_bases=self._knowledge_bases,
-            role_prompt=self._role_prompt,
-            intent_recognition_kwargs=self._intent_recognition_kwargs,
-        )
+
+        self._prepare_agent_options()
 
         # 若配置了知识库/知识项，则需要 knowledge_llm
-        has_knowledge = bool(
-            prepared_agent_options.knowledge_query_options.knowledge_bases
-            or prepared_agent_options.knowledge_query_options.knowledge_items
+        has_knowledge = bool(self._knowledge_query_options and self._knowledge_query_options.knowledge_bases) or bool(
+            self._knowledge_query_options and self._knowledge_query_options.knowledge_items
         )
         if has_knowledge and self._knowledge_llm is None:
             raise ValueError("ReActAgentBuilder 构建失败：检测到知识库配置，但 knowledge_llm 为空")
 
-        # checkpointer 由调用方决定（ChatCompletionAgent 会在有需要时注入 thread_id 等 configurable key）
-        checkpointer = self._checkpointer
-
         # Skills / runtime tools setup (must run before preparing tools)
         self._skill_registry = None
-        self._runtime_backend_resolver = None
 
-        if self._enable_runtime_tool or self._enable_skills:
-            from aidev_agent.core.tools.runtime_tools import RuntimeBackendResolver
-
-            # NOTE: 此处仅创建 resolver，不自动注入任何默认 backend。
-            # 运行时后端应由调用方显式注册，或由 skills 分支为每个 skill 单独注册。
-            self._runtime_backend_resolver = RuntimeBackendResolver(default_runtime="local")
+        if self._enable_runtime_tool and self._runtime_backend_resolver is None:
+            raise ValueError(
+                "ReActAgentBuilder 构建失败：启用了 runtime_tool 但未提供 runtime_backend_resolver，"
+                "请通过 AgentExecutorKwargs.runtime_backend_resolver 传入"
+            )
 
         if self._enable_skills:
             self._prepare_skills()
 
+        # A2A 后端注册（必须在工具注入之前执行）
+        if self._enable_a2a_tool:
+            self._prepare_a2a()
+
         # 统一处理 tools
-        tool_ignore_errors = use_structured_response
+        tool_ignore_errors = self._compute_use_structured_response()
         tools: List[BaseTool] = self._prepare_agent_tools(
             extra_tools=self._extra_tools,
             ignore_errors=tool_ignore_errors,
@@ -865,7 +1057,7 @@ class ReActAgentBuilder:
         # 统一处理 knowledge_node
         knowledge_node = self._prepare_agent_knowledge_node(
             knowledge_llm=self._knowledge_llm,
-            agent_options=prepared_agent_options,
+            knowledge_query_options=self._knowledge_query_options,
             chat_history=self._chat_history,
         )
 
@@ -874,9 +1066,6 @@ class ReActAgentBuilder:
             llm=self._llm,
             non_thinking_llm=non_thinking_llm,
             tools=tools,
-            use_structured_response=use_structured_response,
-            enable_query_clarification=self._enable_query_clarification,
-            agent_options=prepared_agent_options,
         )
 
         # 统一处理 tool_node
@@ -889,16 +1078,25 @@ class ReActAgentBuilder:
         # 初始化 Store
         store = self._prepare_store(store=self._store, file_store=self._file_store)
 
+        # 构造 PV Node
+        pv_node = self._prepare_agent_pv_node()
+
+        # 定义 _TaskState（如需）——仅在 task/team/a2a 分支中使用
+        if self._enable_task or self._a2a_specs or self._enable_team:
+            _TaskState = TypedDict("_TaskState", {"task_list": Optional[List[TeamTaskRecord]]})
+
         # 定制 ReAct chat prompt template
-        state_schema = self._state_schema or DefaultState
+        state_schema = self._prepare_state_schema(
+            _TaskState if self._enable_task or self._a2a_specs or self._enable_team else None
+        )
 
         # 构建图
         compile_graph, cfg = self._build_graph(
-            agent_options=prepared_agent_options,
+            knowledge_settings=self._knowledge_query_options,
             state_schema=state_schema,
             callbacks=callbacks,
             debug=self._debug,
-            checkpointer=checkpointer,
+            checkpointer=self._checkpointer,
             store=store,
             interrupt_before=self._interrupt_before,
             interrupt_after=self._interrupt_after,
@@ -907,8 +1105,10 @@ class ReActAgentBuilder:
             knowledge_node=knowledge_node,
             model_node=model_node,
             tool_node=tool_node,
+            pv_node=pv_node,
         )
 
         # 添加适配器
-        compile_graph.agent = AgentStreamAdapter(agent_options=prepared_agent_options)
+        llm_code_agent_type = self._model_context_options.llm_code_agent_type if self._model_context_options else None
+        compile_graph.agent = AgentStreamAdapter(agent_type=llm_code_agent_type)
         return compile_graph, cfg

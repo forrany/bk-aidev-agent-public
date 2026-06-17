@@ -213,7 +213,7 @@ class TestBuildToolNode:
         assert "description" not in tool_msg.additional_kwargs
 
     def test_result_limit_wrapper_truncates_long_result(self):
-        """测试2++: 开启 result_limit_wrapper 后超长结果应被替换"""
+        """测试2++: 开启 result_limit_wrapper 后超长结果应设置 status=error"""
         tool_node = build_tool_node(
             tools=[long_text_tool],
             node_options=ToolNodeSettings(use_result_limit=True, result_limit_thrd=10),
@@ -241,10 +241,10 @@ class TestBuildToolNode:
         assert len(tool_messages) == 1
 
         tool_msg = tool_messages[0]
-        assert tool_msg.content == "本次工具调用返回结果超长，请重新调整调用参数"
+        assert "本次工具调用返回结果超长" in tool_msg.content
         assert tool_msg.tool_call_id == "call_1"
         assert tool_msg.name == "long_text_tool"
-        assert "duration" in tool_msg.additional_kwargs
+        assert getattr(tool_msg, "status", None) == "error"
 
     def test_result_limit_wrapper_keeps_short_result(self):
         """测试2++: 开启 result_limit_wrapper 后短结果应保持不变"""
@@ -733,7 +733,7 @@ class TestBuildToolNodeAsync:
         assert "description" not in tool_msg.additional_kwargs
 
     async def test_result_limit_wrapper_truncates_long_result_async(self):
-        """测试2++: 开启 result_limit_wrapper 后超长结果应被替换（异步）"""
+        """测试2++: 开启 result_limit_wrapper 后超长结果应设置 status=error（异步）"""
         tool_node = build_tool_node(
             tools=[long_text_tool],
             node_options=ToolNodeSettings(use_result_limit=True, result_limit_thrd=10),
@@ -761,9 +761,10 @@ class TestBuildToolNodeAsync:
         assert len(tool_messages) == 1
 
         tool_msg = tool_messages[0]
-        assert tool_msg.content == "本次工具调用返回结果超长，请重新调整调用参数"
+        assert "本次工具调用返回结果超长" in tool_msg.content
         assert tool_msg.tool_call_id == "call_1"
         assert tool_msg.name == "long_text_tool"
+        assert getattr(tool_msg, "status", None) == "error"
 
     async def test_single_tool_call_with_exception_async(self):
         """测试3: 模型返回一个工具调用，工具抛出异常（异步）"""

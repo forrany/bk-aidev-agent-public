@@ -17,7 +17,7 @@ class ExtendToolCallStartEvent(ToolCallStartEvent):
 
 class ExtendToolCallResultEvent(ToolCallResultEvent):
     duration: float | None = Field(default=None, description="工具调用的耗时")
-    error: bool | None = Field(default=None, description="工具调用是否出错")
+    is_error: bool | None = Field(default=None, description="工具调用是否出错")
 
 
 class ExtendThinkingEndEvent(ThinkingEndEvent):

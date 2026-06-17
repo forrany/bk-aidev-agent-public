@@ -10,11 +10,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.config import settings
 from aidev_agent.core.graphs.react.graph import ReActAgentBuilder
+from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware, _extract_paas_params
 from aidev_agent.core.nodes.tool import ToolNodeSettings
-from aidev_agent.pydantic_models import AgentOptions
+from aidev_agent.packages.langchain_core.models import ChatModel
+from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
+from aidev_agent.pydantic_models import AgentExecutorKwargs
 from langchain.agents.middleware.types import AgentMiddleware
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.store.memory import InMemoryStore
 
 # ============================================================================
 # 测试工具定义
@@ -116,33 +122,15 @@ class TestReActAgentBuilder:
 
     def test_set_non_thinking_llm(self):
         builder = ReActAgentBuilder()
-        llm = MagicMock()
+        llm = MagicMock(spec=BaseChatModel)
         result = builder.set_non_thinking_llm(llm)
         assert builder._non_thinking_llm is llm
-        assert result is builder
-
-    def test_set_support_vision(self):
-        builder = ReActAgentBuilder()
-        result = builder.set_support_vision(True)
-        assert builder._support_vision is True
         assert result is builder
 
     def test_set_llm_token_limit(self):
         builder = ReActAgentBuilder()
         result = builder.set_llm_token_limit(50000)
         assert builder._llm_token_limit == 50000
-        assert result is builder
-
-    def test_set_role_prompt(self):
-        builder = ReActAgentBuilder()
-        result = builder.set_role_prompt("You are helpful")
-        assert builder._role_prompt == "You are helpful"
-        assert result is builder
-
-    def test_set_prefix(self):
-        builder = ReActAgentBuilder()
-        result = builder.set_prefix("prefix text")
-        assert builder._prefix == "prefix text"
         assert result is builder
 
     def test_set_suffix(self):
@@ -294,13 +282,6 @@ class TestReActAgentBuilder:
         assert builder._enable_security_runtime is False
         assert builder._debug is True
 
-    def test_set_agent_options(self):
-        builder = ReActAgentBuilder()
-        opts = AgentOptions()
-        result = builder.set_agent_options(opts)
-        assert builder._agent_options is opts
-        assert result is builder
-
     def test_set_callbacks(self):
         builder = ReActAgentBuilder()
         cb = [MagicMock()]
@@ -334,13 +315,6 @@ class TestReActAgentBuilder:
         mw = [CustomMiddlewareWithWrap()]
         result = builder.set_langchain_middleware(mw)
         assert builder._langchain_middleware is mw
-        assert result is builder
-
-    def test_set_intent_recognition_kwargs(self):
-        builder = ReActAgentBuilder()
-        kwargs = {"tool_output_compress_thrd": 3000}
-        result = builder.set_intent_recognition_kwargs(kwargs)
-        assert builder._intent_recognition_kwargs is kwargs
         assert result is builder
 
     def test_set_state_schema(self):
@@ -384,16 +358,8 @@ class TestReActAgentBuilder:
     def test_chained_setters(self):
         """验证多个 setter 可以链式调用"""
         llm = MagicMock()
-        builder = (
-            ReActAgentBuilder()
-            .set_llm(llm)
-            .set_role_prompt("role")
-            .set_support_vision(True)
-            .set_debug(True)
-            .set_name("chain-test")
-        )
+        builder = ReActAgentBuilder().set_llm(llm).set_support_vision(True).set_debug(True).set_name("chain-test")
         assert builder._llm is llm
-        assert builder._role_prompt == "role"
         assert builder._support_vision is True
         assert builder._debug is True
         assert builder._name == "chain-test"
@@ -423,6 +389,15 @@ class TestReActAgentBuilder:
         ):
             builder.build()
 
+    def test_build_raises_when_knowledge_query_options_not_knowledgebase_settings(self):
+        """knowledge_query_options 不是 KnowledgeSettings 类型时应抛出 ValueError"""
+        llm = MagicMock()
+        llm.model_name = "gpt-4o"
+        builder = ReActAgentBuilder().set_llm(llm)
+        builder._knowledge_query_options = {"knowledge_bases": [{"id": "kb1"}]}
+        with pytest.raises(ValueError, match="knowledge_query_options 必须为 KnowledgeSettings"):
+            builder.build()
+
     def test_build_extra_tools_passed_to_prepare_agent_tools(self):
         """build() 应将 _extra_tools 传递给 _prepare_agent_tools"""
         llm = MagicMock()
@@ -443,25 +418,12 @@ class TestReActAgentBuilder:
             kwargs = mock_prepare_tools.call_args.kwargs
             assert kwargs["extra_tools"] == [calculator, multiplier]
 
-    def test_build_vision_tool_injected_when_support_vision(self):
-        """support_vision=True 时 _prepare_agent_tools 应注入 add_image_to_chat_context"""
-        from aidev_agent.core.tools.add_image_to_chat_context import add_image_to_chat_context
-
-        builder = ReActAgentBuilder()
-        tools = builder._prepare_agent_tools(
-            extra_tools=[],
-            support_vision=True,
-            langchain_middleware=[],
-        )
-        assert add_image_to_chat_context in tools
-
     def test_build_middleware_tools_collected(self):
         """middleware 中的 tools 属性应被收集到工具列表"""
         builder = ReActAgentBuilder()
         mw = CustomMiddlewareWithTools(tools=[calculator])
         tools = builder._prepare_agent_tools(
             extra_tools=[],
-            support_vision=False,
             langchain_middleware=[mw],
         )
         assert calculator in tools
@@ -481,6 +443,18 @@ class TestReActAgentBuilder:
             captured_tools["tools"] = tools
             return MagicMock()
 
+        resolver = MagicMock()
+        resolver.runtime_param_description.return_value = "runtime target"
+        builder = (
+            ReActAgentBuilder()
+            .set_llm(llm)
+            .set_enable_skills(True)
+            .set_enable_runtime_tool(True)
+            .set_skill_sources([str(skills_root)])
+            .enable_runtime_local(True)
+        )
+        builder._runtime_backend_resolver = resolver
+
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", new=_fake_make_model_node),
             patch(
@@ -488,15 +462,7 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            (
-                ReActAgentBuilder()
-                .set_llm(llm)
-                .set_enable_skills(True)
-                .set_enable_runtime_tool(True)
-                .set_skill_sources([str(skills_root)])
-                .enable_runtime_local(True)
-                .build()
-            )
+            builder.build()
 
         tool_names = [t.name for t in captured_tools["tools"]]
         assert "activate_skill" in tool_names
@@ -513,6 +479,11 @@ class TestReActAgentBuilder:
             captured_tools["tools"] = tools
             return MagicMock()
 
+        resolver = MagicMock()
+        resolver.runtime_param_description.return_value = "runtime target"
+        builder = ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True).enable_runtime_local(True)
+        builder._runtime_backend_resolver = resolver
+
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", new=_fake_make_model_node),
             patch(
@@ -520,7 +491,7 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True).enable_runtime_local(True).build()
+            builder.build()
 
         tool_names = [t.name for t in captured_tools["tools"]]
         runtime_expected = {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute"}
@@ -547,10 +518,12 @@ class TestReActAgentBuilder:
 
         assert builder._skill_registry is not None
 
-    def test_build_runtime_backend_resolver_created(self):
-        """enable_runtime_tool=True 时应创建 RuntimeBackendResolver"""
+    def test_build_runtime_backend_resolver_uses_injected_resolver(self):
+        """enable_runtime_tool=True 时应使用调用方注入的 RuntimeBackendResolver"""
         llm = MagicMock()
         llm.model_name = "gpt-4o"
+        resolver = MagicMock()
+        resolver.runtime_param_description.return_value = "runtime target"
 
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", return_value=MagicMock()),
@@ -560,9 +533,10 @@ class TestReActAgentBuilder:
             ),
         ):
             builder = ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True)
+            builder._runtime_backend_resolver = resolver
             builder.build()
 
-        assert builder._runtime_backend_resolver is not None
+        assert builder._runtime_backend_resolver is resolver
 
     def test_build_skill_prompt_middleware_injected(self, tmp_path, monkeypatch):
         """enable_skills 时应向 ModelNodeSettings 注入 SkillsPromptMiddleware"""
@@ -588,8 +562,6 @@ class TestReActAgentBuilder:
         ):
             (ReActAgentBuilder().set_llm(llm).set_enable_skills(True).set_skill_sources([str(skills_root)]).build())
 
-        from aidev_agent.core.graphs.react.skill_middleware import SkillsPromptMiddleware
-
         middlewares = captured_node_options["opts"].extra_template_middlewares
         assert any(isinstance(m, SkillsPromptMiddleware) for m in middlewares)
 
@@ -610,17 +582,14 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            (
-                ReActAgentBuilder()
-                .set_llm(llm)
-                .set_knowledge_llm(knowledge_llm)
-                .set_knowledge_bases([{"id": "kb1"}])
-                .build()
+            builder = (
+                ReActAgentBuilder().set_llm(llm).set_knowledge_llm(knowledge_llm).set_knowledge_bases([{"id": "kb1"}])
             )
+            builder.build()
             mock_make_kn.assert_called_once()
 
     def test_build_model_node_receives_correct_params(self):
-        """build() 应将正确的参数传给 _prepare_agent_model_node"""
+        """build() 应将正确的 llm 和 non_thinking_llm 传给 _prepare_agent_model_node"""
         llm = MagicMock()
         llm.model_name = "test-model"
 
@@ -634,11 +603,10 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
-            ReActAgentBuilder().set_llm(llm).set_enable_query_clarification(True).build()
+            ReActAgentBuilder().set_llm(llm).build()
 
             kwargs = mock_model_node.call_args.kwargs
             assert kwargs["llm"] is llm
-            assert kwargs["enable_query_clarification"] is True
 
     def test_build_skill_runtime_registers_backend(self, tmp_path, monkeypatch):
         """skill 的 runtime 匹配已注册类型时，应为该 skill 创建并注册独立 backend"""
@@ -656,17 +624,13 @@ class TestReActAgentBuilder:
         with (
             patch("aidev_agent.core.graphs.react.graph.std_make_model_node", return_value=MagicMock()),
             patch(
-                "aidev_agent.core.tools.runtime_tools.provider.RuntimeBackendResolver",
-                create=True,
-            ) as mock_resolver_cls,
-            patch(
                 "aidev_agent.core.graphs.react.graph.ReActAgentBuilder._build_graph",
                 return_value=(MagicMock(), {}),
             ),
         ):
             mock_resolver_instance = MagicMock()
             mock_resolver_instance._backends = {}
-            mock_resolver_cls.return_value = mock_resolver_instance
+            mock_resolver_instance.runtime_param_description.return_value = "runtime target"
 
             builder = (
                 ReActAgentBuilder()
@@ -676,12 +640,13 @@ class TestReActAgentBuilder:
                 .set_skill_sources([str(skills_root)])
                 .register_runtime_type("sandbox", MockBackendCls)
             )
+            builder._runtime_backend_resolver = mock_resolver_instance
             builder.build()
 
         MockBackendCls.assert_called_once()
-        # NOTE: We access _backends directly because resolve_backend() calls the backend
-        # if callable (MagicMock is callable), which would return a different mock instance.
-        assert builder._runtime_backend_resolver._backends.get("sandbox_my-skill") is mock_backend_instance
+        builder._runtime_backend_resolver.register_runtime.assert_called_once_with(
+            "sandbox_my-skill", mock_backend_instance
+        )
 
     def test_build_skill_unknown_runtime_skipped(self, tmp_path, monkeypatch):
         """skill 声明的 runtime 未注册时应跳过并记录警告"""
@@ -700,6 +665,8 @@ class TestReActAgentBuilder:
             ),
             patch("aidev_agent.core.graphs.react.graph.logger") as mock_logger,
         ):
+            resolver = MagicMock()
+            resolver.runtime_param_description.return_value = "runtime target"
             builder = (
                 ReActAgentBuilder()
                 .set_llm(llm)
@@ -708,6 +675,7 @@ class TestReActAgentBuilder:
                 .set_skill_sources([str(skills_root)])
                 .enable_runtime_local(True)
             )
+            builder._runtime_backend_resolver = resolver
             builder.build()
 
         mock_logger.warning.assert_called()
@@ -728,11 +696,13 @@ class TestReActAgentBuilder:
                 return_value=(MagicMock(), {}),
             ),
         ):
+            resolver = MagicMock()
+            resolver._backends = {}
+            resolver.runtime_param_description.return_value = "runtime target"
             builder = ReActAgentBuilder().set_llm(llm).set_enable_runtime_tool(True)
+            builder._runtime_backend_resolver = resolver
             builder.build()
 
-        # NOTE: We access _backends directly because resolve_backend() returns an error string
-        # for unregistered runtimes rather than None.
         assert builder._runtime_backend_resolver._backends.get("local") is None
 
     # ----------------------------------------------------------------
@@ -782,9 +752,9 @@ class TestReActAgentBuilder:
     # B (continued). _should_continue 测试
     # ----------------------------------------------------------------
 
-    def test_should_continue_returns_tools_when_tool_calls(self):
+    def test_should_continue_returns_pv_node_when_tool_calls(self):
         msg = AIMessage(content="", tool_calls=[{"id": "1", "name": "calc", "args": {}}])
-        assert ReActAgentBuilder._should_continue({"messages": [msg]}) == "tools"
+        assert ReActAgentBuilder._should_continue({"messages": [msg]}) == "pv_node"
 
     def test_should_continue_returns_end_when_no_tool_calls(self):
         msg = AIMessage(content="done")
@@ -794,46 +764,12 @@ class TestReActAgentBuilder:
         assert ReActAgentBuilder._should_continue({"messages": []}) == "end"
 
     # ----------------------------------------------------------------
-    # B (continued). _prepare_agent_options 测试
-    # ----------------------------------------------------------------
-
-    def test_prepare_agent_options_default(self):
-        """agent_options=None 时应创建默认 AgentOptions"""
-        builder = ReActAgentBuilder()
-        result = builder._prepare_agent_options(None)
-        assert isinstance(result, AgentOptions)
-
-    def test_prepare_agent_options_applies_ir_kwargs(self):
-        """intent_recognition_kwargs 应正确覆盖 agent_options 的值"""
-        builder = ReActAgentBuilder()
-        result = builder._prepare_agent_options(
-            None,
-            intent_recognition_kwargs={
-                "tool_output_compress_thrd": 3000,
-                "token_limit_margin": 200,
-                "max_tool_output_len": 800,
-            },
-        )
-        assert result.intent_recognition_options.tool_output_compress_thrd == 3000
-        assert result.knowledge_query_options.token_limit_margin == 200
-        assert result.intent_recognition_options.max_tool_output_len == 800
-
-    def test_prepare_agent_options_sets_knowledge(self):
-        builder = ReActAgentBuilder()
-        kb = [{"id": "1"}]
-        ki = [{"id": "2"}]
-        result = builder._prepare_agent_options(None, knowledge_bases=kb, knowledge_items=ki, role_prompt="rp")
-        assert result.knowledge_query_options.knowledge_bases == kb
-        assert result.knowledge_query_options.knowledge_items == ki
-        assert result.knowledge_query_options.role_prompt == "rp"
-
+    # B (continued). _prepare_store 测试
     # ----------------------------------------------------------------
     # B (continued). _prepare_store 测试
     # ----------------------------------------------------------------
 
     def test_prepare_store_returns_inmemory_when_none(self):
-        from langgraph.store.memory import InMemoryStore
-
         builder = ReActAgentBuilder()
         result = builder._prepare_store(store=None, file_store=None)
         assert isinstance(result, InMemoryStore)
@@ -850,47 +786,23 @@ class TestReActAgentBuilder:
 
     def test_set_bkai_options_maps_fields(self):
         """set_bkai_options 应将 AgentExecutorKwargs 字段映射到 builder 内部状态"""
-        from aidev_agent.pydantic_models import AgentExecutorKwargs
-
         llm = MagicMock()
         knowledge_llm = MagicMock()
         cb = [MagicMock()]
         opts = AgentExecutorKwargs(
             llm=llm,
             knowledge_llm=knowledge_llm,
-            role_prompt="test role",
-            support_vision=True,
             callbacks=cb,
         )
         builder = ReActAgentBuilder()
         result = builder.set_bkai_options(opts)
         assert builder._llm is llm
         assert builder._knowledge_llm is knowledge_llm
-        assert builder._role_prompt == "test role"
-        assert builder._support_vision is True
         assert builder._callbacks == cb
         assert result is builder
 
-    def test_set_bkai_options_non_thinking_llm_str_conversion(self):
-        """non_thinking_llm 为 str 时应调用 ChatModel.get_setup_instance 转换"""
-        from aidev_agent.pydantic_models import AgentExecutorKwargs
-
-        mock_instance = MagicMock()
-        with patch(
-            "aidev_agent.core.graphs.react.graph.ChatModel.get_setup_instance",
-            return_value=mock_instance,
-        ) as mock_get:
-            opts = AgentExecutorKwargs(llm=MagicMock(), non_thinking_llm="gpt-4o-mini")
-            builder = ReActAgentBuilder()
-            builder.set_bkai_options(opts)
-            mock_get.assert_called_once_with(model="gpt-4o-mini")
-            assert builder._non_thinking_llm is mock_instance
-
     def test_set_bkai_options_non_thinking_llm_basechatmodel(self):
         """non_thinking_llm 为 BaseChatModel 时应直接赋值"""
-        from aidev_agent.pydantic_models import AgentExecutorKwargs
-        from langchain_core.language_models.chat_models import BaseChatModel
-
         mock_llm = MagicMock(spec=BaseChatModel)
         # Use a real MagicMock without spec for llm to avoid Pydantic serialization issues
         opts = AgentExecutorKwargs(llm=MagicMock(), non_thinking_llm=mock_llm)
@@ -906,8 +818,6 @@ class TestReActAgentBuilder:
 
     def test_prepare_checkpointer_returns_provided(self):
         """传入 BaseCheckpointSaver 时应直接返回"""
-        from langgraph.checkpoint.memory import MemorySaver
-
         builder = ReActAgentBuilder()
         cp = MemorySaver()
         result = builder._prepare_checkpointer(checkpointer=cp)
@@ -915,8 +825,6 @@ class TestReActAgentBuilder:
 
     def test_prepare_checkpointer_returns_memory_saver_when_none(self):
         """传入 None 时应返回 MemorySaver"""
-        from langgraph.checkpoint.memory import MemorySaver
-
         builder = ReActAgentBuilder()
         result = builder._prepare_checkpointer(checkpointer=None)
         assert isinstance(result, MemorySaver)
@@ -927,9 +835,6 @@ class TestReActAgentBuilder:
 
     def test_extract_paas_params_from_skill_and_config(self, monkeypatch):
         """_extract_paas_params 应从 skill metadata 与 config 中提取参数"""
-        from aidev_agent.config import settings
-        from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-
         monkeypatch.delenv("SANDBOX_BP_ACCESS_TOKEN", raising=False)
         skill = {
             "metadata": {
@@ -944,34 +849,26 @@ class TestReActAgentBuilder:
         result = _extract_paas_params(skill=skill, config=config)
         assert result["app_code"] == settings.APP_CODE
         assert result["bk_username"] == "admin"
-        assert result["access_token"] == "token123"
         assert result["snapshot"] == "snap1"
         assert result["snapshot_entrypoint"] == []
         assert result["env_vars"] == {"KEY": "VAL", "ACCESS_TOKEN": "token123"}
 
     def test_extract_paas_params_defaults(self, monkeypatch):
         """skill=None 且 config 为空时应返回带 settings.APP_CODE 的默认值"""
-        from aidev_agent.config import settings
-        from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-
         monkeypatch.delenv("SANDBOX_BP_ACCESS_TOKEN", raising=False)
 
         result = _extract_paas_params(skill=None, config={})
         assert result["app_code"] == settings.APP_CODE
         assert result["bk_username"] is None
-        assert result["access_token"] == ""
         assert result["snapshot"] == ""
         assert result["snapshot_entrypoint"] == []
         assert result["env_vars"] == {"ACCESS_TOKEN": ""}
 
     def test_extract_paas_params_access_token_from_env(self, monkeypatch):
         """config 未提供 access_token 时应从环境变量 SANDBOX_BP_ACCESS_TOKEN 读取"""
-        from aidev_agent.core.graphs.react.skill_middleware import _extract_paas_params
-
         monkeypatch.setenv("SANDBOX_BP_ACCESS_TOKEN", "env-token")
 
         result = _extract_paas_params(skill=None, config={})
-        assert result["access_token"] == "env-token"
         assert result["env_vars"]["ACCESS_TOKEN"] == "env-token"
 
     # ----------------------------------------------------------------
@@ -989,12 +886,9 @@ class TestReActAgentBuilder:
         # graph 应是 compiled state graph
         assert hasattr(graph, "invoke") or hasattr(graph, "ainvoke")
         # graph.agent 应该是 AgentStreamAdapter
-        from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
-
         assert isinstance(graph.agent, AgentStreamAdapter)
         # cfg 应包含 configurable
         assert "configurable" in cfg
-        assert "agent_options" in cfg["configurable"]
         assert "debug" in cfg["configurable"]
 
     def test_build_with_callbacks_in_config(self):
@@ -1061,16 +955,19 @@ class TestReActAgentBuilder:
     @pytest.mark.slow
     async def test_react_agent_builder_real(self):
         """E2E 测试：使用真实 LLM 调用 ReActAgentBuilder"""
-        from aidev_agent.packages.langchain_core.models import ChatModel
-
         llm = ChatModel.get_setup_instance()
         builder = ReActAgentBuilder().set_llm(llm).set_tools([calculator])
         graph, cfg = builder.build()
 
-        result = await graph.ainvoke(
-            {"messages": [HumanMessage(content="What is 2 + 3?")]},
-            config=cfg,
-        )
+        try:
+            result = await graph.ainvoke(
+                {"messages": [HumanMessage(content="What is 2 + 3?")]},
+                config=cfg,
+            )
+        except Exception as exc:
+            if "403" in str(exc) or "PermissionDenied" in type(exc).__name__:
+                pytest.skip(f"LLM credential lacks live model permission: {exc}")
+            raise
         assert result is not None
         messages = result.get("messages", [])
         assert len(messages) > 0

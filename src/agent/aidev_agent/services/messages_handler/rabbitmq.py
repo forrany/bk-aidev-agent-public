@@ -1,8 +1,11 @@
 import contextlib
+import json
 import pickle
 import queue
 import threading
 import time
+import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
@@ -295,7 +298,12 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     DLX_EXCHANGE_PREFIX: ClassVar[str] = "aidev_agent.dlx."  # 死信交换机前缀（无需抽取）
     DLQ_PREFIX: ClassVar[str] = QueueNamePrefixes.DEAD_LETTER_QUEUE
     CANCEL_QUEUE_PREFIX: ClassVar[str] = QueueNamePrefixes.CANCEL_REQUEST
+    PRODUCER_LOCK_PREFIX: ClassVar[str] = "aidev_agent.producer_lock."
+    REPLAY_LOCK_PREFIX: ClassVar[str] = "aidev_agent.replay_lock."
+    ACTIVE_CONSUMER_PREFIX: ClassVar[str] = "aidev_agent.consumer_active."
     QUEUE_TTL_MS: ClassVar[int] = QueueTTLConfig.QUEUE_EXPIRE_MS
+    REPLAY_LOCK_RETRY_INTERVAL: ClassVar[float] = 0.05
+    REPLAY_MESSAGE_RETRY_INTERVAL: ClassVar[float] = 0.1
 
     _instance: Optional["RabbitMQMessageHandler"] = None
     _lock: ClassVar[threading.Lock] = threading.Lock()
@@ -326,6 +334,9 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         # 消息缓冲队列：用于批量推送
         self._message_buffer: dict[str, list[Any]] = {}
         self._buffer_lock = threading.Lock()
+        self._replay_wait_condition = threading.Condition()
+        self._producer_lock_connections: dict[str, pika.BlockingConnection] = {}
+        self._producer_lock_guard = threading.Lock()
 
         # 后台守护线程
         self._daemon_thread: Optional[threading.Thread] = None
@@ -371,6 +382,88 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def _get_cancel_queue_name(self, thread_id: str) -> str:
         """获取 thread_id 对应的取消请求队列名"""
         return f"{self.CANCEL_QUEUE_PREFIX}{thread_id}"
+
+    def _get_producer_lock_queue_name(self, thread_id: str) -> str:
+        """获取生产者互斥队列名。"""
+        return f"{self.PRODUCER_LOCK_PREFIX}{thread_id}"
+
+    def _get_replay_lock_queue_name(self, thread_id: str) -> str:
+        """获取会话日志 replay 互斥队列名。"""
+        return f"{self.REPLAY_LOCK_PREFIX}{thread_id}"
+
+    def _get_active_consumer_queue_name(self, thread_id: str) -> str:
+        """获取多消费者活跃状态队列名。"""
+        return f"{self.ACTIVE_CONSUMER_PREFIX}{thread_id}"
+
+    def _create_dedicated_connection(self) -> pika.BlockingConnection:
+        """创建不进入连接池的 RabbitMQ 连接，用于 exclusive queue 生命周期。"""
+        params = pika.URLParameters(self._rabbitmq_url)
+        params.heartbeat = 60
+        params.blocked_connection_timeout = 300
+        return pika.BlockingConnection(params)
+
+    def _declare_exclusive_queue_on_connection(
+        self,
+        connection: pika.BlockingConnection,
+        queue_name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> None:
+        """在独占连接上声明 exclusive queue，并关闭临时 channel。
+
+        exclusive queue 的生命周期绑定 connection，而不是单个 channel。
+        因此这里不能复用连接池里的 _with_channel()：连接池会把连接归还给其他
+        RabbitMQ 操作，无法表达“持有该 exclusive queue 即持有锁”的生命周期。
+        """
+        channel = connection.channel()
+        try:
+            channel.queue_declare(
+                queue=queue_name,
+                exclusive=True,
+                auto_delete=True,
+                durable=False,
+                arguments=arguments,
+            )
+        finally:
+            if getattr(channel, "is_open", False):
+                with contextlib.suppress(Exception):
+                    channel.close()
+
+    def _acquire_dedicated_exclusive_queue_connection(
+        self,
+        queue_name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> pika.BlockingConnection:
+        """创建 dedicated connection 并在其上持有一个 exclusive queue。"""
+        connection = self._create_dedicated_connection()
+        try:
+            self._declare_exclusive_queue_on_connection(connection, queue_name, arguments=arguments)
+            return connection
+        except Exception:
+            if getattr(connection, "is_open", False):
+                with contextlib.suppress(Exception):
+                    connection.close()
+            raise
+
+    def _notify_replay_waiters(self) -> None:
+        """唤醒等待 replay lock 或新消息的本进程消费者。"""
+        with self._replay_wait_condition:
+            self._replay_wait_condition.notify_all()
+
+    def _wait_for_replay_retry(self, deadline: float | None, interval: float) -> None:
+        """等待下一次 replay 检查。
+
+        本进程内有 buffer 写入或 replay lock 释放时会提前唤醒；跨进程 RabbitMQ 写入
+        无法通过本地 Condition 感知，因此仍保留短超时作为兜底重试。
+        """
+        wait_time = interval
+        if deadline is not None:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return
+            wait_time = min(wait_time, remaining)
+
+        with self._replay_wait_condition:
+            self._replay_wait_condition.wait(timeout=wait_time)
 
     def _ensure_queue_with_dlx(self, channel: Any, thread_id: str) -> tuple[str, str]:
         """确保主队列和死信队列都存在，返回 (主队列名, 死信队列名)
@@ -434,8 +527,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         main_queue_name = self._get_queue_name(thread_id)
 
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 # 尝试被动声明来检查队列是否存在
                 try:
                     channel.queue_declare(queue=main_queue_name, durable=True, passive=True)
@@ -472,8 +564,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                     logger.warning(f"Queue {main_queue_name} has incompatible arguments, will be deleted")
 
             # 使用新连接删除旧队列（因为上面的 channel 可能已关闭）
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 channel.queue_delete(queue=main_queue_name)
                 logger.info(f"Deleted incompatible queue {main_queue_name}")
                 return True
@@ -486,6 +577,202 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         """确保队列存在，返回主队列名（兼容旧接口）"""
         main_queue_name, _ = self._ensure_queue_with_dlx(channel, thread_id)
         return main_queue_name
+
+    # ================== replay-from-start / 并发控制 ==================
+
+    def supports_replay_from_start(self) -> bool:
+        """声明 RabbitMQ backend 支持从会话日志开头独立 replay。
+
+        这个能力位供 GeneratorStreamingHelper 选择消费策略：RabbitMQ 返回 True，
+        旧的 in-memory/默认 handler 返回 False，继续使用竞争消费 + DLQ 恢复语义。
+        """
+        return True
+
+    def acquire_producer(self, thread_id: str) -> bool:
+        """使用 RabbitMQ exclusive queue 获取会话级生产者写入权。"""
+        lock_queue = self._get_producer_lock_queue_name(thread_id)
+        with self._producer_lock_guard:
+            if thread_id in self._producer_lock_connections:
+                return False
+
+            connection = None
+            try:
+                connection = self._acquire_dedicated_exclusive_queue_connection(lock_queue)
+                self._producer_lock_connections[thread_id] = connection
+                logger.info("[RabbitMQ] producer lock acquired thread_id=%s queue=%s", thread_id, lock_queue)
+                return True
+            except Exception as e:
+                logger.info("[RabbitMQ] producer lock busy thread_id=%s queue=%s error=%s", thread_id, lock_queue, e)
+                if connection and getattr(connection, "is_open", False):
+                    with contextlib.suppress(Exception):
+                        connection.close()
+                return False
+
+    def release_producer(self, thread_id: str) -> None:
+        """释放会话级生产者写入权。"""
+        lock_queue = self._get_producer_lock_queue_name(thread_id)
+        with self._producer_lock_guard:
+            connection = self._producer_lock_connections.pop(thread_id, None)
+
+        if not connection:
+            return
+
+        channel = None
+        try:
+            if getattr(connection, "is_open", False):
+                channel = connection.channel()
+                with contextlib.suppress(Exception):
+                    channel.queue_delete(queue=lock_queue)
+        finally:
+            if channel and getattr(channel, "is_open", False):
+                with contextlib.suppress(Exception):
+                    channel.close()
+            if getattr(connection, "is_open", False):
+                with contextlib.suppress(Exception):
+                    connection.close()
+            logger.info("[RabbitMQ] producer lock released thread_id=%s queue=%s", thread_id, lock_queue)
+
+    def _ensure_active_consumer_queue(self, channel: Any, thread_id: str) -> str:
+        queue_name = self._get_active_consumer_queue_name(thread_id)
+        channel.queue_declare(
+            queue=queue_name,
+            durable=True,
+            arguments={"x-expires": self.QUEUE_TTL_MS},
+        )
+        return queue_name
+
+    def acquire_consumer(self, thread_id: str) -> str:
+        """注册一个活跃消费者；多个 consumer 可以同时存在。"""
+        consumer_id = uuid.uuid4().hex
+        with self._with_channel() as channel:
+            queue_name = self._ensure_active_consumer_queue(channel, thread_id)
+            payload = json.dumps({"consumer_id": consumer_id, "ts": time.time()}).encode()
+            channel.basic_publish(
+                exchange="",
+                routing_key=queue_name,
+                body=payload,
+                properties=pika.BasicProperties(delivery_mode=2),
+            )
+        logger.info("[RabbitMQ] consumer acquired thread_id=%s consumer_id=%s", thread_id, consumer_id[:8])
+        return consumer_id
+
+    def wait_for_previous_consumer(self, thread_id: str, timeout: float = 3.0) -> bool:
+        """多端 replay 模式下消费者互不抢占，无需等待旧消费者退出。"""
+        return True
+
+    def check_consumer(self, thread_id: str, consumer_id: str) -> None:
+        """多端 replay 模式下消费者互不抢占。"""
+
+    def release_consumer(self, thread_id: str, consumer_id: str) -> None:
+        """释放当前消费者登记，保留其他活跃消费者。"""
+        try:
+            with self._with_replay_lock(thread_id):
+                self._release_consumer_locked(thread_id, consumer_id)
+        except Exception:
+            logger.exception(
+                "[RabbitMQ] failed to release consumer thread_id=%s consumer_id=%s",
+                thread_id,
+                consumer_id[:8],
+            )
+
+    def _release_consumer_locked(self, thread_id: str, consumer_id: str) -> None:
+        """在会话互斥锁内释放当前消费者登记。"""
+        with self._with_channel() as channel:
+            try:
+                queue_name = self._ensure_active_consumer_queue(channel, thread_id)
+                queue_info = channel.queue_declare(queue=queue_name, durable=True, passive=True)
+            except Exception:
+                logger.info(
+                    "[RabbitMQ] consumer released thread_id=%s consumer_id=%s reason=missing_queue",
+                    thread_id,
+                    consumer_id[:8],
+                )
+                return
+
+            remaining_bodies: list[bytes] = []
+            removed = False
+            for _ in range(queue_info.method.message_count):
+                method_frame, _, body = channel.basic_get(queue=queue_name, auto_ack=True)
+                if not method_frame:
+                    break
+                try:
+                    data = json.loads(body)
+                    if data.get("consumer_id") == consumer_id:
+                        removed = True
+                        continue
+                except (json.JSONDecodeError, KeyError):
+                    pass
+                remaining_bodies.append(body)
+
+            for body in remaining_bodies:
+                channel.basic_publish(
+                    exchange="",
+                    routing_key=queue_name,
+                    body=body,
+                    properties=pika.BasicProperties(delivery_mode=2),
+                )
+
+        logger.info(
+            "[RabbitMQ] consumer released thread_id=%s consumer_id=%s removed=%s",
+            thread_id,
+            consumer_id[:8],
+            removed,
+        )
+
+    def has_active_consumer(self, thread_id: str) -> bool:
+        """检查指定 thread_id 是否有任意活跃消费者。"""
+        try:
+            with self._with_channel() as channel:
+                queue_name = self._get_active_consumer_queue_name(thread_id)
+                try:
+                    queue_info = channel.queue_declare(queue=queue_name, durable=True, passive=True)
+                except Exception:
+                    return False
+                return queue_info.method.message_count > 0
+        except Exception as e:
+            logger.warning(f"Error checking active consumers for thread_id={thread_id}: {e}")
+            return False
+
+    @contextmanager
+    def _with_replay_lock(self, thread_id: str, timeout: float = 3.0) -> Iterator[Any]:
+        """串行化同一会话的非破坏性 replay，避免并发 peek 分摊消息。"""
+        deadline = time.time() + timeout
+        lock_queue = self._get_replay_lock_queue_name(thread_id)
+
+        while True:
+            connection = None
+            channel = None
+            try:
+                connection = self._acquire_dedicated_exclusive_queue_connection(
+                    lock_queue,
+                    arguments={"x-expires": self.QUEUE_TTL_MS},
+                )
+                channel = connection.channel()
+            except Exception:
+                if channel and getattr(channel, "is_open", False):
+                    with contextlib.suppress(Exception):
+                        channel.close()
+                if connection and getattr(connection, "is_open", False):
+                    with contextlib.suppress(Exception):
+                        connection.close()
+                connection = None
+                channel = None
+                if time.time() >= deadline:
+                    raise
+                self._wait_for_replay_retry(deadline, self.REPLAY_LOCK_RETRY_INTERVAL)
+                continue
+
+            try:
+                yield channel
+            finally:
+                if channel and getattr(channel, "is_open", False):
+                    with contextlib.suppress(Exception):
+                        channel.close()
+                if connection and getattr(connection, "is_open", False):
+                    with contextlib.suppress(Exception):
+                        connection.close()
+                self._notify_replay_waiters()
+            return
 
     # ================== 守护线程管理 ==================
 
@@ -513,11 +800,11 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             logger.info("RabbitMQ daemon thread stopped")
 
     def _daemon_worker(self) -> None:
-        """后台守护线程工作函数：每隔 0.5 秒批量推送消息到 RabbitMQ"""
+        """后台守护线程工作函数：每隔 0.1 秒批量推送消息到 RabbitMQ"""
         while self._daemon_running:
             try:
-                # 等待 0.5 秒或直到停止事件触发
-                if self._daemon_stop_event.wait(timeout=0.5):
+                # 等待 0.1 秒或直到停止事件触发
+                if self._daemon_stop_event.wait(timeout=0.1):
                     break
 
                 # 批量推送消息
@@ -548,9 +835,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
 
         # 批量推送到 RabbitMQ
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
-
+            with self._with_channel() as channel:
                 for thread_id, messages in messages_to_flush.items():
                     if not messages:
                         continue
@@ -568,6 +853,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                         )
 
                     logger.debug(f"Flushed {len(messages)} messages to queue {queue_name}")
+            self._notify_replay_waiters()
         except Exception as e:
             logger.error(f"Error flushing messages to RabbitMQ: {e}")
             # 如果推送失败，将消息放回缓冲区
@@ -576,6 +862,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                     if thread_id not in self._message_buffer:
                         self._message_buffer[thread_id] = []
                     self._message_buffer[thread_id].extend(messages)
+            self._notify_replay_waiters()
 
     # ================== 死信队列操作 ==================
 
@@ -592,8 +879,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         Returns:
             恢复的消息数量
         """
-        with self._with_connection() as connection:
-            channel = connection.channel()
+        with self._with_channel() as channel:
             main_queue_name, dlq_name = self._ensure_queue_with_dlx(channel, thread_id)
 
             # 检查死信队列中的消息数量
@@ -664,8 +950,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def _get_dlq_count(self, thread_id: str) -> int:
         """获取死信队列中的消息数量"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 dlq_name = self._get_dlq_name(thread_id)
                 try:
                     dlq_info = channel.queue_declare(queue=dlq_name, durable=True, passive=True)
@@ -702,6 +987,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             if thread_id not in self._message_buffer:
                 self._message_buffer[thread_id] = []
             self._message_buffer[thread_id].append(message)
+        self._notify_replay_waiters()
 
     def flush(self, thread_id: Optional[str] = None) -> None:
         """立即推送缓冲区中的消息到 RabbitMQ
@@ -723,8 +1009,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             logger.debug("[Streaming] rabbitmq flush thread_id=%s, count=%d", thread_id, len(messages_to_flush))
 
             try:
-                with self._with_connection() as connection:
-                    channel = connection.channel()
+                with self._with_channel() as channel:
                     queue_name = self._ensure_queue(channel, thread_id)
 
                     for message in messages_to_flush:
@@ -735,6 +1020,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                             body=body,
                             properties=pika.BasicProperties(delivery_mode=2),
                         )
+                self._notify_replay_waiters()
             except Exception as e:
                 logger.error(f"Error flushing messages for {thread_id}: {e}")
                 # 推送失败，放回缓冲区
@@ -742,6 +1028,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                     if thread_id not in self._message_buffer:
                         self._message_buffer[thread_id] = []
                     self._message_buffer[thread_id].extend(messages_to_flush)
+                self._notify_replay_waiters()
                 raise
         else:
             # 推送所有消息
@@ -760,8 +1047,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         Returns:
             消息列表
         """
-        with self._with_connection() as connection:
-            channel = connection.channel()
+        with self._with_channel() as channel:
             main_queue_name = self._ensure_queue(channel, thread_id)
 
             # 查询主队列中有多少消息
@@ -792,6 +1078,64 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
 
             return messages
 
+    def _peek_queue_messages(self, channel: Any, queue_name: str) -> list[Any]:
+        """非破坏性读取队列中的全部消息。"""
+        messages = []
+        delivery_tags = []
+
+        try:
+            queue_info = channel.queue_declare(queue=queue_name, durable=True, passive=True)
+            message_count = queue_info.method.message_count
+            for _ in range(message_count):
+                method_frame, _, body = channel.basic_get(queue=queue_name, auto_ack=False)
+                if not method_frame:
+                    break
+                delivery_tags.append(method_frame.delivery_tag)
+                messages.append(pickle.loads(body))
+        finally:
+            for tag in delivery_tags:
+                channel.basic_nack(delivery_tag=tag, requeue=True)
+
+        return messages
+
+    def get_messages_since(self, thread_id: str, offset: int, timeout: Optional[float] = None) -> tuple[list[Any], int]:
+        """从会话日志的指定 offset 开始读取消息，读取后不删除底层缓存。"""
+        start_time = time.time()
+        deadline = start_time + timeout if timeout is not None else None
+        offset = max(offset, 0)
+
+        while True:
+            try:
+                with self._with_replay_lock(thread_id) as channel:
+                    main_queue_name = self._ensure_queue(channel=channel, thread_id=thread_id)
+                    all_messages = self._peek_queue_messages(channel, main_queue_name)
+
+                    # 兼容升级前已经进入 DLQ 的旧缓存：仅在主队列为空时恢复一次。
+                    if not all_messages and self._get_dlq_count(thread_id) > 0:
+                        restored = self._restore_from_dlq(thread_id)
+                        logger.info(
+                            "[RabbitMQ] restored legacy DLQ messages before replay thread_id=%s restored=%d",
+                            thread_id,
+                            restored,
+                        )
+                        all_messages = self._peek_queue_messages(channel, main_queue_name)
+
+                # 先 peek RabbitMQ，再合并本地 buffer，覆盖 flush 前后的临界窗口。
+                # 如果 buffer 正在 flush，本轮可能暂时看不到，下轮会按 offset 补上。
+                with self._buffer_lock:
+                    all_messages.extend(self._message_buffer.get(thread_id, []))
+
+                next_offset = len(all_messages)
+                if next_offset > offset:
+                    return all_messages[offset:], next_offset
+            except Exception:
+                logger.exception("Error in get_messages_since for thread_id=%s", thread_id)
+
+            if deadline is not None and time.time() >= deadline:
+                raise TimeoutError("No message available within timeout")
+
+            self._wait_for_replay_retry(deadline, self.REPLAY_MESSAGE_RETRY_INTERVAL)
+
     def _get_block(self, thread_id: str, timeout: Optional[float] = None) -> list[Any]:
         """阻塞方式获取消息
 
@@ -806,6 +1150,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             TimeoutError: 超时时抛出
         """
         start_time = time.time()
+        deadline = start_time + timeout if timeout is not None else None
 
         while True:
             try:
@@ -816,14 +1161,13 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
                 logger.exception(f"Error in _get_block: {e}")
 
             # 检查超时
-            if timeout is not None:
+            if deadline is not None:
                 elapsed = time.time() - start_time
-                if elapsed >= timeout:
+                if time.time() >= deadline:
                     logger.debug("[Streaming] rabbitmq get timeout thread_id=%s, elapsed=%.3fs", thread_id, elapsed)
                     raise TimeoutError("No message available within timeout")
 
-            # 等待一小段时间后重试（轮询方式）
-            time.sleep(0.1)
+            self._wait_for_replay_retry(deadline, self.REPLAY_MESSAGE_RETRY_INTERVAL)
 
     def get(self, thread_id: str, timeout: Optional[float] = None) -> list[Any]:
         """从指定 thread_id 的队列中获取消息
@@ -864,22 +1208,21 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         # 每次 passive declare 使用独立 channel，避免主队列不存在时
         # channel 被 404 error 关闭导致 DLQ 检查静默失败
         try:
-            with self._with_connection() as connection:
-                main_queue_name = self._get_queue_name(thread_id)
-                dlq_name = self._get_dlq_name(thread_id)
+            main_queue_name = self._get_queue_name(thread_id)
+            dlq_name = self._get_dlq_name(thread_id)
 
-                # 检查主队列（独立 channel）
+            # 检查主队列（独立 channel）
+            with self._with_channel() as channel:
                 try:
-                    channel = connection.channel()
                     queue_info = channel.queue_declare(queue=main_queue_name, durable=True, passive=True)
                     if queue_info.method.message_count > 0:
                         return True
                 except Exception:
                     pass
 
-                # 检查死信队列（独立 channel）
+            # 检查死信队列（独立 channel）
+            with self._with_channel() as channel:
                 try:
-                    channel = connection.channel()
                     dlq_info = channel.queue_declare(queue=dlq_name, durable=True, passive=True)
                     if dlq_info.method.message_count > 0:
                         return True
@@ -918,6 +1261,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         Returns:
             True 表示成功清空，False 表示失败或队列不存在
         """
+        channel = None
         try:
             channel = connection.channel()
             if passive_check:
@@ -929,6 +1273,10 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
             if not passive_check:  # 非被动检查模式下才记录警告
                 logger.warning(f"Failed to purge queue {queue_name}: {e}")
             return False
+        finally:
+            if channel and getattr(channel, "is_open", False):
+                with contextlib.suppress(Exception):
+                    channel.close()
 
     def _purge_all_queues(self, thread_id: str, include_cancel_queue: bool = True) -> None:
         """清空指定 thread_id 的所有队列（内部方法）
@@ -958,13 +1306,13 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         在消费完成后调用，主动释放资源，避免空队列空占 1 小时以及死信交换机永久残留。
         """
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 # 收集所有需要删除的队列名
                 queue_names = [
                     self._get_queue_name(thread_id),
                     self._get_dlq_name(thread_id),
                     self._get_cancel_queue_name(thread_id),
+                    self._get_active_consumer_queue_name(thread_id),
                 ]
                 # 追加 MultiProcessMixin 管理的信号队列
                 queue_names.extend(self._get_signal_queue_names(thread_id))
@@ -1010,8 +1358,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def request_cancel(self, thread_id: str) -> None:
         """请求取消该 thread_id 的流。幂等：向取消队列投递一条消息，生产者轮询时消费到即退出。"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancel_queue_name = self._get_cancel_queue_name(thread_id)
                 channel.queue_declare(
                     queue=cancel_queue_name,
@@ -1031,8 +1378,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def is_cancel_requested(self, thread_id: str) -> bool:
         """检查是否已请求取消该 thread_id 的流；若存在取消消息则消费一条并返回 True。"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 cancel_queue_name = self._get_cancel_queue_name(thread_id)
                 try:
                     channel.queue_declare(queue=cancel_queue_name, durable=True, passive=True)
@@ -1063,11 +1409,13 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
     def get_cached_count(self, thread_id: str) -> int:
         """获取主队列中的消息数量"""
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 queue_name = self._get_queue_name(thread_id)
-                queue_info = channel.queue_declare(queue=queue_name, durable=True, passive=True)
-                return queue_info.method.message_count
+                try:
+                    queue_info = channel.queue_declare(queue=queue_name, durable=True, passive=True)
+                    return queue_info.method.message_count
+                except Exception:
+                    return 0
         except Exception as e:
             logger.error(f"Error getting cached count: {e}")
             return 0
@@ -1082,6 +1430,14 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
 
     def __del__(self):
         """析构函数：停止守护线程并关闭连接池"""
+        with contextlib.suppress(Exception):
+            with self._producer_lock_guard:
+                lock_connections = list(self._producer_lock_connections.values())
+                self._producer_lock_connections.clear()
+            for connection in lock_connections:
+                if getattr(connection, "is_open", False):
+                    with contextlib.suppress(Exception):
+                        connection.close()
         with contextlib.suppress(Exception):
             self._stop_daemon()
         with contextlib.suppress(Exception):
@@ -1113,8 +1469,7 @@ class RabbitMQMessageHandler(MultiProcessMixin, BaseMessageQueueHandler):
         delivery_tags = []
 
         try:
-            with self._with_connection() as connection:
-                channel = connection.channel()
+            with self._with_channel() as channel:
                 dlq_name = self._get_dlq_name(thread_id)
 
                 # 先获取 DLQ 中的消息数量

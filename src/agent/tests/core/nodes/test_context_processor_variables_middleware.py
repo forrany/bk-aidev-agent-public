@@ -70,7 +70,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
 
@@ -104,7 +103,6 @@ class TestVariablesMiddleware:
                 use_structured_response=True,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
 
@@ -138,7 +136,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
         pipeline.use(DeepSeekR1VariablesMiddleware())
@@ -169,7 +166,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
         pipeline.use(ChatHistoryCompressionMiddleware(token_limit=2, token_margin=0))
@@ -204,7 +200,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
         pipeline.use(
@@ -245,7 +240,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
         pipeline.use(
@@ -298,7 +292,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
         pipeline.use(
@@ -351,7 +344,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
         pipeline.use(ChatHistoryCompressionMiddleware(token_limit=3, token_margin=0))
@@ -385,7 +377,6 @@ class TestVariablesMiddleware:
                 use_structured_response=False,
                 use_general_knowledge_on_miss=False,
                 rejection_message="rej",
-                role_prompt="role",
             )
         )
         pipeline.use(ChatHistoryCompressionMiddleware(token_limit=2, token_margin=0))

@@ -32,9 +32,9 @@ from langchain_core.messages import BaseMessageChunk, ToolMessage
 from langchain_core.runnables.schema import StreamEvent
 from typing_extensions import NotRequired
 
+from aidev_agent.config import settings
 from aidev_agent.core.ag_ui.types import CustomMessageType
 from aidev_agent.enums import StreamEventType
-from aidev_agent.pydantic_models import AgentOptions
 from aidev_agent.utils import Empty
 from aidev_agent.utils.async_utils import async_generator_with_timeout, async_to_sync_generator
 
@@ -730,25 +730,22 @@ class BkAiStreamingProtocol:
 
 
 class AgentStreamAdapter:
-    def __init__(self, agent_options: AgentOptions | None = None):
-        self.agent_options = agent_options
+    def __init__(self, agent_type: str | None = None):
+        self.agent_type: BKAiStreamingAgentType = (
+            BKAiStreamingAgentType.StructuredChatCommonQAAgent
+            if agent_type and "deepseek" in agent_type
+            else BKAiStreamingAgentType.ToolCallingCommonQAAgent
+        )
 
     # 流协议处理
     def stream_standard_event(self, agent_e, cfg, input_state, skip_thought=False, timeout: int = 30):
-        if self.agent_options and self.agent_options.intent_recognition_options.agent_type:
-            agent_type = (
-                BKAiStreamingAgentType.ToolCallingCommonQAAgent
-                if "deepseek" not in self.agent_options.intent_recognition_options.agent_type
-                else BKAiStreamingAgentType.StructuredChatCommonQAAgent
-            )
-        else:
-            agent_type = BKAiStreamingAgentType.ToolCallingCommonQAAgent
         try:
             protocol = BkAiStreamingProtocol(
                 skip_thought=skip_thought,
                 timeout=timeout,
-                max_tool_output_len=5000,
-                agent_type=agent_type,
+                max_tool_output_len=settings.MAX_TOOL_OUTPUT_LEN,
+                max_cache_length=settings.MAX_CACHE_LENGTH,
+                agent_type=self.agent_type,
             )
             _aiter = agent_e.astream_events(
                 input_state,

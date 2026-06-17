@@ -89,10 +89,10 @@ def apply_optional_frontmatter_fields(
         从 YAML frontmatter 解析得到的字典
     stringify_simple_fields : bool, optional
         是否对 license 和 compatibility 字段强制转换为 str。
-        默认为 False。设为 True 时行为与 bkai_provider 一致。
+        默认为 False。设为 True 时行为与 BkAiBackend 一致。
     convert_list_elements : bool, optional
         处理 allowed-tools 字段时，是否对 list 中的元素强制转换为 str。
-        默认为 False。设为 True 时行为与 bkai_provider 一致。
+        默认为 False。设为 True 时行为与 BkAiBackend 一致。
     """
     # 处理 license
     if "license" in frontmatter:

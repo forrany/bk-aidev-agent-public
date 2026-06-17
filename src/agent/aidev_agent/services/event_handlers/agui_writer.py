@@ -5,11 +5,12 @@
 适用于插件、第三方应用等需要通过 API 访问平台的场景。
 """
 
+import json
 from logging import getLogger
 from typing import Any
 
 from aidev_agent.api.bk_aidev import Client
-from aidev_agent.enums import SessionsStatus
+from aidev_agent.enums import ActivityType, PromptRole, SessionsStatus
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 
 logger = getLogger(__name__)
@@ -47,6 +48,8 @@ class AGUISessionWriter(BaseSessionWriter):
         client: Client,
         username: str = "",
         tools: list | None = None,
+        turn_id: str = "",
+        task_id: str = "",
     ):
         """初始化 API 回写器
 
@@ -55,11 +58,65 @@ class AGUISessionWriter(BaseSessionWriter):
             client: BKAidev API 客户端
             username: 用户名
             tools: 工具列表，用于获取工具描述信息
+            turn_id: 同一次 user-ai 回复的轮次 ID
+            task_id: 本轮 bkflow 任务 ID；retry/skip 时按 content.task_id 绑定已有 activity
         """
-        super().__init__(session_code=session_code, username=username, tools=tools)
+        super().__init__(session_code=session_code, username=username, tools=tools, turn_id=turn_id)
         self.client = client
+        self.task_id = task_id
         # 缓存 session_property，避免 update_flow_agent_info 每次都额外 GET
         self._cached_session_property: dict | None = None
+        self._has_run_error = False
+
+    def handle_flow_agent_result(self, event) -> None:
+        # retry/skip resume：一轮对话一个 task_id，先绑定已有 activity 再走基类 update
+        if not self._flow_result_content_id and self.task_id:
+            self._bind_flow_result_for_resume()
+        super().handle_flow_agent_result(event)
+
+    def _bind_flow_result_for_resume(self) -> None:
+        """retry/skip：按 content.task_id 定位本轮已有 flow_agent activity"""
+        headers = {"X-BKAIDEV-USER": self.username} if self.username else {}
+        try:
+            contents = (
+                self.client.api.get_chat_session_contents(
+                    params={"session_code": self.session_code},
+                    headers=headers,
+                ).get("data")
+                or []
+            )
+        except Exception as err:
+            logger.exception("bind flow_agent result failed: session=%s task=%s", self.session_code, self.task_id)
+            raise RuntimeError(
+                f"resume 回写失败：查询 flow_agent activity 异常，"
+                f"session_code={self.session_code}, task_id={self.task_id}"
+            ) from err
+
+        for item in reversed(contents):
+            prop = item.get("property") or {}
+            builtin = prop.get("builtin_property") or {}
+            if item.get("role") != PromptRole.ACTIVITY.value or builtin.get("type") != ActivityType.FLOW_AGENT.value:
+                continue
+            raw = item.get("content")
+            try:
+                data = json.loads(raw) if isinstance(raw, str) else raw if raw else {}
+            except (TypeError, ValueError):
+                data = {}
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            record_task_id = str(data.get("task_id", "")) if isinstance(data, dict) else ""
+            if record_task_id != str(self.task_id):
+                continue
+
+            self._flow_result_content_id = item.get("id")
+            self._flow_result_message_id = builtin.get("message_id")
+            if not self.turn_id and prop.get("turn_id"):
+                self.turn_id = prop["turn_id"]
+            return
+
+        raise RuntimeError(
+            f"resume 回写失败：未找到 task_id={self.task_id} 的 flow_agent activity，session_code={self.session_code}"
+        )
 
     def _do_create_content(self, payload: dict[str, Any], headers: dict[str, str]) -> int | None:
         """通过 API 创建会话内容
@@ -92,12 +149,22 @@ class AGUISessionWriter(BaseSessionWriter):
         标记流式传输结束
         根据是否被取消选择不同的结束状态：
         - 正常完成：会话状态设为 finished
+        - 运行错误：会话状态设为 failed
         - 用户取消/暂停：会话状态设为 cancelled
         """
         if self._is_cancelled:
             self._update_session_status(SessionsStatus.CANCELLED.value)
+        elif self._has_run_error:
+            self._update_session_status(SessionsStatus.FAILED.value)
         else:
             self._update_session_status(SessionsStatus.FINISHED.value)
+
+    def handle_run_error(self, event) -> None:
+        """处理运行错误，并确保会话状态进入 failed。"""
+        super().handle_run_error(event)
+        if not self._is_cancelled:
+            self._has_run_error = True
+            self._update_session_status(SessionsStatus.FAILED.value)
 
     def _update_session_status(self, status: str) -> None:
         """更新会话状态（内部方法）

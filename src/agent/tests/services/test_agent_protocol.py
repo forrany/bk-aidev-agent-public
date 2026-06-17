@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from aidev_agent.enums import AgentBuildType, AgentType
 from aidev_agent.packages.langchain_core.models.mock import MockChatModel
-from aidev_agent.pydantic_models import AgentConfig, AgentOptions
+from aidev_agent.pydantic_models import AgentConfig
 from aidev_agent.services.agent import (
     AgentBuildContext,
     AgentInstanceFactory,
@@ -27,8 +27,11 @@ from aidev_agent.services.agent import (
     agent_registry,
 )
 from aidev_agent.services.agent.chat import ChatAgentBuilder
+from aidev_agent.services.agent.factory import _FACTORY_TOKEN
 from aidev_agent.services.common_agent import CommonQAAgent
+from aidev_agent.services.token_usage import TokenUsageCallbackHandler
 from aidev_agent.utils.factory import SimpleFactory
+from aidev_agent.utils.local import request_local
 from langgraph.checkpoint.memory import MemorySaver
 
 
@@ -39,7 +42,6 @@ def _make_agent_config(agent_code: str = "agent-x", **overrides) -> AgentConfig:
         agent_name=agent_code,
         chat_model="mock-llm",
         non_thinking_llm="mock-llm",
-        agent_options=AgentOptions(),
     )
     base.update(overrides)
     return AgentConfig(**base)
@@ -169,8 +171,7 @@ def _patch_chat_builder(knowledges=None):
     builder_mock.build_knowledge_bases.return_value = [{"id": "kb1"}]
     builder_mock.build_knowledge_items.return_value = knowledges or [{"id": "ki1"}, {"id": "ki2"}]
     builder_mock.build_chat_history.return_value = []
-    builder_mock.build_agent_options.return_value = AgentOptions()
-    builder_mock.build_agent_prompt.return_value = "prompt"
+    builder_mock.build_knowledge_query_options.return_value = None
     builder_mock.build_executor_info.return_value = {"executor": "u"}
     builder_mock.build_checkpointer.return_value = MemorySaver()
     builder_mock.get_role_prompt.return_value = "role"
@@ -334,3 +335,46 @@ class TestFactoryEndToEnd:
         assert agent.poll_timeout == 2.0
         assert agent.resource_manager is flow_rm
         assert agent.username == "bob"
+
+    def test_make_build_context_appends_token_usage_callback_with_channel_type(self):
+        resource_manager = MagicMock(name="rm")
+        resource_manager.get_agent_config.return_value = _make_agent_config("agent-x", chat_model="qwen-plus")
+
+        request_local.request_id = "req-123"
+        factory = AgentInstanceFactory(
+            agent_code="agent-x",
+            agent_type=AgentType.CHAT,
+            build_type=AgentBuildType.SESSION,
+            session_code="session-1",
+            callbacks=[MagicMock(name="existing_cb")],
+            resource_manager=resource_manager,
+            checkpointer=MemorySaver(),
+            username="alice",
+            version="v2",
+            _token=_FACTORY_TOKEN,
+        )
+
+        try:
+            ctx = factory._make_build_context(
+                {
+                    "agent_code": "agent-x",
+                    "session_context_data": [],
+                    "switch_agent": False,
+                },
+                None,
+                {"channel_type": "popup"},
+            )
+        finally:
+            if hasattr(request_local, "request_id"):
+                delattr(request_local, "request_id")
+
+        assert ctx.chat is not None
+        assert len(ctx.chat.callbacks) == 2
+        callback = next(cb for cb in ctx.chat.callbacks if isinstance(cb, TokenUsageCallbackHandler))
+        assert callback._metadata["session_code"] == "session-1"
+        assert callback._metadata["agent_code"] == "agent-x"
+        assert callback._metadata["agent_version"] == "v2"
+        assert callback._metadata["channel_type"] == "popup"
+        assert isinstance(callback._metadata["request_id"], str) and len(callback._metadata["request_id"]) > 0
+        assert callback._metadata["llm_code"] == "qwen-plus"
+        assert callback._metadata["created_by"] == "alice"

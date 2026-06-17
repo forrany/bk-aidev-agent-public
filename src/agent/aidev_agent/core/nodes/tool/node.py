@@ -213,6 +213,7 @@ def build_tool_node(
     if node_options.use_json_repair_on_error:
         sync_wrapper_list.append(json_repair_on_error_sync_wrapper)
         async_wrapper_list.append(json_repair_on_error_async_wrapper)
+
     # 是否启用工具计时
     if node_options.use_timer:
         sync_wrapper_list.append(timer_sync_wrapper)

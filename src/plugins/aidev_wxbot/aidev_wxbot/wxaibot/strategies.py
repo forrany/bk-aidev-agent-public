@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from logging import getLogger
 from typing import TYPE_CHECKING, Protocol
 
@@ -137,13 +138,14 @@ class FlowAgentStrategy:
         # 1. username 由 ContextGenerator 通过 convert_to_rtx 转换而来
         rtx_username = username
         logger.info(f"[FlowAgentStrategy] 使用 RTX: {rtx_username}")
+        turn_id = uuid.uuid4().hex
 
         # 2. 获取/创建 session
         session_manager = SessionManager(username=rtx_username)
         session_code = session_manager.get_or_create_by_thread_id(thread_id)
 
         # 3. 保存用户输入
-        session_manager.save_content(session_code=session_code, role="user", content=content)
+        session_manager.save_content(session_code=session_code, role="user", content=content, turn_id=turn_id)
 
         # 4. 构建 agent 依赖（统一走 AgentInstanceFactory）
         # FlowAgent 不需要工厂 SESSION 路径的会话上下文清洗，统一走 DIRECT；
@@ -158,6 +160,7 @@ class FlowAgentStrategy:
                 session_code=session_code,
                 client=AgentHelper.get_client(),
                 username=rtx_username,
+                turn_id=turn_id,
             ),
             username=rtx_username,
             # 通过 **extra 透传给 FlowAgentCompletionAgent.build(ctx)；

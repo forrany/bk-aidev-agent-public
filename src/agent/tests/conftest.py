@@ -1,6 +1,23 @@
 import logging
 import os
 import sys
+from pathlib import Path
+
+
+def pytest_ignore_collect(collection_path: Path, path, config):
+    """如果 opentelemetry 未安装，忽略 tests/packages/opentelemetry 目录。
+
+    conftest 中的 allow_module_level=True skip 会向父目录传播导致整个 session 被跳过，
+    因此改为在此处用 pytest_ignore_collect 控制。
+    """
+    if collection_path.name == "opentelemetry":
+        try:
+            import opentelemetry  # noqa: F401
+            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter  # noqa: F401
+            from opentelemetry.sdk._logs import LogRecord  # noqa: F401
+        except ImportError:
+            return True
+    return None
 
 
 def pytest_configure(config):

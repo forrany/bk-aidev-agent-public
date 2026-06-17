@@ -33,6 +33,8 @@ import shlex
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from langchain_core.runnables import RunnableConfig
+
 from .types import (
     EditResult,
     ExecuteResult,
@@ -40,6 +42,7 @@ from .types import (
     FileInfo,
     FileUploadResponse,
     GrepMatch,
+    RuntimeBackend,
     WriteResult,
 )
 from .utils import check_empty_content, perform_string_replacement
@@ -80,7 +83,7 @@ def _normalize_command_result(result: Any) -> _CommandResult:
     )
 
 
-class E2BSandboxBackend:
+class E2BSandboxBackend(RuntimeBackend):
     """E2B 远程沙箱后端。
 
     通过 E2B Code Interpreter SDK 在远程隔离环境中执行文件系统操作与命令执行。
@@ -353,7 +356,11 @@ class E2BSandboxBackend:
         finally:
             self._sandbox = None
 
-    def ls_info(self, path: str) -> list[FileInfo]:
+    def close(self) -> None:
+        """释放 E2B Sandbox 远程资源。"""
+        self.kill()
+
+    def ls_info(self, path: str, *, config: RunnableConfig | None = None, state: dict | None = None) -> list[FileInfo]:
         """列出目录中的文件和目录（非递归）。"""
 
         from e2b.sandbox.filesystem.filesystem import FileType
@@ -375,7 +382,15 @@ class E2BSandboxBackend:
         results.sort(key=lambda x: x.get("path", ""))
         return results
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read(
+        self,
+        file_path: str,
+        offset: int = 0,
+        limit: int = 2000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> str:
         """读取文件内容（带行号）。"""
 
         sandbox = self._ensure_sandbox()
@@ -409,7 +424,9 @@ class E2BSandboxBackend:
             result_lines.append(f"{i + 1:6d}\t{lines[i]}")
         return "\n".join(result_lines)
 
-    def write(self, file_path: str, content: str) -> WriteResult:
+    def write(
+        self, file_path: str, content: str, *, config: RunnableConfig | None = None, state: dict | None = None
+    ) -> WriteResult:
         """创建新文件并写入内容。"""
 
         sandbox = self._ensure_sandbox()
@@ -430,7 +447,16 @@ class E2BSandboxBackend:
 
         return WriteResult(path=file_path, files_update=None)
 
-    def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> EditResult:
         """通过替换字符串编辑文件。"""
 
         sandbox = self._ensure_sandbox()
@@ -456,7 +482,15 @@ class E2BSandboxBackend:
 
         return EditResult(path=file_path, files_update=None, occurrences=int(occurrences))
 
-    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> list[GrepMatch] | str:
+    def grep_raw(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> list[GrepMatch] | str:
         """在文件中搜索正则表达式模式（远程执行）。"""
 
         try:
@@ -498,7 +532,9 @@ class E2BSandboxBackend:
 
         return matches
 
-    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+    def glob_info(
+        self, pattern: str, path: str = "/", *, config: RunnableConfig | None = None, state: dict | None = None
+    ) -> list[FileInfo]:
         """查找匹配 glob 模式的文件（远程执行）。"""
 
         base = path or "/"
@@ -562,7 +598,15 @@ class E2BSandboxBackend:
 
         return responses
 
-    def execute(self, command: str, timeout: int = 120, max_output_size: int = 100000) -> ExecuteResult:
+    def execute(
+        self,
+        command: str,
+        timeout: int = 120,
+        max_output_size: int = 100000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> ExecuteResult:
         """在沙箱中执行 shell 命令。"""
 
         res = self._run(command, timeout=int(timeout))
@@ -578,7 +622,15 @@ class E2BSandboxBackend:
 
         return ExecuteResult(output=output, exit_code=res.exit_code, truncated=truncated)
 
-    async def aexecute(self, command: str, timeout: int = 120, max_output_size: int = 100000) -> ExecuteResult:
+    async def aexecute(
+        self,
+        command: str,
+        timeout: int = 120,
+        max_output_size: int = 100000,
+        *,
+        config: RunnableConfig | None = None,
+        state: dict | None = None,
+    ) -> ExecuteResult:
         """异步执行 shell 命令。"""
 
         import asyncio

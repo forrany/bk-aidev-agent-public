@@ -295,18 +295,15 @@ class TestFilesystemBackendEdit:
             assert test_file.read_text() == "hi world\nhi python\nhi there"
 
     def test_edit_multiple_occurrences_without_replace_all(self):
-        """Test that editing multiple occurrences without replace_all fails."""
+        """Test that editing multiple occurrences without replace_all raises ValueError."""
         with TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             test_file = tmppath / "test.txt"
             test_file.write_text("hello world\nhello python")
 
             backend = FilesystemBackend(root_dir=tmpdir)
-            result = backend.edit("test.txt", "hello", "hi", replace_all=False)
-
-            assert isinstance(result, EditResult)
-            assert result.error is not None
-            assert "匹配" in result.error or "occurrences" in result.error.lower()
+            with pytest.raises(ValueError, match="匹配"):
+                backend.edit("test.txt", "hello", "hi", replace_all=False)
 
 
 class TestFilesystemBackendGrep:
@@ -564,3 +561,38 @@ class TestDataClasses:
         assert result.output == "test output"
         assert result.exit_code == 0
         assert result.truncated is False
+
+
+class TestConfigStatePassThrough:
+    """测试 FilesystemBackend 接收 config/state 参数。"""
+
+    def test_ls_info_accepts_config_state(self):
+        """ls_info 应接受 keyword-only config/state 参数。"""
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            # 不传 config/state — 默认 None，向后兼容
+            result = backend.ls_info(tmpdir)
+            assert isinstance(result, list)
+
+    def test_ls_info_with_config_state(self):
+        """ls_info 应接受显式传入的 config/state。"""
+        from langchain_core.runnables import RunnableConfig
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            config = RunnableConfig(configurable={"thread_id": "test-123"})
+            state = {"user": "alice"}
+            result = backend.ls_info(tmpdir, config=config, state=state)
+            assert isinstance(result, list)
+
+    def test_execute_accepts_config_state(self):
+        """execute 应接受 keyword-only config/state 参数。"""
+        from langchain_core.runnables import RunnableConfig
+
+        with TemporaryDirectory() as tmpdir:
+            backend = FilesystemBackend(root_dir=tmpdir)
+            config = RunnableConfig(configurable={"thread_id": "t-456"})
+            state = {"user": "bob"}
+            result = backend.execute("echo hello", config=config, state=state)
+            assert isinstance(result, ExecuteResult)

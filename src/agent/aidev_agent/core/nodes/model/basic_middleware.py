@@ -42,9 +42,7 @@ logger = logging.getLogger(__name__)
 # Default prompt prefix
 # =============================================================================
 
-# NOTE: Keep content aligned with graphs/react/prompts.py::MULTI_MODAL_PREFIX to
-# preserve backwards-compatible default behavior when `ModelNodeSettings.prefix`
-# is not provided.
+# NOTE: Keep content aligned with graphs/react/prompts.py::MULTI_MODAL_PREFIX.
 DEFAULT_MULTI_MODAL_PREFIX = """You are a professional assistant, 
 respond to the human as helpfully,accurately,concisely as possible.
 
@@ -275,13 +273,11 @@ class SpecialVariablesMiddleware:
         use_structured_response: bool,
         use_general_knowledge_on_miss: bool,
         rejection_message: str,
-        role_prompt: str,
         enable_parallel_tool_calls: bool = DEFAULT_ENABLE_PARALLEL_TOOL_CALLS,
     ):
         self.use_structured_response = use_structured_response
         self.use_general_knowledge_on_miss = use_general_knowledge_on_miss
         self.rejection_message = rejection_message
-        self.role_prompt = role_prompt
         self.enable_parallel_tool_calls = enable_parallel_tool_calls
 
     def __call__(self, ctx: ProcessorContext, next: NextFunction) -> None:
@@ -311,7 +307,6 @@ class SpecialVariablesMiddleware:
             "chat_history": history_non_system_messages,
             "history_system_prompt": history_system_prompt,
             "rejection_response": self.rejection_message,
-            "role_prompt": self.role_prompt,
             "agent_scratchpad": agent_scratchpad,
             "enable_parallel_tool_calls": self.enable_parallel_tool_calls,
         }

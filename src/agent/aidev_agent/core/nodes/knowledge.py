@@ -32,7 +32,9 @@ from aidev_agent.core.ag_ui.types import ActivityMessage, CustomMessageType
 from aidev_agent.enums import ActivityType
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.kb_rag import KnowledgeRag, KnowledgeRagRetrieveResult
-from aidev_agent.pydantic_models import AgentOptions
+from aidev_agent.packages.langchain_core.retrievers.utils import normalize_query_for_search
+from aidev_agent.pydantic_models import KnowledgeSettings
+from aidev_agent.utils.migrations import migration_knowledge_query_options_from_agent_options_v1
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +90,7 @@ class BaseKnowledgeNode:
 
     Attributes:
         llm: 语言模型,用于知识库检索中的相关性判断和内容处理
-        agent_options: Agent 配置选项,包含知识库配置 (knowledge_bases, knowledge_items)
+        knowledge_query_options: 知识库检索配置
         kb_retriever: 知识库检索器实例
         retriever: KnowledgeRag 实例
     """
@@ -96,7 +98,7 @@ class BaseKnowledgeNode:
     def __init__(
         self,
         llm: BaseChatModel,
-        agent_options: AgentOptions,
+        knowledge_query_options: KnowledgeSettings,
         chat_history: list[BaseMessage],
         kb_retriever: BkRetriever | None = None,
     ):
@@ -104,11 +106,11 @@ class BaseKnowledgeNode:
 
         Args:
             llm: 语言模型
-            agent_options: Agent 配置选项
+            knowledge_query_options: 知识库检索配置
             kb_retriever: 可选的知识库检索器，如不提供则创建默认实例
         """
         self.llm = llm
-        self.agent_options = agent_options
+        self.knowledge_query_options = knowledge_query_options
         self.chat_history = chat_history
         self.kb_retriever = kb_retriever or BkRetriever()
         self.retriever = KnowledgeRag(llm, self.kb_retriever)
@@ -131,7 +133,7 @@ class BaseKnowledgeNode:
             messages = state.get("messages")
             if messages:
                 query = messages[-1].content
-        return query or ""
+        return normalize_query_for_search(query)
 
 
 class AgentKnowledgeNode(BaseKnowledgeNode):
@@ -168,7 +170,7 @@ class AgentKnowledgeNode(BaseKnowledgeNode):
         )
 
         query = self.get_query(state)
-        ret = self.retriever.retrieve(query, self.agent_options, self.chat_history, input=query)
+        ret = self.retriever.retrieve(query, self.knowledge_query_options, self.chat_history, input=query)
 
         duration = round(time.time() - t1, 4) * 1000
         result = self.process_result(ret, config, store, duration)
@@ -241,23 +243,30 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
     def __init__(
         self,
         llm: BaseChatModel,
-        agent_options: AgentOptions,
+        knowledge_query_options: KnowledgeSettings | None = None,
         kb_retriever: BkRetriever | None = None,
         score_threshold: float | None = None,
         topk: int = 20,
+        **kwargs,
     ):
         """初始化 AIDev 产品页面检索测试节点。
 
         Args:
             llm: 语言模型
-            agent_options: Agent 配置选项
+            knowledge_query_options: 知识库检索配置
             kb_retriever: 可选的知识库检索器
             score_threshold: 分数阈值，用于过滤 retrieved_docs
             topk: 返回的最大文档数量
         其他：
-            with_scalar_data 参数应该由 agent_options.KnowledgebaseSettings.with_scalar_data 进行调整
+            with_scalar_data 参数应该由 knowledge_query_options.with_scalar_data 进行调整
         """
-        super().__init__(llm, agent_options, [], kb_retriever)
+        if knowledge_query_options is None:
+            agent_options = kwargs.get("agent_options")
+            if agent_options is None:
+                raise ValueError("knowledge_query_options is required when agent_options is not provided")
+            knowledge_query_options = migration_knowledge_query_options_from_agent_options_v1(agent_options)
+
+        super().__init__(llm, knowledge_query_options, [], kb_retriever)
         self.score_threshold = score_threshold
         self.topk = topk
 
@@ -278,7 +287,7 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
             输出状态
         """
         query = self.get_query(state)
-        ret = self.retriever.retrieve(query, self.agent_options, self.chat_history, input=query)
+        ret = self.retriever.retrieve(query, self.knowledge_query_options, self.chat_history, input=query)
         # 获取所有 embedding 召回的资源（带细粒度分数）
         knowledge_resources_emb_recalled = ret.get("knowledge_resources_emb_recalled", [])
 
@@ -294,23 +303,23 @@ class AidevKnowledgeNode(BaseKnowledgeNode):
 
 def make_knowledge_node(
     llm: BaseChatModel,
-    agent_options: AgentOptions,
+    knowledge_query_options: KnowledgeSettings,
     chat_history: Optional[list] = None,
 ):
     """构建知识库检索节点。
     Args:
         llm: 语言模型,用于知识库检索中的相关性判断和内容处理
-        agent_options: Agent 配置选项,包含知识库配置 (knowledge_bases, knowledge_items)
+        knowledge_query_options: 知识库检索配置
 
     Returns:
         可用于 LangGraph node 的 callable,接受 (state, config, *, store) 参数
 
     Note:
-        如果 agent_options 中未配置知识库 (knowledge_bases 和 knowledge_items 均为空),
+        如果 knowledge_query_options 中未配置知识库 (knowledge_bases 和 knowledge_items 均为空),
         实际检索时会根据配置返回空结果或抛出异常。
     """
     return AgentKnowledgeNode(
         llm=llm,
-        agent_options=agent_options,
+        knowledge_query_options=knowledge_query_options,
         chat_history=chat_history,
     )

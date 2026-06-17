@@ -69,8 +69,36 @@ def test_get_or_create_propagates_non_404(session_manager, mock_plugin_rm_client
 def test_save_content_passes_extra_and_status(session_manager, mock_plugin_rm_client, extra, status, expect_extra):
     mock_plugin_rm_client.api.create_chat_session_content.return_value = {"data": {"id": 1}}
 
-    session_manager.save_content("sc-1", "user", "hello", extra=extra, status=status)
+    session_manager.save_content("sc-1", "user", "hello", extra=extra, status=status, turn_id="turn-1")
 
     payload = mock_plugin_rm_client.api.create_chat_session_content.call_args.kwargs["json"]
     assert payload["status"] == status
     assert ("extra" in payload) is expect_extra
+    assert payload["property"]["turn_id"] == "turn-1"
+
+
+def test_save_content_generates_turn_id_for_user(session_manager, mock_plugin_rm_client):
+    mock_plugin_rm_client.api.create_chat_session_content.return_value = {"data": {"id": 1}}
+
+    saved = session_manager.save_content("sc-1", "user", "hello")
+
+    payload = mock_plugin_rm_client.api.create_chat_session_content.call_args.kwargs["json"]
+    assert payload["property"]["turn_id"]
+    assert saved["property"]["turn_id"] == payload["property"]["turn_id"]
+
+
+def test_prepare_session_turn_inherits_user_turn_id_without_input(session_manager, mock_plugin_rm_client, monkeypatch):
+    mock_plugin_rm_client.api.retrieve_chat_session.return_value = {"data": {"session_code": "sc-1"}}
+    monkeypatch.setattr(
+        session_manager,
+        "list_session_contents",
+        lambda _session_code: [
+            {"role": "user", "property": {"turn_id": "turn-existing"}},
+        ],
+    )
+
+    session_code, turn_id = session_manager.prepare_session_turn("thread-1", input_text="")
+
+    assert session_code
+    assert turn_id == "turn-existing"
+    mock_plugin_rm_client.api.create_chat_session_content.assert_not_called()

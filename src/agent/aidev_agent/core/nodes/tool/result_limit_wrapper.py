@@ -67,6 +67,7 @@ def build_result_limit_sync_wrapper(
 
         if isinstance(msg, ToolMessage) and _tool_msg_content_len(msg) > result_limit:
             msg.content = reject_message
+            msg.status = "error"
 
         return msg
 
@@ -98,6 +99,7 @@ def build_result_limit_async_wrapper(
 
         if isinstance(msg, ToolMessage) and _tool_msg_content_len(msg) > result_limit:
             msg.content = reject_message
+            msg.status = "error"
 
         return msg
 

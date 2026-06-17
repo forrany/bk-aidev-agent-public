@@ -92,16 +92,18 @@ class BaseSessionWriter(ABC):
     # 用户取消时补写的默认提示文本，与 RunId.CANCELLED_MESSAGE 保持一致
     PAUSED_CONTENT_MESSAGE = "用户已取消"
 
-    def __init__(self, session_code: str, username: str = "", tools: list | None = None):
+    def __init__(self, session_code: str, username: str = "", tools: list | None = None, turn_id: str = ""):
         """初始化回写器
 
         Args:
             session_code: 会话标识
             username: 用户名
             tools: 工具列表，用于获取工具描述信息
+            turn_id: 同一次 user-ai 回复的轮次 ID
         """
         self.session_code: str = session_code
         self.username: str = username
+        self.turn_id: str = turn_id
         self._tools_mapping: dict[str, Any] = {}
         if tools:
             self.set_tools(tools)
@@ -469,7 +471,7 @@ class BaseSessionWriter(ABC):
             return
 
         # 映射状态：success -> success, error -> fail
-        platform_status = "fail" if output_message.status == "error" else "complete"
+        platform_status = "error" if output_message.status == "error" else "complete"
 
         self._create_session_content(
             message_id=output_message.id or tool_call_id,
@@ -860,6 +862,9 @@ class BaseSessionWriter(ABC):
     def _safe_call(self, fn: Callable, message_id: str, action: str, **kwargs: Any) -> Any:
         """安全调用回写函数，统一处理异常和日志
 
+        D-02: 写入失败时不阻断 Agent 执行，但递增 _write_error_count，
+        供 set_streaming_finished 判断 session 最终状态。
+
         Args:
             fn: 实际执行的回写函数（_do_create_content / _do_update_content 等）
             message_id: 消息 ID，仅用于日志
@@ -897,6 +902,8 @@ class BaseSessionWriter(ABC):
                 "builtin_property": builtin_property,
             },
         }
+        if self.turn_id:
+            payload["property"]["turn_id"] = self.turn_id
         return self._safe_call(
             self._do_create_content, message_id, "create", payload=payload, headers=self._get_headers()
         )
@@ -922,6 +929,8 @@ class BaseSessionWriter(ABC):
                 "builtin_property": builtin_property,
             },
         }
+        if self.turn_id:
+            payload["property"]["turn_id"] = self.turn_id
         self._safe_call(
             self._do_update_content,
             message_id,

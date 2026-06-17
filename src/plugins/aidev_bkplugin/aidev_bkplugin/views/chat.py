@@ -3,7 +3,7 @@
 import uuid
 
 from aidev_agent.config import settings as agent_settings
-from aidev_agent.enums import AgentBuildType, AgentType, PromptRole
+from aidev_agent.enums import AgentBuildType, AgentType, ChannelType, PromptRole
 from aidev_agent.pydantic_models import ChatPrompt, ExecuteKwargs
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
@@ -24,6 +24,18 @@ class ChatCompletionViewSet(PluginViewSet):
     # 使用自定义内容协商，忽略 Accept 头限制，支持流式响应
     content_negotiation_class = IgnoreClientContentNegotiation
 
+    @property
+    def channel_type(self):
+        """区分用户态调用渠道：
+        - 走网关API（API渠道）
+        - 走应用域名直连（小鲸弹窗渠道）
+        """
+        request = getattr(self, "request", None)
+        app = getattr(request, "app", None) if request is not None else None
+        if app is not None and getattr(app, "verified", False):
+            return ChannelType.API.value
+        return ChannelType.POPUP.value
+
     def create(self, request):
         """
         入参校验与解析统一交给 ChatCompletionRequestSerializer：
@@ -35,7 +47,7 @@ class ChatCompletionViewSet(PluginViewSet):
 
         username = self.get_username()
         session_code = ""  # 给异常分支兜底，避免 except 段引用未定义变量
-        event_handler = None  # 用于断点续传
+        turn_id = ""  # 由 execute_kwargs 或 _save_user_input / _resolve_turn_id 填充
 
         try:
             serializer = ChatCompletionRequestSerializer(
@@ -44,14 +56,22 @@ class ChatCompletionViewSet(PluginViewSet):
             )
             serializer.is_valid(raise_exception=True)
             data = serializer.validated_data
-
+            # 获取 execute_kwargs
             execute_kwargs: ExecuteKwargs = data["execute_kwargs"]
             session_code = data["session_code"]
             execute_kwargs.session_code = session_code
+            turn_id = execute_kwargs.turn_id or ""
+            session_temporary = data.get("session_temporary")
+            # 获取输入
             _input = data["input"]
             chat_history_raw = data["chat_history"]
             agent_type = data["agent_type"]
             thread_id = data["thread_id"]
+            # persist_input: 当为 True 且 session_code 为空时，自动创建 session
+            if execute_kwargs.persist_input and session_code:
+                session_code = SessionManager(username=username).get_or_create_by_session_code(
+                    session_code, session_name="子智能体调用", is_temporary=session_temporary
+                )
 
             logger.info(f"resolved agent_type={agent_type}, version={execute_kwargs.version}")
 
@@ -69,7 +89,10 @@ class ChatCompletionViewSet(PluginViewSet):
                         )
                     except Exception:
                         logger.exception("[FLOW_AGENT] Failed to resolve session_code from thread_id=%s", thread_id)
-                return self._handle_flow_agent(data, session_code, username)
+                turn_id = self._save_user_input(session_code, username, _input, turn_id)
+                if hasattr(execute_kwargs, "turn_id"):
+                    execute_kwargs.turn_id = turn_id
+                return self._handle_flow_agent(data, session_code, username, turn_id=turn_id)
 
             if thread_id:
                 # chat_history 已经过 serializer 校验，元素必含 role/content
@@ -83,41 +106,50 @@ class ChatCompletionViewSet(PluginViewSet):
                     chat_history=chat_history,
                     username=username,
                     execute_kwargs=execute_kwargs,
+                    turn_id=turn_id,
+                    channel_type=self.channel_type,
                 )
 
             # 走到这里 thread_id 必为空（上面已 return）；由 serializer 中的 uuid 兜底规则可推出
             # session_code 必为真。保留显式校验仅作为不变式被破坏时的防御性兜底。
             if not session_code:
                 raise ClientBlueException(message="session_code or thread_id is required")
-
-            agent_instance = AgentBuilder(username=request.user.username).by_session_code(
+            turn_id = self._save_user_input(session_code, username, _input, turn_id)
+            if hasattr(execute_kwargs, "turn_id"):
+                execute_kwargs.turn_id = turn_id
+            agent_instance = AgentBuilder(username=request.user.username, turn_id=turn_id).by_session_code(
                 session_code,
                 version=execute_kwargs.version,
+                channel_type=self.channel_type,
             )
-            if _input:
-                # 处理 chat_history 为 None 或空列表的情况（如编辑第一条消息时）
-                if not agent_instance.chat_history:
-                    agent_instance.chat_history = []
-                agent_instance.chat_history.append(ChatPrompt(role="user", content=_input))
-            elif not agent_instance.chat_history:
+            if not _input and not agent_instance.chat_history:
                 raise ClientBlueException(message="The chat history cannot be empty. Please provide 'input' parameter.")
             # 执行 agent
             if execute_kwargs.stream:
-                generator = agent_instance.execute(execute_kwargs)
-                # 断点续传：在流式开始/结束时更新会话状态
-                if event_handler and all(
-                    hasattr(event_handler, m) for m in ["set_streaming_started", "set_streaming_finished"]
-                ):
-                    event_handler.set_streaming_started()
-                    generator = self._wrap_streaming_with_status(
-                        generator,
-                        event_handler,
+                manager = SessionManager(username=username)
+                stream_out = AgentExecutor(manager).execute_with_save(
+                    agent_instance,
+                    execute_kwargs,
+                    session_code,
+                    turn_id=turn_id,
+                )
+                handler = getattr(agent_instance, "event_handler", None)
+                if handler and all(hasattr(handler, m) for m in ["set_streaming_started", "set_streaming_finished"]):
+                    handler.set_streaming_started()
+                    stream_out = self._wrap_streaming_with_status(
+                        stream_out,
+                        handler,
                         session_code=session_code,
                         username=username,
                     )
-                return self.streaming_response(generator, session_code=session_code)
+                return self.streaming_response(stream_out, session_code=session_code)
             else:
-                result = agent_instance.execute(execute_kwargs)
+                result = AgentExecutor(SessionManager(username=username)).execute_with_save(
+                    agent_instance,
+                    execute_kwargs,
+                    session_code,
+                    turn_id=turn_id,
+                )
                 return Response(result)
         except Exception as err:
             logger.exception(f"ChatCompletionViewSet create error: {err}")
@@ -125,7 +157,10 @@ class ChatCompletionViewSet(PluginViewSet):
             if session_code:
                 error_message_id = str(uuid.uuid4())
                 AGUISessionWriter(
-                    session_code=session_code, client=AgentHelper.get_client(), username=username
+                    session_code=session_code,
+                    client=AgentHelper.get_client(),
+                    username=username,
+                    turn_id=turn_id,
                 )._create_session_content(
                     message_id=error_message_id,
                     role=PromptRole.ASSISTANT.value,
@@ -144,27 +179,61 @@ class ChatCompletionViewSet(PluginViewSet):
         chat_history: list[ChatPrompt],
         username: str,
         execute_kwargs: ExecuteKwargs,
+        turn_id: str,
+        channel_type: str,
     ):
         """
         通过 thread_id 自动管理会话，使用 chat_history 初始化，自动保存到 session
         """
-        builder = AgentBuilder(username=username)
+        builder = AgentBuilder(username=username, turn_id=turn_id)
         agent_instance, session_code = builder.by_thread_id_with_chat_history(
             thread_id=thread_id,
             chat_history=chat_history,
             version=execute_kwargs.version,
+            channel_type=channel_type,
         )
+        turn_id = builder.turn_id or turn_id
         execute_kwargs.session_code = session_code
+        if hasattr(execute_kwargs, "turn_id"):
+            execute_kwargs.turn_id = turn_id
         result = AgentExecutor(builder.session_manager).execute_with_save(
             agent_instance,
             execute_kwargs,
             session_code,
+            turn_id=turn_id,
         )
         if execute_kwargs.stream:
             return self.streaming_response(result, session_code=session_code)
         return Response(result)
 
-    def _handle_flow_agent(self, data: dict, session_code: str, username: str):
+    def _save_user_input(self, session_code: str, username: str, content: str, turn_id: str = "") -> str:
+        if not session_code or not content:
+            return self._resolve_turn_id(session_code, username, turn_id)
+        saved = SessionManager(username=username).save_content(
+            session_code=session_code,
+            role=PromptRole.USER.value,
+            content=content,
+            turn_id=turn_id,
+        )
+        return ((saved.get("property") or {}).get("turn_id") if isinstance(saved, dict) else "") or turn_id
+
+    @staticmethod
+    def _resolve_turn_id(session_code: str, username: str, turn_id: str = "") -> str:
+        """用户消息已由 SDK 落库时，从最近一条 user 内容继承 turn_id。"""
+        if turn_id:
+            return turn_id
+        if not session_code:
+            return ""
+        contents = SessionManager(username).list_session_contents(session_code)
+        for item in reversed(contents):
+            if item.get("role") != PromptRole.USER.value:
+                continue
+            resolved = (item.get("property") or {}).get("turn_id") or ""
+            if resolved:
+                return resolved
+        return ""
+
+    def _handle_flow_agent(self, data: dict, session_code: str, username: str, *, turn_id: str):
         """处理 Flow Agent 请求
 
         通过 chat_completion 接口复用流式 SSE 机制，轮询 flow agent 任务状态并推送。
@@ -206,7 +275,10 @@ class ChatCompletionViewSet(PluginViewSet):
         event_handler = None
         if session_code:
             event_handler = AGUISessionWriter(
-                session_code=session_code, client=AgentHelper.get_client(), username=username
+                session_code=session_code,
+                client=AgentHelper.get_client(),
+                username=username,
+                turn_id=turn_id,
             )
 
         # FlowAgent 不需要工厂 SESSION 路径的会话上下文清洗（_get_agent_config /
@@ -238,7 +310,10 @@ class ChatCompletionViewSet(PluginViewSet):
             if session_code:
                 error_message_id = str(uuid.uuid4())
                 AGUISessionWriter(
-                    session_code=session_code, client=AgentHelper.get_client(), username=username
+                    session_code=session_code,
+                    client=AgentHelper.get_client(),
+                    username=username,
+                    turn_id=turn_id,
                 )._create_session_content(
                     message_id=error_message_id,
                     role=PromptRole.ASSISTANT.value,
@@ -252,6 +327,16 @@ class ChatCompletionViewSet(PluginViewSet):
             raise ClientBlueException(message=message)
 
         logger.info(f"[FLOW_AGENT] Streaming started: session_code={session_code}, task_id={task_id}")
+        if event_handler and all(
+            hasattr(event_handler, m) for m in ["set_streaming_started", "set_streaming_finished"]
+        ):
+            event_handler.set_streaming_started()
+            generator = self._wrap_streaming_with_status(
+                generator,
+                event_handler,
+                session_code=session_code,
+                username=username,
+            )
         return self.streaming_response(generator, session_code=session_code)
 
     def _wrap_streaming_with_status(self, generator, event_handler, session_code: str = "", username: str = ""):

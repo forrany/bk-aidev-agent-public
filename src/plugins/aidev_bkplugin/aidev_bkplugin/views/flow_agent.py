@@ -4,6 +4,7 @@ from logging import getLogger
 
 from aidev_agent.config import settings as agent_settings
 from aidev_agent.services.agent.flow import FlowAgentCompletionAgent
+from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
 from blueapps.core.exceptions import ClientBlueException
 from django.http.response import StreamingHttpResponse
 from rest_framework.decorators import action
@@ -11,6 +12,7 @@ from rest_framework.request import Request
 from rest_framework.views import Response
 
 from aidev_bkplugin.services.agent_execution import build_execute_kwargs
+from aidev_bkplugin.services.agent_helpers import AgentHelper
 from aidev_bkplugin.views.base import IgnoreClientContentNegotiation, PluginResourceManager, PluginViewSet
 
 logger = getLogger(__name__)
@@ -262,6 +264,13 @@ class FlowAgentViewSet(PluginViewSet):
             poll_interval = float(request.data.get("poll_interval", agent_settings.FLOW_AGENT_POLL_INTERVAL))
             poll_timeout = float(request.data.get("poll_timeout", agent_settings.FLOW_AGENT_POLL_TIMEOUT))
 
+            event_handler = AGUISessionWriter(
+                session_code=session_code,
+                client=AgentHelper.get_client(),
+                username=username,
+                task_id=str(task_id),
+            )
+
             agent_instance = FlowAgentCompletionAgent(
                 resource_manager=resource_manager,
                 session_code=session_code,
@@ -269,6 +278,7 @@ class FlowAgentViewSet(PluginViewSet):
                 resume_from_node=action_name,
                 poll_interval=poll_interval,
                 poll_timeout=poll_timeout,
+                event_handler=event_handler,
             )
 
             generator = agent_instance.execute()

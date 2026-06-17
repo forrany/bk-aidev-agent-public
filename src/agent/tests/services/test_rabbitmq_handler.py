@@ -36,6 +36,33 @@ def thread_id(request, handler):
 
 
 class TestRabbitMQMessageHandler:
+    def _get_open_channel_count(self, handler: RabbitMQMessageHandler) -> int:
+        """Return open AMQP channels held by one pooled connection."""
+        connection = handler._connection_pool.get_connection()
+        try:
+            channels = getattr(getattr(connection, "_impl", None), "_channels", {})
+            return len(channels)
+        finally:
+            handler._connection_pool.release_connection(connection)
+
+    def _wait_until_empty(self, handler: RabbitMQMessageHandler, thread_id: str, timeout: float = 2.0) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if handler.is_empty(thread_id):
+                return
+            time.sleep(0.1)
+        assert handler.is_empty(thread_id) is True
+
+    def test_repeated_operations_do_not_accumulate_open_channels(self, handler, thread_id):
+        """Repeated RabbitMQ operations should close their temporary AMQP channels."""
+        handler.put(thread_id, "seed")
+        handler.flush(thread_id)
+
+        for _ in range(20):
+            assert handler.get_cached_count(thread_id) == 1
+
+        assert self._get_open_channel_count(handler) <= 1
+
     def test_live_test(self, handler, thread_id):
         """实际连接 RabbitMQ 进行测试"""
         # 发送 3 条消息
@@ -120,7 +147,7 @@ class TestRabbitMQMessageHandler:
 
         验证：
         1. 流式消息可以正确生产和消费
-        2. 消费完成后队列已清空
+        2. 生产者完成后由延迟清理回收队列
         """
 
         async def gen():
@@ -140,8 +167,49 @@ class TestRabbitMQMessageHandler:
         business_messages = [m for m in all_messages if not m.startswith("<")]
         assert business_messages == [f"test_msg_{i}" for i in range(10)]
 
-        # 验证流完成后队列已清空
-        assert handler.is_empty(thread_id) is True
+        # replay 模式下消费者读到 EOD 后先释放 active consumer；
+        # 资源由最后一个完成的 consumer 或 producer 兜底清理线程回收。
+        self._wait_until_empty(handler, thread_id)
+
+    def test_concurrent_stream_consumers_replay_same_cached_messages(self, handler, thread_id, monkeypatch):
+        """多个真实 RabbitMQ consumer 可以并发 replay 同一批缓存消息。"""
+        expected = [f"replay_msg_{i}" for i in range(5)]
+        for message in expected:
+            handler.put(thread_id, message)
+        handler.put(thread_id, EOD_CHUNK)
+        handler.flush(thread_id)
+
+        original_acquire_consumer = handler.acquire_consumer
+        registered_barrier = threading.Barrier(2)
+        results: list[list[str]] = []
+        errors: list[Exception] = []
+
+        def acquire_consumer_after_peer_registered(current_thread_id: str) -> str:
+            consumer_id = original_acquire_consumer(current_thread_id)
+            registered_barrier.wait(timeout=3)
+            return consumer_id
+
+        def consume() -> None:
+            try:
+                stream = GeneratorStreamingHelper(handler, thread_id).stream(iter(()))
+                results.append(list(stream))
+            except Exception as e:
+                errors.append(e)
+
+        monkeypatch.setattr(handler, "acquire_consumer", acquire_consumer_after_peer_registered)
+
+        threads = [threading.Thread(target=consume) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert errors == []
+        assert all(not thread.is_alive() for thread in threads)
+        assert len(results) == 2
+        assert all(result == expected for result in results)
+
+        self._wait_until_empty(handler, thread_id)
 
     def test_consumer_reconnect_with_dlq(self, handler, thread_id):
         """测试消费者断开后重连可以从死信队列恢复消息

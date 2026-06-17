@@ -14,11 +14,68 @@ except ImportError:
 # OpenTelemetry 是可选 extras，未安装时降级为 no-op。
 # 安装方式：pip install aidev-bkplugin[opentelemetry]
 try:
-    from aidev_bkplugin.packages.opentelemetry import BkAidevAgentInstrumentor
+    from aidev_agent.packages.opentelemetry import BkAidevAgentInstrumentor
+    from aidev_agent.packages.opentelemetry.config import OTelConfig
 except ImportError:
     BkAidevAgentInstrumentor = None
+    OTelConfig = None
+
+try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+except ImportError:
+    HTTPXClientInstrumentor = None
+
+try:
+    from opentelemetry.instrumentation.threading import ThreadingInstrumentor
+except ImportError:
+    ThreadingInstrumentor = None
 
 logger = logging.getLogger(__name__)
+
+
+def init_bk_aidev_agent_otel() -> None:
+    """
+    初始化 BK AIDEV Agent OpenTelemetry。
+
+    按优先级收集所有 OTEL Endpoint 配置：
+    1. BKAI_AGENT_OTEL_ENDPOINTS 环境变量（支持多地址）
+    2. agent_info 中的 otel_url / otel_token（单地址）
+    3. OTEL_GRPC_URL + OTEL_BK_DATA_TOKEN 环境变量（单地址）
+
+    如果未安装 opentelemetry extras，跳过初始化。
+    """
+    if BkAidevAgentInstrumentor is None:
+        logger.info(
+            "[aidev_bkplugin] OpenTelemetry extras 未安装，跳过自动 instrument；"
+            "如需启用请安装 aidev-bkplugin[opentelemetry]。"
+        )
+        return
+
+    from aidev_agent.packages.opentelemetry.utils import (
+        get_otel_endpoint_by_agent_info,
+        get_otel_endpoint_by_env,
+        get_otel_endpoint_by_json_str,
+    )
+
+    from aidev_bkplugin.services.agent_config import AgentConfigFetcher
+
+    endpoints = []
+    # 1. 从 BKAI_AGENT_OTEL_ENDPOINTS 解析多地址
+    try:
+        endpoints.extend(get_otel_endpoint_by_json_str())
+    except ValueError as e:
+        logger.warning(
+            "[aidev_bkplugin] 解析 BKAI_AGENT_OTEL_ENDPOINTS 失败：%s，跳过该配置来源。",
+            e,
+        )
+    # 2. 从 agent_info 获取单地址
+    agent_info = AgentConfigFetcher.get_info()
+    endpoints.extend(get_otel_endpoint_by_agent_info(agent_info=agent_info))
+    # 3. 从 OTEL_GRPC_URL 和 OTEL_BK_DATA_TOKEN 获取单地址
+    endpoints.extend(get_otel_endpoint_by_env())
+
+    otel_config = OTelConfig(otel_endpoints=endpoints)
+    BkAidevAgentInstrumentor(config=otel_config).instrument()
 
 
 class AgentConfig(AppConfig):
@@ -42,12 +99,19 @@ class AgentConfig(AppConfig):
         if custom_resource_manager:
             resource_manager.replace_defaults(import_string(custom_resource_manager)())
 
-        if BkAidevAgentInstrumentor is not None:
-            BkAidevAgentInstrumentor().instrument()
-        else:
-            logger.info(
-                "[aidev_bkplugin] OpenTelemetry extras 未安装，跳过自动 instrument；"
-                "如需启用请安装 aidev-bkplugin[opentelemetry]。"
-            )
+        # 初始化 OpenTelemetry
+        init_bk_aidev_agent_otel()
+
+        # 注入 httpx (LLM 网关底层 HTTP 客户端) 的 trace 传播
+        # 使 LLM 调用自动携带 traceparent header，网关可加入分布式追踪
+        try:
+            HTTPXClientInstrumentor().instrument()
+        except Exception:  # noqa: BLE001
+            logger.debug("opentelemetry-instrumentation-httpx not available, skipping httpx instrumentation")
+        # 注入跨线程的 trace 传递，因为知识库中 LLM 提交是异步的
+        try:
+            ThreadingInstrumentor().instrument()
+        except Exception:  # noqa: BLE001
+            logger.debug("opentelemetry-instrumentation-threading not available, skipping httpx instrumentation")
 
         return super().ready()

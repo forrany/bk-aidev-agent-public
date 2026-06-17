@@ -70,6 +70,13 @@ class OpenApiGroup(OperationGroup):
         path="/openapi/aidev/resource/v1/chat/session/",
     )
 
+    get_or_create_chat_session = bind_property(
+        Operation,
+        name="get_or_create_chat_session",
+        method="POST",
+        path="/openapi/aidev/resource/v1/chat/session/get_or_create/",
+    )
+
     update_chat_session = bind_property(
         Operation,
         name="update_chat_session",
@@ -110,6 +117,13 @@ class OpenApiGroup(OperationGroup):
         name="create_chat_session_content",
         method="POST",
         path="/openapi/aidev/resource/v1/chat/session_content/",
+    )
+
+    create_chat_session_token_usage = bind_property(
+        Operation,
+        name="create_chat_session_token_usage",
+        method="POST",
+        path="/openapi/aidev/resource/v1/chat/session_content/token_usage/",
     )
 
     update_chat_session_content = bind_property(
@@ -187,6 +201,13 @@ class OpenApiGroup(OperationGroup):
         name="bind_agent_space",
         method="POST",
         path="/openapi/aidev/resource/v1/agent/{agent_code}/bind_space/",
+    )
+
+    check_agent_call_permission = bind_property(
+        Operation,
+        name="check_agent_call_permission",
+        method="POST",
+        path="/openapi/aidev/resource/v1/agent/call_permission/check/",
     )
 
     retrieve_resource_v1_prompt = bind_property(

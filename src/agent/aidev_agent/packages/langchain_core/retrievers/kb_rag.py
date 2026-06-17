@@ -32,7 +32,7 @@ from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
 from aidev_agent.packages.langchain_core.retrievers.bk_retriever import BkRetriever
 from aidev_agent.packages.langchain_core.retrievers.utils import deduplicate_knowledge_chunks, is_structured_data
 from aidev_agent.packages.langgraph.streaming.utils import conditional_dispatch_custom_event
-from aidev_agent.pydantic_models import AgentOptions
+from aidev_agent.pydantic_models import KnowledgeSettings
 from aidev_agent.utils.decorator import retry, timeit
 
 from .prompts import DEFAULT_INTENT_RECOGNITION_PROMPT_TEMPLATES
@@ -42,6 +42,7 @@ from .utils import (
     deduplicate_knowledge_file_paths,
     dispatch_rag_event_chunk,
     invoke_decorator,
+    normalize_query_for_search,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ class KnowledgeRag:
 
     @timeit(message="用户提问关键词提取")
     @retry(max_retries=5, max_seconds=3600)
-    def extract_query_keywords(self, agent_options, query, llm, **kwargs):
+    def extract_query_keywords(self, query, llm, **kwargs):
         """
         对应 intent_recognition.py 第271-289行的 extract_query_keywords 方法
         """
@@ -159,7 +160,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         extracted_keywords = resp_content.strip().split("\n")
@@ -169,7 +170,7 @@ class KnowledgeRag:
 
     @timeit(message="用户提问翻译")
     @retry(max_retries=5, max_seconds=3600)
-    def query_translation(self, agent_options, query, llm, **kwargs):
+    def query_translation(self, query, llm, **kwargs):
         """
         对应 intent_recognition.py 第293-310行的 query_translation 方法
         """
@@ -182,7 +183,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         logger.info(f"=====> <query_translation的结果>：{resp_content}")
@@ -193,7 +194,7 @@ class KnowledgeRag:
 
     @timeit(message="意图切换检测")
     @retry(max_retries=5, max_seconds=3600)
-    def latest_query_classification(self, agent_options, chat_history, query, llm, **kwargs):
+    def latest_query_classification(self, chat_history, query, llm, **kwargs):
         sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
             "latest_query_classification_sys_prompt_template"
         )
@@ -205,7 +206,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages, **kwargs)
         conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -221,7 +222,7 @@ class KnowledgeRag:
 
     @timeit(message="独立查询重写")
     @retry(max_retries=5, max_seconds=3600)
-    def query_rewrite_for_independence(self, agent_options, chat_history, query, llm, display=False, **kwargs):
+    def query_rewrite_for_independence(self, chat_history, query, llm, display=False, **kwargs):
         """
         对应 intent_recognition.py 第342-377行的 query_rewrite_for_independence 方法
         :param display: 是否将独立查询重写的结果也展示在前端
@@ -242,7 +243,7 @@ class KnowledgeRag:
                 {"custom_return_chunk": "结合历史对话信息，您似乎是想问："},
                 **kwargs,
             )
-            invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+            invoke_func = invoke_decorator(llm.invoke, llm)
             resp = invoke_func(messages, **kwargs)
             conditional_dispatch_custom_event(
                 "custom_event",
@@ -252,7 +253,7 @@ class KnowledgeRag:
         else:
             # 包在这 2 行 conditional_dispatch_custom_event 代码之间的 LLM 输出不会在前端展示
             conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-            invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+            invoke_func = invoke_decorator(llm.invoke, llm)
             resp = invoke_func(messages, **kwargs)
             conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -261,7 +262,7 @@ class KnowledgeRag:
 
     @timeit(message="独立查询重写，依据上下文总结")
     @retry(max_retries=5, max_seconds=3600)
-    def sum_chat_history_for_query(self, agent_options, chat_history, query, llm, **kwargs):
+    def sum_chat_history_for_query(self, chat_history, query, llm, **kwargs):
         if not chat_history:
             return None
         sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
@@ -275,7 +276,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages, **kwargs)
         conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -286,7 +287,7 @@ class KnowledgeRag:
 
     @timeit(message="意图切换检测和独立查询重写/直接答复")
     @retry(max_retries=5, max_seconds=3600)
-    def query_cls_with_resp_or_rewrite(self, agent_options, chat_history, query, llm, **kwargs):
+    def query_cls_with_resp_or_rewrite(self, chat_history, query, llm, **kwargs):
         sys_prompt = self.__class__.intent_recognition_prompt_templates.get(
             "query_cls_with_resp_or_rewrite_sys_prompt_template"
         )
@@ -298,7 +299,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         conditional_dispatch_custom_event("custom_event", {"front_end_display": False}, **kwargs)
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         conditional_dispatch_custom_event("custom_event", {"front_end_display": True}, **kwargs)
         resp_content = resp.content
@@ -330,10 +331,10 @@ class KnowledgeRag:
                 "query_cls": "new",
             }  # 其余所有边缘情况默认直接重新开始
 
-    def query_cls_pipeline(self, chat_history, query, llm, agent_options, **kwargs):
-        if agent_options.knowledge_query_options.merge_query_cls_with_resp_or_rewrite:
+    def query_cls_pipeline(self, chat_history, query, llm, knowledge_query_options: KnowledgeSettings, **kwargs):
+        if knowledge_query_options.merge_query_cls_with_resp_or_rewrite:
             if chat_history:
-                result = self.query_cls_with_resp_or_rewrite(agent_options, chat_history, query, llm, **kwargs)
+                result = self.query_cls_with_resp_or_rewrite(chat_history, query, llm, **kwargs)
                 query_cls = result["query_cls"]
             else:
                 # 如无history，目前处理成相当于开始一个新的话题
@@ -359,8 +360,8 @@ class KnowledgeRag:
                 independent_query = query
         else:
             if chat_history:
-                if agent_options.knowledge_query_options.with_query_cls:
-                    query_cls = self.latest_query_classification(agent_options, chat_history, query, llm, **kwargs)
+                if knowledge_query_options.with_query_cls:
+                    query_cls = self.latest_query_classification(chat_history, query, llm, **kwargs)
                 else:
                     query_cls = "continue"
             else:
@@ -374,9 +375,7 @@ class KnowledgeRag:
                     knowledge_resources_lowly_relevant=[],
                 )
             elif query_cls == "continue":
-                independent_query = self.query_rewrite_for_independence(
-                    agent_options, chat_history, query, llm, **kwargs
-                )
+                independent_query = self.query_rewrite_for_independence(chat_history, query, llm, **kwargs)
             elif query_cls == "new":
                 independent_query = query
 
@@ -463,7 +462,7 @@ class KnowledgeRag:
         query_for_search,
         llm,
         context_docs_with_scores,
-        agent_options,
+        knowledge_query_options: KnowledgeSettings,
         **kwargs,
     ):
         """
@@ -472,10 +471,9 @@ class KnowledgeRag:
         if fine_grained_score_type == FineGrainedScoreType.LLM:
             # NOTE: 如果 FineGrainedScoreType 为 LLM，则因为当前只有是/否相关的判断，因此分数只有 1.0 或 0.0
             fine_grained_scores = self.llm_relevance_determiner_parallel(
-                agent_options,
                 (
                     kwargs.get("translated_query", query_for_search)
-                    if agent_options.knowledge_query_options.use_independent_query_in_scores
+                    if knowledge_query_options.use_independent_query_in_scores
                     else kwargs["input"]
                 ),
                 [doc for doc, _ in context_docs_with_scores],
@@ -494,7 +492,7 @@ class KnowledgeRag:
                     (
                         (
                             kwargs.get("translated_query", query_for_search)
-                            if agent_options.knowledge_query_options.use_independent_query_in_scores
+                            if knowledge_query_options.use_independent_query_in_scores
                             else kwargs["input"]
                         ),
                         (
@@ -545,7 +543,7 @@ class KnowledgeRag:
         )
 
     @retry(max_retries=5, max_seconds=3600)
-    def llm_relevance_determiner(self, agent_options, query, doc, llm, **kwargs):
+    def llm_relevance_determiner(self, query, doc, llm, **kwargs):
         """
         对应 intent_recognition.py 第595-638行的 llm_relevance_determiner 方法
         """
@@ -595,19 +593,19 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         return not resp_content.startswith("0")  # 用0来判断，减少误删
 
     @timeit(message="使用LLM并发进行query和召回文档相关性判断")
-    def llm_relevance_determiner_parallel(self, agent_options, query, fusion_docs, llm, **kwargs):
+    def llm_relevance_determiner_parallel(self, query, fusion_docs, llm, **kwargs):
         """
         对应 intent_recognition.py 第641-653行的 llm_relevance_determiner_parallel 方法
         """
         try:
             futures = [
-                knowledge_bk_executor.submit(self.llm_relevance_determiner, agent_options, query, doc, llm, **kwargs)
+                knowledge_bk_executor.submit(self.llm_relevance_determiner, query, doc, llm, **kwargs)
                 for doc in fusion_docs
             ]
             results = [1.0 if future.result() else 0.0 for future in futures]
@@ -619,7 +617,7 @@ class KnowledgeRag:
         return results
 
     @retry(max_retries=5, max_seconds=3600)
-    def llm_context_compressor(self, agent_options, provided_chat_history, query, candidate_context, llm, **kwargs):
+    def llm_context_compressor(self, provided_chat_history, query, candidate_context, llm, **kwargs):
         """
         对应 intent_recognition.py 第656-690行的 llm_context_compressor 方法
         """
@@ -650,7 +648,7 @@ class KnowledgeRag:
             HumanMessage(content=usr_prompt),
         ]
         # TODO: 待确认：并发请求内部无法 dispatch_custom_event，所以无需调用 conditional_dispatch_custom_event
-        invoke_func = invoke_decorator(agent_options, llm.invoke, llm)
+        invoke_func = invoke_decorator(llm.invoke, llm)
         resp = invoke_func(messages)
         resp_content = resp.content
         # 如果触发了混元的特殊回复，则不进行压缩
@@ -659,7 +657,7 @@ class KnowledgeRag:
         return resp_content
 
     @timeit(message="使用LLM并发进行知识库内容压缩总结")
-    def llm_context_compressor_parallel(self, agent_options, provided_chat_history, query, context, llm, **kwargs):
+    def llm_context_compressor_parallel(self, provided_chat_history, query, context, llm, **kwargs):
         """
         对应 intent_recognition.py 第693-706行的 llm_context_compressor_parallel 方法
         """
@@ -667,7 +665,6 @@ class KnowledgeRag:
             futures = [
                 knowledge_bk_executor.submit(
                     self.llm_context_compressor,
-                    agent_options,
                     provided_chat_history,
                     query,
                     candidate_context,
@@ -694,20 +691,22 @@ class KnowledgeRag:
         # TODO: self_query_retriever是有可能执行失败的，需要retry机制，以及最终实在失败了的处理机制
         # NOTE NOTE NOTE NOTE NOTE TODO:
         # 后续步骤LLM判断可回答性的prompt还得针对性优化，或者使用不同的prompt分支，因为对于召回的某一行，
-        # 类似“成绩高于85分、18岁以上的学生有多少个”的提问LLM会觉得不可回答，
-        # 类似“成绩高于85分、18岁以上的学生有哪些”的提问LLM会觉得可回答。
+        # 类似"成绩高于85分、18岁以上的学生有多少个"的提问LLM会觉得不可回答，
+        # 类似"成绩高于85分、18岁以上的学生有哪些"的提问LLM会觉得可回答。
         # 这类求总数量的query确实会比较特殊，单条知识会导致LLM觉得不可回答，都返回了个0
         raise NotImplementedError
 
-    def handle_knowledge_resources(self, recog_results_with_knowledge_resource_type: list, agent_options: AgentOptions):
+    def handle_knowledge_resources(
+        self, recog_results_with_knowledge_resource_type: list, knowledge_query_options: KnowledgeSettings
+    ):
         """
         在知识库召回知识以后进行标准处理
         由于 IntentRecognition 和 LangGraph 难以一同使用，因此将 IntentRecognitionMixin 的 knowledge_resources_postproc 进行了重构
         """
         # NOTE: 如果有 index_content 且是结构化数据则取 index_content，否则才取 page_content（兼容写法）。
-        # 待知识库后台对非结构化数据的处理方式的 index_content 不是默认使用LLM总结后的内容之后，可将“且是结构化数据”的逻辑去除
+        # 待知识库后台对非结构化数据的处理方式的 index_content 不是默认使用LLM总结后的内容之后，可将"且是结构化数据"的逻辑去除
         # NOTE: 目前暂不考虑检索返回模板对 page_content 的影响
-        qa_response_kb_ids = agent_options.knowledge_query_options.qa_response_kb_ids
+        qa_response_kb_ids = knowledge_query_options.qa_response_kb_ids
         qa_set = set(qa_response_kb_ids)
 
         knowledge_base_ids = set()
@@ -740,18 +739,18 @@ class KnowledgeRag:
         return state
 
     def retrieve(
-        self, query: str, agent_options: AgentOptions, chat_history: Optional[list] = None, **kwargs
+        self, query: str, knowledge_query_options: KnowledgeSettings, chat_history: Optional[list] = None, **kwargs
     ) -> KnowledgeRagRetrieveResult:
         # 基本校验
         dispatch_rag_event_chunk("开始召回知识")
         if not any(
             [
-                agent_options.knowledge_query_options.with_index_specific_search,
-                agent_options.intent_recognition_options.with_index_specific_search_init,
-                agent_options.intent_recognition_options.with_index_specific_search_translation,
-                agent_options.intent_recognition_options.with_index_specific_search_keywords,
-                agent_options.knowledge_query_options.with_es_search_query,
-                agent_options.knowledge_query_options.with_es_search_keywords,
+                knowledge_query_options.with_index_specific_search,
+                knowledge_query_options.with_index_specific_search_init,
+                knowledge_query_options.with_index_specific_search_translation,
+                knowledge_query_options.with_index_specific_search_keywords,
+                knowledge_query_options.with_es_search_query,
+                knowledge_query_options.with_es_search_keywords,
             ]
         ):
             raise RuntimeError("请至少选择一种召回方式！")
@@ -762,65 +761,58 @@ class KnowledgeRag:
         # 获取 LLM 实例，如果没有提供，使用默认的 LLM
         llm = kwargs.get("llm", self.llm)
         # 获取知识库配置信息, 如果没有提供，使用配置中的知识库配置
-        knowledge_items = kwargs.get("knowledge_items", agent_options.knowledge_query_options.knowledge_items)
-        knowledge_bases = kwargs.get("knowledge_bases", agent_options.knowledge_query_options.knowledge_bases)
+        knowledge_items = kwargs.get("knowledge_items", knowledge_query_options.knowledge_items)
+        knowledge_bases = kwargs.get("knowledge_bases", knowledge_query_options.knowledge_bases)
         # 初始化知识库操作实例，如果没有提供，使用默认的实例
         kb_retriever = kwargs.get("kb_retriever", self.kb_retriever)
         output_state = {}
         # 过滤chat_history中的消息，只保留HumanMessage和AIMessage类型的消息
         chat_history = [msg for msg in (chat_history or []) if isinstance(msg, (HumanMessage, AIMessage))]
         res = raw_input
-        if agent_options.knowledge_query_options.independent_query_mode == IndependentQueryMode.REWRITE:
-            res = self.query_cls_pipeline(chat_history, query, llm, agent_options, **kwargs)
-        elif agent_options.knowledge_query_options.independent_query_mode == IndependentQueryMode.SUM_AND_CONCATE:
-            sum_res = self.sum_chat_history_for_query(agent_options, chat_history, query, llm, **kwargs)
+        if knowledge_query_options.independent_query_mode == IndependentQueryMode.REWRITE:
+            res = self.query_cls_pipeline(chat_history, query, llm, knowledge_query_options, **kwargs)
+        elif knowledge_query_options.independent_query_mode == IndependentQueryMode.SUM_AND_CONCATE:
+            sum_res = self.sum_chat_history_for_query(chat_history, query, llm, **kwargs)
             if sum_res:
                 res = f"{sum_res}\n{query}"
         if isinstance(res, dict) and "decision" in res:
             return res
-        elif isinstance(res, str):
-            query_for_search = res
+        query_for_search = normalize_query_for_search(res)
         # 并发执行多种召回策略
         futures = {}
 
         # 1. index_specific 召回
-        if (knowledge_bases or knowledge_items) and agent_options.knowledge_query_options.with_index_specific_search:
+        if (knowledge_bases or knowledge_items) and knowledge_query_options.with_index_specific_search:
             futures["index_specific"] = knowledge_bk_executor.submit(
                 kb_retriever.search_knowledge_index_specific,
                 knowledge_items=knowledge_items,
                 knowledge_bases=knowledge_bases,
                 query=query_for_search,
-                topk=agent_options.knowledge_query_options.knowledge_resource_rough_recall_topk,
-                agent_options=agent_options,
+                topk=knowledge_query_options.knowledge_resource_rough_recall_topk,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
 
         # 2. 原始查询召回（如果查询被重写过）
         if (knowledge_bases or knowledge_items) and (
-            agent_options.intent_recognition_options.with_index_specific_search_init and query_for_search != raw_input
+            knowledge_query_options.with_index_specific_search_init and query_for_search != raw_input
         ):
             futures["index_specific_init"] = knowledge_bk_executor.submit(
                 kb_retriever.search_knowledge_index_specific,
                 knowledge_items=knowledge_items,
                 knowledge_bases=knowledge_bases,
                 query=raw_input,
-                topk=agent_options.knowledge_query_options.knowledge_resource_rough_recall_topk,
-                agent_options=agent_options,
+                topk=knowledge_query_options.knowledge_resource_rough_recall_topk,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
 
         # 3. 翻译查询召回
-        if (
-            knowledge_bases or knowledge_items
-        ) and agent_options.intent_recognition_options.with_index_specific_search_translation:
+        if (knowledge_bases or knowledge_items) and knowledge_query_options.with_index_specific_search_translation:
             # 先执行查询翻译
             translated_query_future = knowledge_bk_executor.submit(
                 self.query_translation,
-                query=(
-                    query_for_search
-                    if agent_options.knowledge_query_options.use_independent_query_in_translation
-                    else raw_input
-                ),
+                query=(query_for_search if knowledge_query_options.use_independent_query_in_translation else raw_input),
                 llm=llm,
                 **kwargs,
             )
@@ -830,18 +822,16 @@ class KnowledgeRag:
                 knowledge_items=knowledge_items,
                 knowledge_bases=knowledge_bases,
                 translated_query=translated_query,
-                topk=agent_options.knowledge_query_options.knowledge_resource_rough_recall_topk,
-                agent_options=agent_options,
+                topk=knowledge_query_options.knowledge_resource_rough_recall_topk,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
             # 如果配置了在评分中使用翻译查询
-            if agent_options.knowledge_query_options.use_translated_query_in_scores and translated_query:
+            if knowledge_query_options.use_translated_query_in_scores and translated_query:
                 output_state["translated_query"] = translated_query
 
         # 4. 关键词召回
-        if (
-            knowledge_bases or knowledge_items
-        ) and agent_options.intent_recognition_options.with_index_specific_search_keywords:
+        if (knowledge_bases or knowledge_items) and knowledge_query_options.with_index_specific_search_keywords:
             # 先提取关键词
             extracted_keywords_future = knowledge_bk_executor.submit(
                 self.extract_query_keywords,
@@ -855,31 +845,31 @@ class KnowledgeRag:
                 knowledge_items=knowledge_items,
                 knowledge_bases=knowledge_bases,
                 extracted_keywords=extracted_keywords,
-                topk=agent_options.knowledge_query_options.knowledge_resource_rough_recall_topk,
-                agent_options=agent_options,
+                topk=knowledge_query_options.knowledge_resource_rough_recall_topk,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
 
         # 5. QA响应知识库召回
-        if agent_options.knowledge_query_options.qa_response_knowledge_bases:
+        if knowledge_query_options.qa_response_knowledge_bases:
             futures["qa_response"] = knowledge_bk_executor.submit(
                 kb_retriever.search_knowledge_index_specific,
                 knowledge_items=knowledge_items,
-                knowledge_bases=agent_options.knowledge_query_options.qa_response_knowledge_bases,
+                knowledge_bases=knowledge_query_options.qa_response_knowledge_bases,
                 query=query_for_search,
-                topk=agent_options.knowledge_query_options.knowledge_resource_rough_recall_topk,
-                agent_options=agent_options,
+                topk=knowledge_query_options.knowledge_resource_rough_recall_topk,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
 
         # 6. nature方式召回（将被废弃）
-        if (knowledge_bases or knowledge_items) and agent_options.knowledge_query_options.with_structured_data:
+        if (knowledge_bases or knowledge_items) and knowledge_query_options.with_structured_data:
             futures["nature"] = knowledge_bk_executor.submit(
                 kb_retriever.search_knowledge_nature,
                 knowledge_items=knowledge_items,
                 knowledge_bases=knowledge_bases,
                 query=query_for_search,
-                topk=agent_options.knowledge_query_options.knowledge_resource_rough_recall_topk,
+                topk=knowledge_query_options.knowledge_resource_rough_recall_topk,
                 **kwargs,
             )
 
@@ -896,7 +886,7 @@ class KnowledgeRag:
         retrieved_results_nature = retrieved_results.get("nature", [])
 
         # 结果融合
-        if agent_options.knowledge_query_options.with_rrf:
+        if knowledge_query_options.with_rrf:
             # 使用加权倒数排名融合
             sources = [
                 retrieved_results_index_specific,
@@ -926,11 +916,8 @@ class KnowledgeRag:
             )
         # TODO: 这里也可以考虑先使用 rerank 小模型排个序再取 self_query_threshold_top_n 文档来判断 query 是否涉及结构化数据
         # TODO: 待去除 nature 分支后即可正式走以下流程：
-        if agent_options.knowledge_query_options.with_structured_data and any(
-            [
-                is_structured_data(doc)
-                for doc in fusion_docs[: agent_options.knowledge_query_options.self_query_threshold_top_n]
-            ]
+        if knowledge_query_options.with_structured_data and any(
+            [is_structured_data(doc) for doc in fusion_docs[: knowledge_query_options.self_query_threshold_top_n]]
         ):
             # 在这种情况下需要使用 self-query 模块进行 2 次召回
             re_retrieved_res = self.search_knowledge_self_query(query_for_search, llm, **kwargs)
@@ -942,11 +929,11 @@ class KnowledgeRag:
         ]
 
         fine_grained_scores = self.calculate_fine_grained_scores(
-            agent_options.knowledge_query_options.knowledge_resource_fine_grained_score_type,
+            knowledge_query_options.knowledge_resource_fine_grained_score_type,
             query_for_search,
             llm,
             context_docs_with_scores,
-            agent_options,
+            knowledge_query_options,
             **kwargs,
         )
 
@@ -959,7 +946,7 @@ class KnowledgeRag:
         ) = self.separate_docs_by_scores(
             context_docs_with_scores,
             fine_grained_scores,
-            agent_options.knowledge_query_options.knowledge_resource_reject_threshold,
+            knowledge_query_options.knowledge_resource_reject_threshold,
         )
 
         # 决策逻辑
@@ -980,7 +967,7 @@ class KnowledgeRag:
             output_state.update(
                 self.handle_knowledge_resources(
                     knowledge_resources_highly_relevant,
-                    agent_options=agent_options,
+                    knowledge_query_options=knowledge_query_options,
                 )
             )
             output_state["reference_doc"] = deduplicate_knowledge_file_paths(knowledge_resources_highly_relevant)
@@ -989,7 +976,7 @@ class KnowledgeRag:
             output_state.update(
                 self.handle_knowledge_resources(
                     knowledge_resources_moderately_relevant,
-                    agent_options=agent_options,
+                    knowledge_query_options=knowledge_query_options,
                 )
             )
             output_state["reference_doc"] = deduplicate_knowledge_file_paths(knowledge_resources_moderately_relevant)

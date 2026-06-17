@@ -3,6 +3,7 @@
 AGUISessionWriter 核心单元测试
 """
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,10 +11,11 @@ from ag_ui.core import CustomEvent, EventType, RunErrorEvent
 from ag_ui.core.events import RawEvent
 from aidev_agent.core.ag_ui.types import (
     CustomEventNames,
+    CustomMessageType,
     LangGraphEventTypes,
     SessionPersistenceEventNames,
 )
-from aidev_agent.enums import PromptRole
+from aidev_agent.enums import ActivityType, PromptRole, SessionsStatus
 from aidev_agent.services.event_handlers import AGUISessionWriter
 from langchain_core.messages import AIMessage, message_to_dict
 
@@ -122,22 +124,24 @@ class TestHandleToolFinishStatusMapping:
 class TestHandleModelEnd:
     """测试 handle_model_end 的回写逻辑"""
 
-    def test_model_end_with_content(self, session_writer, mock_client):
-        """模型输出有内容时正常回写"""
-        event = make_model_end_event(
-            message_id="msg_001",
-            content="这是 AI 的回答",
+    @pytest.mark.parametrize("turn_id", ["", "turn-1"])
+    def test_model_end_with_content(self, mock_client, turn_id):
+        """模型输出回写；有 turn_id 时写入 property。"""
+        writer = AGUISessionWriter(
+            session_code="test-session-123",
+            client=mock_client,
+            username="test-user",
+            turn_id=turn_id,
         )
+        writer(make_model_end_event(message_id="msg_001", content="这是 AI 的回答"))
 
-        session_writer(event)
-
-        mock_client.api.create_chat_session_content.assert_called_once()
-        call_args = mock_client.api.create_chat_session_content.call_args
-        payload = call_args.kwargs["json"]
-
+        payload = mock_client.api.create_chat_session_content.call_args.kwargs["json"]
         assert payload["role"] == PromptRole.ASSISTANT.value
         assert payload["content"] == "这是 AI 的回答"
-        assert payload["status"] == "complete"
+        if turn_id:
+            assert payload["property"]["turn_id"] == turn_id
+        else:
+            assert "turn_id" not in payload.get("property", {})
 
     def test_model_end_empty_content_uses_placeholder(self, session_writer, mock_client):
         """模型输出内容为空但有 tool_calls 时使用占位符（后端 API 不接受空字符串或纯空白字符）"""
@@ -264,6 +268,83 @@ class TestHandleRunError:
         assert payload["role"] == PromptRole.ASSISTANT.value
         assert payload["content"] == "执行过程中发生错误"
         assert payload["property"]["builtin_property"]["error"] is True
+        mock_client.api.update_chat_session.assert_called_once_with(
+            path_params={"session_code": "test-session-123"},
+            json={"status": SessionsStatus.FAILED.value},
+            headers={"X-BKAIDEV-USER": "test-user"},
+        )
+
+    def test_run_error_finished_keeps_session_failed(self, session_writer, mock_client):
+        """运行错误后结束流，不应把会话覆盖为 finished"""
+        event = RunErrorEvent(type=EventType.RUN_ERROR, message="执行过程中发生错误")
+
+        session_writer(event)
+        session_writer.set_streaming_finished()
+
+        status_payloads = [call.kwargs["json"] for call in mock_client.api.update_chat_session.call_args_list]
+        assert status_payloads == [
+            {"status": SessionsStatus.FAILED.value},
+            {"status": SessionsStatus.FAILED.value},
+        ]
+
+
+def make_flow_agent_result_event(task_id: str, task_state: str = "RUNNING"):
+    """构造 flow_agent_result 自定义事件（value 为 dict）"""
+    return CustomEvent(
+        type=EventType.CUSTOM,
+        name=CustomMessageType.FLOW_AGENT_RESULT.value,
+        value={"task_id": task_id, "task_state": task_state, "nodes": {}},
+    )
+
+
+def make_existing_flow_content(content_id: int, task_id: str, turn_id: str = ""):
+    """构造一条已入库的 flow_agent activity 记录"""
+    content_property = {
+        "builtin_property": {
+            "message_id": f"flow_result_existing_{content_id}",
+            "type": ActivityType.FLOW_AGENT.value,
+        }
+    }
+    if turn_id:
+        content_property["turn_id"] = turn_id
+    return {
+        "id": content_id,
+        "role": PromptRole.ACTIVITY.value,
+        "content": json.dumps({"task_id": task_id, "task_state": "FAILED"}),
+        "property": content_property,
+    }
+
+
+class TestFlowAgentResultResume:
+    """retry/skip resume：命中已有 flow_agent activity 则 update，否则按场景 create 或抛错"""
+
+    def test_resume_updates_matched_record(self, mock_client):
+        """仅 task_id 命中：update 原记录，并从库里恢复 turn_id"""
+        mock_client.api.get_chat_session_contents.return_value = {
+            "data": [make_existing_flow_content(content_id=42, task_id="123", turn_id="turn-x")]
+        }
+        writer = AGUISessionWriter(session_code="sc", client=mock_client, username="u", task_id="123")
+
+        writer(make_flow_agent_result_event(task_id="123"))
+
+        mock_client.api.create_chat_session_content.assert_not_called()
+        update_args = mock_client.api.update_chat_session_content.call_args
+        assert update_args.kwargs["path_params"] == {"id": 42}
+        assert update_args.kwargs["json"]["property"]["turn_id"] == "turn-x"
+
+    @pytest.mark.parametrize(
+        "existing_contents",
+        [[], [make_existing_flow_content(content_id=42, task_id="999")]],
+    )
+    def test_resume_raises_when_unresolved(self, mock_client, existing_contents):
+        """task_id 未命中：抛错，禁止新建"""
+        mock_client.api.get_chat_session_contents.return_value = {"data": existing_contents}
+        writer = AGUISessionWriter(session_code="sc", client=mock_client, username="u", task_id="123")
+
+        with pytest.raises(RuntimeError, match="task_id=123"):
+            writer(make_flow_agent_result_event(task_id="123"))
+
+        mock_client.api.create_chat_session_content.assert_not_called()
 
 
 class TestAPIErrorHandling:

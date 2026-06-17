@@ -15,7 +15,6 @@ from __future__ import annotations
 import abc
 import asyncio
 import json
-import os
 import time
 from copy import deepcopy
 from logging import getLogger
@@ -24,6 +23,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from langchain_core.tools import StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from aidev_agent.api.paas_client import BkPaaSSandboxApi
 from aidev_agent.config import settings
 from aidev_agent.enums import CredentialType
 from aidev_agent.packages.langchain_core.tools import Tool, ToolExtra, make_structured_tool
@@ -33,7 +33,7 @@ from aidev_agent.packages.langchain_core.tools.base import (
     McpToolsResult,
     _extract_mcp_tools_error_detail,
 )
-from aidev_agent.pydantic_models import AgentConfig, AgentOptions, IntentRecognition, KnowledgebaseSettings
+from aidev_agent.pydantic_models import AgentConfig
 from aidev_agent.utils.loop import run_coro_sync
 
 try:
@@ -110,6 +110,20 @@ class BaseResourceManager(abc.ABC):
                 )
         return access_token
 
+    def get_paas_sbx_client(self, executor_info: dict, **kwargs) -> Any:
+        app_code = executor_info.get("app_code", "")
+        app_secret = executor_info.get("app_secret", "")
+        bk_username = executor_info.get("executor", "")
+        access_token = executor_info.get("access_token", "")
+
+        if app_code and app_secret:
+            client = BkPaaSSandboxApi.get_client(app_code=app_code, app_secret=app_secret)
+        else:
+            client = BkPaaSSandboxApi.get_client_by_username(bk_username)
+
+        client.update_bkapi_authorization(access_token=access_token or None, bk_username=bk_username or "")
+        return client
+
     # ---------- 资源方法 (7) ----------
 
     def retrieve_knowledgebase(self, id: int, **kwargs) -> dict:
@@ -123,6 +137,116 @@ class BaseResourceManager(abc.ABC):
     def get_chat_session_context(self, session_code: str, **kwargs) -> list[dict]:
         client = self.get_client()
         return client.api.get_chat_session_context(path_params={"session_code": session_code}, **kwargs).get("data", [])
+
+    def retrieve_chat_session(self, session_code: str, **kwargs) -> dict:
+        client = self.get_client()
+        return client.api.retrieve_chat_session(path_params={"session_code": session_code}, **kwargs).get("data", {})
+
+    def get_or_create_session(
+        self,
+        session_code: str,
+        session_name: str,
+        *,
+        protocol_version: str = "",
+        is_temporary: bool = False,
+        session_type: str = "",
+        **kwargs,
+    ) -> dict:
+        """调用平台 get_or_create 幂等接口，替代 retrieve+create 两步操作。
+
+        优先调用 POST /api/bkaidev/resource/chat/v1/session/get_or_create/ 幂等接口。
+        命中已有 session 时直接返回（不更新任何字段）；未命中则创建。
+        并发唯一键冲突时自动 re-fetch，对调用方仍表现为幂等。
+
+        当幂等接口不可用（如返回 405）时，回退到旧实现：
+        先执行 retrieve_chat_session，若 retrieve 失败则执行 create_chat_session。
+        这与旧版 get_or_create_by_thread_id 的行为完全一致。
+        """
+        client = self.get_client()
+        payload: dict = {"session_code": session_code, "session_name": session_name}
+        if protocol_version:
+            payload["protocol_version"] = protocol_version
+        if is_temporary is not None:
+            payload["is_temporary"] = is_temporary
+        if session_type:
+            payload["session_type"] = session_type
+        try:
+            return client.api.get_or_create_chat_session(json=payload, **kwargs).get("data", {})
+        except Exception as e:
+            if hasattr(e, "response") and getattr(e.response, "status_code", None) == 405:
+                _logger.warning("get_or_create 接口不可用(405)，回退到 retrieve+create: %s", e, exc_info=True)
+                try:
+                    return client.api.retrieve_chat_session(path_params={"session_code": session_code}, **kwargs).get(
+                        "data", {}
+                    )
+                except Exception as retrieve_exc:
+                    _logger.info(
+                        "retrieve 失败，尝试 create: session_code=%s, error=%s",
+                        session_code,
+                        retrieve_exc,
+                        exc_info=True,
+                    )
+                    try:
+                        return client.api.create_chat_session(json=payload, **kwargs).get("data", {})
+                    except Exception:
+                        _logger.error("create_chat_session 也失败: session_code=%s", session_code, exc_info=True)
+                        raise
+            raise
+
+    def update_session_status(self, session_code: str, status: str, **kwargs) -> dict:
+        """更新会话状态到平台（如 running、finished、failed）。
+
+        封装 PUT /api/bkaidev/resource/chat/v1/session/{session_code}/ 接口。
+        对应 AG-UI writer 的 _update_session_status 逻辑，
+        确保通过 resource_manager 创建的 session 也有正确的状态。
+
+        Args:
+            session_code: 会话 code
+            status: 会话状态（"running", "finished", "failed", "cancelled" 等）
+            **kwargs: 透传给 client.api.update_chat_session 的额外参数
+
+        Returns:
+            更新后的 session 数据字典
+        """
+        client = self.get_client()
+        return client.api.update_chat_session(
+            path_params={"session_code": session_code},
+            json={"status": status},
+            **kwargs,
+        ).get("data", {})
+
+    def save_session_content(self, session_code: str, role: str, content: str, **kwargs) -> dict:
+        """保存单条会话内容到平台。
+
+        封装 POST /api/bkaidev/resource/chat/v1/session_content/ 接口。
+        供 LocalBackend 等通过 resource_manager 直接写回 session_content，
+        不经过 BkaiBackend.save_session_content（BkaiBackend 是远端子 Agent 写入路径）。
+
+        Args:
+            session_code: 会话 code
+            role: 消息角色（"user" 或 "assistant"）
+            content: 消息内容
+            **kwargs: 透传给 client.api.create_chat_session_content 的额外参数
+
+        Returns:
+            后端返回的 data 字段（dict），失败时返回空 dict
+        """
+        return (
+            self.get_client()
+            .api.create_chat_session_content(
+                json={"session_code": session_code, "role": role, "content": content},
+                **kwargs,
+            )
+            .get("data", {})
+        )
+
+    def update_chat_session_sandbox_pv_id(self, session_code: str, sandbox_pv_id: str, **kwargs) -> dict:
+        client = self.get_client()
+        return client.api.update_chat_session(
+            path_params={"session_code": session_code},
+            json={"session_property": {"sandbox_pv_id": sandbox_pv_id}},
+            **kwargs,
+        ).get("data", {})
 
     def retrieve_agent_config(self, agent_code: str, version: Optional[str] = None, **kwargs) -> dict:
         agent_code = agent_code or self.app_code
@@ -140,10 +264,7 @@ class BaseResourceManager(abc.ABC):
         - 透传 ``version`` 给 ``retrieve_agent_config``；为 ``None`` 时由后端返回最新版。
         - 取回失败统一抛 ``ValueError``，与历史 ``AgentConfigManager.get_config`` 行为对齐。
         - 装配规则（与历史一致）：
-          * ``KnowledgebaseSettings``：未设置 ``is_response_when_no_knowledgebase_match`` 且无 ``rejection_message``
-            时回填默认拒答文案；
-          * ``prompt_setting`` 中 ``llm_token_limit`` 合并到 ``KnowledgebaseSettings``；
-          * ``prompt_setting`` 中 ``tool_output_compress_thrd`` 合并到 ``IntentRecognition``；
+          * ``prompt_setting`` / ``knowledgebase_settings`` / ``intent_recognition`` → ``model_context_options_data``；
           * ``conversation_settings.commands`` → ``command_agent_mapping``。
         """
         try:
@@ -151,46 +272,93 @@ class BaseResourceManager(abc.ABC):
         except Exception as e:
             raise ValueError(f"Failed to retrieve agent config: {e}")
 
+        # 模型上下文相关的配置
         prompt_setting = res.get("prompt_setting", {}) or {}
         role_prompts = prompt_setting.get("content")
         knowledgebase_settings_data = res.get("knowledgebase_settings") or {}
         intent_recognition_data = res.get("intent_recognition") or {}
 
-        if not knowledgebase_settings_data.get(
-            "is_response_when_no_knowledgebase_match"
-        ) and not knowledgebase_settings_data.get("rejection_message"):
-            knowledgebase_settings_data["rejection_message"] = (
-                KnowledgebaseSettings().model_validate({}).rejection_message
+        # 构建知识库查询相关配置，由于历史原因，有一部分值在平台保存在 intent_recognition_data 中
+        # 这一部分现在需要移动到 knowledge_query_options_data 中
+        knowledge_query_options_data = dict(knowledgebase_settings_data)
+        for key in (
+            "with_index_specific_search_init",
+            "with_index_specific_search_translation",
+            "with_index_specific_search_keywords",
+        ):
+            if key in intent_recognition_data:
+                knowledge_query_options_data[key] = intent_recognition_data[key]
+
+        # 平台字段映射：document_fragment_count > 0 时映射为 knowledge_resource_rough_recall_topk
+        if (
+            "document_fragment_count" in knowledge_query_options_data
+            and knowledge_query_options_data["document_fragment_count"] > 0
+        ):
+            knowledge_query_options_data["knowledge_resource_rough_recall_topk"] = knowledge_query_options_data.pop(
+                "document_fragment_count"
             )
 
-        if prompt_setting.get("llm_token_limit") is not None:
-            knowledgebase_settings_data["llm_token_limit"] = prompt_setting.get("llm_token_limit")
-        if prompt_setting.get("tool_output_compress_thrd") is not None:
-            intent_recognition_data["tool_output_compress_thrd"] = prompt_setting.get("tool_output_compress_thrd")
-        if prompt_setting.get("non_thinking_llm") is not None:
-            intent_recognition_data["non_thinking_llm"] = prompt_setting.get("non_thinking_llm")
+        # 平台可能返回空字符串 rejection_message，pop 掉以使用 Pydantic 默认值
+        if knowledge_query_options_data.get("rejection_message") == "":
+            knowledge_query_options_data.pop("rejection_message")
+
+        # 构建模型上下文需要的值，主要来源是 prompt_setting
+        model_context_options_data = dict(prompt_setting)
+        if intent_recognition_data.get("agent_type"):
+            model_context_options_data["llm_code_agent_type"] = intent_recognition_data["agent_type"]
 
         conversation_settings = res.get("conversation_settings", {}) or {}
+        raw_commands = conversation_settings.get("commands", []) or []
+        related_agents_raw = res.get("related_agents") or []
+        related_agents = [
+            {
+                "agent_code": agent.get("agent_code", ""),
+                "agent_name": agent.get("agent_name", ""),
+                "description": agent.get("description", ""),
+                "api_url": agent.get("api_url", ""),
+            }
+            for agent in related_agents_raw
+            if agent.get("agent_code")
+        ]
+        # 构造 agent_info：完整的原始配置字典（不对 otel_info 解码，保持原始数据）
+        agent_info = dict(res)
+
         return AgentConfig(
             agent_code=agent_code,
             agent_name=res["agent_name"],
             chat_model=prompt_setting.get("llm_code", ""),
             non_thinking_llm=prompt_setting.get("non_thinking_llm") or prompt_setting.get("llm_code", ""),
-            role_prompts=role_prompts or None,
+            role_prompts=role_prompts,
             knowledgebase_ids=res["knowledgebase_settings"]["knowledgebases"],
             tool_codes=res["related_tools"],
-            opening_mark=conversation_settings.get("opening_remark") or None,
+            opening_mark=conversation_settings.get("opening_remark"),
             mcp_server_config=res.get("mcp_server_config", {}).get("mcpServers", {}),
             related_skills=res.get("related_skills"),
-            agent_options=AgentOptions(
-                intent_recognition_options=IntentRecognition.model_validate(intent_recognition_data),
-                knowledge_query_options=KnowledgebaseSettings.model_validate(knowledgebase_settings_data),
-            ),
-            command_agent_mapping={
-                each["id"]: each["agent_code"] for each in conversation_settings.get("commands", [])
-            },
+            agent_options=None,
+            model_context_options_data=model_context_options_data,
+            knowledge_query_options_data=knowledge_query_options_data,
+            command_agent_mapping={each["id"]: each["agent_code"] for each in raw_commands},
+            related_agents=related_agents,
             temperature=prompt_setting.get("temperature"),
             max_tokens=prompt_setting.get("max_tokens"),
+            agent_info=agent_info,
+        )
+
+    def check_agent_call_permission(self, caller_app_code: str, username: Optional[str] = None, **kwargs) -> dict:
+        """被调方校验主调方智能体调用权限。
+
+        被调方（当前 resource manager 对应的 app_code）以自身身份调用平台接口，
+        传入主调方智能体 ``caller_app_code``；使用用户通过 ``X-BKAIDEV-USER`` 头透传。
+        返回平台 ``data``（含 ``allowed`` 等字段），调用方据 ``allowed`` 判定是否放行。
+        """
+        headers = dict(kwargs.pop("headers", None) or {})
+        if username:
+            headers["X-BKAIDEV-USER"] = username
+        if headers:
+            kwargs["headers"] = headers
+        client = self.get_client()
+        return client.api.check_agent_call_permission(data={"caller_app_code": caller_app_code}, **kwargs).get(
+            "data", {}
         )
 
     def retrieve_skill(self, skill_id: str, version: str, **kwargs) -> dict:
@@ -222,7 +390,6 @@ class BaseResourceManager(abc.ABC):
     def construct_mcp(
         self,
         mcp_config: dict,
-        agent_options: Any = None,
         username: str = None,
         executor_info: dict | None = None,
         **kwargs,
@@ -233,7 +400,6 @@ class BaseResourceManager(abc.ABC):
         支持凭证处理、selected_tools 过滤、异常处理等功能。
 
         :param mcp_config: MCP 客户端配置字典，格式为 ``{"server_name": {"url": ..., "transport": ...}}``
-        :param agent_options: Agent 选项，用于异常处理
         :param username: 用户名，用于 BLUEAPPS 认证
         :param executor_info: 执行用户信息（含 app_code/app_secret/access_token），
             优先用于 MCP 凭证注入，与 skill sandbox 保持一致
@@ -305,8 +471,7 @@ class BaseResourceManager(abc.ABC):
                         f"cost={time.monotonic() - _start:.2f}s"
                     )
                     for each in tools:
-                        if agent_options:
-                            each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
+                        each.coroutine = MCPExceptionWrapper(each.coroutine)
                         if not each.metadata:
                             each.metadata = {}
                         each.metadata["mcp_name"] = server_name
@@ -343,36 +508,6 @@ class BaseResourceManager(abc.ABC):
             if fail is not None:
                 failures.append(fail)
         return McpToolsResult(tools=tools_list, fetch_failures=failures)
-
-    def build_skill_env(self, skill_config: dict, username: str = None) -> dict:
-        """根据 skill 配置生成沙箱环境变量。
-
-        逻辑与 ``skill_middleware._extract_paas_params`` 中 env_vars 处理保持一致：
-        1. 从 ``metadata.bkai_paas_sandbox.envs`` 提取环境变量
-        2. 特殊规则：值为 ``None`` 时从环境变量获取
-        3. 赋值 ``ACCESS_TOKEN``（从 self.access_token 或 username 获取）
-
-        :param skill_config: skill 配置字典，包含 metadata 等字段
-        :param username: 用户名，用于 fallback 获取 access_token
-        :return: 环境变量字典
-        """
-        env_vars = {}
-
-        if skill_config:
-            paas_sandbox = skill_config.get("metadata", {}).get("bkai_paas_sandbox", {})
-            env_vars = paas_sandbox.get("envs", {})
-
-        # 特殊规则：如果值是 None，则从环境变量中获取
-        for key, value in env_vars.items():
-            if value is None:
-                env_vars[key] = os.getenv(key, "")
-
-        # 赋值 ACCESS_TOKEN：优先级 self.access_token > username > 环境变量
-        access_token = self.resolve_access_token(username)
-
-        env_vars["ACCESS_TOKEN"] = access_token or os.getenv("SANDBOX_BP_ACCESS_TOKEN", "")
-
-        return env_vars
 
     def knowledge_query(self, data: dict[str, Any]) -> dict:
         client = self.get_client()
