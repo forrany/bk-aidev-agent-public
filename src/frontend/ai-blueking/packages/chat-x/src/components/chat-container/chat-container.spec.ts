@@ -110,7 +110,11 @@ vi.mock('bkui-vue', () => {
     },
     emits: ['change'],
     setup(_, { slots }) {
-      return () => h('div', { class: 'mock-tab' }, slots.default?.());
+      return () =>
+        h('div', { class: 'mock-tab' }, [
+          slots.default?.(),
+          slots.setting ? h('div', { class: 'mock-tab-setting' }, slots.setting()) : null,
+        ]);
     },
   });
   (Tab as unknown as Record<string, unknown>).TabPanel = TabPanel;
@@ -242,10 +246,28 @@ vi.mock('../../icons', () => ({
       return () => h('span', { class: 'mock-close-icon' });
     },
   }),
+  CollapsedIcon: defineComponent({
+    name: 'CollapsedIcon',
+    setup() {
+      return () => h('span', { class: 'mock-collapsed-icon' });
+    },
+  }),
   ExecutionIcon: defineComponent({
     name: 'ExecutionIcon',
     setup() {
       return () => h('span', { class: 'mock-execution-icon' });
+    },
+  }),
+  FullScreenIcon: defineComponent({
+    name: 'FullScreenIcon',
+    setup() {
+      return () => h('span', { class: 'mock-full-screen-icon' });
+    },
+  }),
+  UnFullScreenIcon: defineComponent({
+    name: 'UnFullScreenIcon',
+    setup() {
+      return () => h('span', { class: 'mock-un-full-screen-icon' });
     },
   }),
   NodeTabIcon: defineComponent({
@@ -262,12 +284,24 @@ vi.mock('../../icons', () => ({
   }),
 }));
 
+vi.mock('tippy.js/dist/tippy.css', () => ({}));
+
+vi.mock('vue-tippy', () => ({
+  directive: {
+    mounted: vi.fn(),
+    unmounted: vi.fn(),
+  },
+}));
+
 vi.mock('../ai-shortcut/shortcut-render/shortcut-render.vue', () => ({
   default: defineComponent({
     name: 'ShortcutRender',
+    props: {
+      class: { type: [String, Object, Array], default: '' },
+    },
     emits: ['close', 'submit'],
-    setup() {
-      return () => h('div', { class: 'mock-shortcut-render' });
+    setup(props) {
+      return () => h('div', { class: ['mock-shortcut-render', props.class] });
     },
   }),
 }));
@@ -292,6 +326,7 @@ vi.mock('../chat-input/chat-input.vue', () => ({
       prompts: Array,
       resources: Array,
       shortcuts: Array,
+      skills: Array,
       supportUpload: Boolean,
       cite: String,
       shortcutId: String,
@@ -500,6 +535,42 @@ describe('ChatContainer', () => {
       expect(wrapper.find('.ai-welcome-remark').exists()).toBe(true);
       expect(wrapper.find('.mock-content-render').text()).toBe('欢迎使用');
     });
+
+    it('空态下选中快捷指令时应为 ShortcutRender 添加 is-welcome-overlay 类', () => {
+      wrapper = mount(ChatContainer, {
+        props: {
+          ...defaultProps,
+          messages: [],
+          selectedShortcut: {
+            id: 'shortcut1',
+            name: '测试快捷指令',
+            components: [{ id: 'c1', key: 'field1', type: 'input', name: '字段1' }],
+          },
+        },
+      });
+
+      expect(wrapper.find('.mock-shortcut-render.is-welcome-overlay').exists()).toBe(true);
+      expect(wrapper.find('.ai-welcome-content').exists()).toBe(true);
+    });
+
+    it('有消息时选中快捷指令不应添加 is-welcome-overlay 类', () => {
+      const messages = [createUserMessage('1', 'Hello'), createAssistantMessage('2', 'Hi')];
+
+      wrapper = mount(ChatContainer, {
+        props: {
+          ...defaultProps,
+          messages,
+          selectedShortcut: {
+            id: 'shortcut1',
+            name: '测试快捷指令',
+            components: [{ id: 'c1', key: 'field1', type: 'input', name: '字段1' }],
+          },
+        },
+      });
+
+      expect(wrapper.find('.mock-shortcut-render').exists()).toBe(true);
+      expect(wrapper.find('.mock-shortcut-render.is-welcome-overlay').exists()).toBe(false);
+    });
   });
 
   describe('ChatInput 测试', () => {
@@ -538,20 +609,78 @@ describe('ChatContainer', () => {
       expect(mc.props('messageStatus')).toBe(MessageStatus.Streaming);
       expect(ci.props('messageStatus')).toBe(MessageStatus.Streaming);
     });
+
+    it('应该将 skills 属性透传给 ChatInput', () => {
+      const skills = [
+        { skill_code: 'test_skill', skill_name: 'Test Skill', description: 'A test skill', icon: '' },
+      ];
+
+      wrapper = mount(ChatContainer, {
+        props: { ...defaultProps, skills },
+      });
+
+      const ci = wrapper.findComponent({ name: 'ChatInput' });
+      expect(ci.props('skills')).toEqual(skills);
+    });
   });
 
   describe('折叠测试', () => {
+    it('有 executionGroups 时应渲染折叠按钮且仅展示 CollapsedIcon', async () => {
+      const messages = [createUserMessage('1', 'Hello'), createAssistantMessage('2', 'Hi')];
+      mockExecutionGroupsRef.value = [{ id: 'group-1' }];
+
+      wrapper = mount(ChatContainer, {
+        props: { ...defaultProps, messages },
+      });
+      await nextTick();
+
+      expect(wrapper.find('.collapse-button').exists()).toBe(true);
+      expect(wrapper.find('.mock-collapsed-icon').exists()).toBe(true);
+      expect(wrapper.text()).not.toContain('执行情况');
+    });
+
+    it('侧栏折叠时折叠按钮应带 is-collapsed 类', async () => {
+      const messages = [createUserMessage('1', 'Hello'), createAssistantMessage('2', 'Hi')];
+      mockExecutionGroupsRef.value = [{ id: 'group-1' }];
+
+      wrapper = mount(ChatContainer, {
+        props: { ...defaultProps, messages },
+      });
+      await nextTick();
+
+      expect(wrapper.find('.collapse-button').classes()).toContain('is-collapsed');
+    });
+
     it('点击折叠按钮应该触发 collapseChange 事件', async () => {
       const messages = [createUserMessage('1', 'Hello'), createAssistantMessage('2', 'Hi')];
+      mockExecutionGroupsRef.value = [{ id: 'group-1' }];
+
+      wrapper = mount(ChatContainer, {
+        props: { ...defaultProps, messages },
+      });
+      await nextTick();
+
+      await wrapper.find('.collapse-button').trigger('click');
+
+      expect(wrapper.emitted('collapseChange')).toBeTruthy();
+    });
+  });
+
+  describe('全屏测试', () => {
+    it('侧栏展开时应渲染全屏按钮区域', async () => {
+      const messages = [createUserMessage('1', 'Hello'), createAssistantMessage('2', 'Hi')];
+      mockExecutionGroupsRef.value = [{ id: 'group-1' }];
 
       wrapper = mount(ChatContainer, {
         props: { ...defaultProps, messages },
       });
 
-      // 需要有执行消息才会显示折叠按钮
-      // 由于 executionGroups 被 mock 为空，折叠按钮不会显示
-      // 这里测试组件本身的正确渲染
-      expect(wrapper.find('.ai-chat-container').exists()).toBe(true);
+      getChatContainerExposed(wrapper).addCustomTab({ label: '自定义 Tab', name: 'custom-tab' });
+      await nextTick();
+
+      expect(wrapper.find('.screen-wrapper').exists()).toBe(true);
+      expect(wrapper.find('.screen-btn').exists()).toBe(true);
+      expect(wrapper.find('.mock-full-screen-icon').exists()).toBe(true);
     });
   });
 

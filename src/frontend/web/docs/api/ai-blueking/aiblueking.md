@@ -2,6 +2,10 @@
 
 `AIBlueking` 是 AI 小鲸的顶层业务组件，在 `ChatBot` 基础上封装了完整的面板功能，包括弹窗模式、拖拽、缩放、会话管理侧边栏、悬浮球等能力。适用于 SaaS 平台快速集成 AI 助手场景。
 
+::: info 非 Vue 宿主
+宿主无 Vue 时，请使用 v2.1.4-beta.8+ 的 [`mountAIBlueking`](/api/ai-blueking/standalone#mountaiblueking)（`@blueking/ai-blueking/standalone`），见 [Standalone 集成指南](/guide/integration-modes/standalone-bundle)。
+:::
+
 ## 基本用法
 
 ```vue
@@ -38,7 +42,7 @@ function openAI() {
 | `url` | `string` | `''` | API 地址（独立模式必填） |
 | `title` | `string` | `''` | 组件标题，显示在 Header 区域 |
 | `renderMode` | `RenderMode` | `'chat'` | 渲染模式：`chat`（默认）、`share`（分享）、`test`（测试） |
-| `requestOptions` | `IRequestOptions` | `{}` | 请求配置（含 `headers` / `data`，支持函数形式） |
+| `requestOptions` | `MaybeRefOrGetter<IRequestOptions>` | `{}` | 请求配置（`headers` / `data` 支持对象、函数、`ref`、`computed`） |
 | `extCls` | `string` | `''` | 额外 CSS 类名 |
 | `placeholder` | `string` | — | 输入框占位文本 |
 | `helloText` | `string` | `'你好，我是小鲸'` | 欢迎语 |
@@ -56,6 +60,8 @@ function openAI() {
 | `hideNimbus` | `boolean` | `false` | 是否隐藏悬浮球 |
 | `hideDefaultTrigger` | `boolean` | `false` | 是否隐藏默认触发器 |
 | `disabledInput` | `boolean` | `false` | 是否禁用输入 |
+| `errorToast` | `boolean` | `true` | 接口错误时是否自动弹出 Message 提示（**≥ v2.1.4-beta.25**）；设为 `false` 可自行通过 `sdk-error` 事件处理 |
+| `ignoreErrors` | `Array<string \| RegExp>` | `[]` | 忽略的接口错误 URL 模式（**≥ v2.1.4-beta.25**）；字符串包含匹配或正则，匹配的接口错误不会弹出 toast |
 
 ### 容器配置
 
@@ -109,6 +115,10 @@ function openAI() {
 | --- | --- | --- | --- |
 | `beforeNimbusClick` | `() => boolean \| Promise<boolean \| void> \| void` | — | Nimbus 点击前钩子函数，返回 `false` 阻止默认 showPanel 行为 |
 | `resizeProps` | `{ disabled?, initialDivide?, max?, min? }` | — | ResizeLayout 配置（执行情况侧面板拖拽） |
+
+### 侧栏自定义渲染 {#side-render-customization}
+
+与 [ChatBot](/api/ai-blueking/chatbot#side-render-customization) 相同，透传至内层 `ChatBot`（**≥ v2.1.4-beta.7**）：`getSideRenderComponent`、`getSideTabRenderComponent`、`onCustomTabChange`。详见 [侧栏 Tab 自定义渲染](/guide/core-features/side-render-customization)。
 
 ## Events
 
@@ -170,7 +180,7 @@ function openAI() {
 
 | 事件名 | 参数 | 说明 |
 | --- | --- | --- |
-| `sdk-error` | `({ apiName, code, data, message })` | SDK 层错误 |
+| `sdk-error` | `SdkErrorPayload` | SDK 层错误（**≥ v2.1.4-beta.25**：payload 新增 `source` 和 `action` 字段，详见 [SdkErrorPayload](/api/ai-blueking/types#sdkerrorpayload)） |
 
 ## Expose 方法
 
@@ -178,7 +188,7 @@ function openAI() {
 
 | 方法 | 类型 | 说明 |
 | --- | --- | --- |
-| `show` | `(sessionCode?: string, options?: { isTemporary?: boolean }) => Promise<void>` | 显示面板，可选指定初始会话和是否临时会话 |
+| `show` | `(sessionCode?: string, options?: { isTemporary?: boolean }) => Promise<void>` | 显示面板；Promise 在 `sessionList` 就绪后 resolve（`loadRecentSessionOnMount` 时含当前会话初始化）。面板立即显示，可 `await` 后再读 `getChatHelper()?.session`。失败 reject 并触发 `sdk-error`（`apiName: 'init'`） |
 | `hide` | `() => void` | 隐藏面板 |
 | `handleShow` | `(sessionCode?: string) => Promise<void>` | 显示面板（内部方法，等同于 `show`） |
 | `handleClose` | `() => void` | 关闭面板（内部方法，等同于 `hide`） |
@@ -214,6 +224,18 @@ function openAI() {
 | `updatePosition` | `(x: number, y: number) => void` | 更新面板位置 |
 | `updateSize` | `(w: number, h: number) => void` | 更新面板尺寸 |
 | `updatePositionAndSize` | `(x: number, y: number, w: number, h: number) => void` | 同时更新位置和尺寸 |
+
+### Agent 信息（≥ v2.1.4-beta.14）
+
+| 方法 | 类型 | 说明 |
+| --- | --- | --- |
+| `updateAgentInfo` | `() => Promise<IAgentInfo \| null>` | 主动刷新 agentInfo 并更新内部状态（如 shortcuts）；返回最新数据，失败返回 `null` |
+
+### 错误上报（≥ v2.1.4-beta.25）
+
+| 方法 | 类型 | 说明 |
+| --- | --- | --- |
+| `reportSdkError` | `(options: ReportSdkErrorOptions) => void` | 统一 SDK 错误出口；自动触发 `sdk-error` 事件并可选弹出 toast，同一 Error 实例去重避免重复上报。详见 [ReportSdkErrorOptions](/api/ai-blueking/types#reportsdkerroroptions) |
 
 ### 其他
 

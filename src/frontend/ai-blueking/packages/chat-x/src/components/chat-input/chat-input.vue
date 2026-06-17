@@ -37,6 +37,7 @@
         :placeholder="placeholder"
         :prompts="prompts"
         :resources="resources"
+        :skills="skills"
         @keydown="handleKeyDown"
         @update:model-value="handleUpdateModelValue"
         @upload="handleUpload"
@@ -88,11 +89,13 @@
 
   import { type UserMessage, MessageContentType, MessageStatus } from '../../ag-ui/types';
   import { CHAT_Z_INDEX, isEn, MAX_UPLOAD_FILE_SIZE, MAX_UPLOAD_FILES } from '../../common';
-  import { type KeyboardPayload, docToString } from '../../edix';
+  import { type KeyboardPayload } from '../../edix';
   import { CloseIcon } from '../../icons';
+  import { tagSchemaToMessageString } from './ai-slash-input/constants';
   import {
     type AITippyProps,
     type IAiSlashMenuItem,
+    type ISkillListItem,
     type Shortcut,
     type TagSchema,
     type UploadFile,
@@ -134,19 +137,23 @@
     resources?: IAiSlashMenuItem[];
     shortcutId?: string;
     shortcuts?: Shortcut[];
+    skills?: ISkillListItem[];
     supportUpload?: boolean; // 是否支持上传文件 默认是true
     tippyOptions?: AITippyProps; // tips配置
   };
   const props = withDefaults(defineProps<ChatInputProps>(), {
     placeholder: isEn
-      ? `Input "/" to trigger prompt
+      ? `Input "/" to trigger skill
+Input "\\" to trigger prompt
 Input "@" to trigger tool and MCP
 Use Shift + Enter to enter a new line`
-      : `输入 “/”唤出 Prompt
-输入“@”唤出 工具 和 MCP
+      : `输入 "/" 唤出 Skill
+输入 "\\" 唤出 Prompt
+输入 "@" 唤出 工具和 MCP
 通过 Shift + Enter 进行换行输入`,
     prompts: () => [],
     resources: () => [],
+    skills: () => [],
     inputMaxHeight: 200,
     supportUpload: true,
   });
@@ -165,7 +172,7 @@ Use Shift + Enter to enter a new line`
     if (props.modelValue?.length < 1) {
       return MessageStatus.Disabled;
     }
-    if (Array.isArray(props.modelValue) && !docToString(props.modelValue).trim()) {
+    if (Array.isArray(props.modelValue) && !tagSchemaToMessageString(props.modelValue).trim()) {
       return MessageStatus.Disabled;
     }
     return props.messageStatus;
@@ -187,7 +194,7 @@ Use Shift + Enter to enter a new line`
 
       // 如果没有上传文件，则使用输入框的值
       if (!uploadFiles.value?.length) {
-        content = typeof props.modelValue === 'string' ? props.modelValue : docToString(props.modelValue);
+        content = typeof props.modelValue === 'string' ? props.modelValue : tagSchemaToMessageString(props.modelValue);
       } else {
         // 如果上传了文件，则使用上传的文件
         content = uploadFiles.value?.slice().map(file => ({
@@ -200,7 +207,7 @@ Use Shift + Enter to enter a new line`
         if (props.modelValue) {
           content.push({
             type: MessageContentType.Text,
-            text: docToString(props.modelValue as TagSchema),
+            text: tagSchemaToMessageString(props.modelValue as TagSchema),
           });
         }
       }

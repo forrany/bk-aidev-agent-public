@@ -1,7 +1,7 @@
 <template>
   <div
     class="ai-chat-container"
-    :style="{ '--resize-main-width': resizeMainWidth }"
+    :style="{ '--resize-main-width': resizeMainWidth, borderTopColor: isCollapse ? 'transparent' : '#eaebf0' }"
   >
     <div
       v-if="chatLoading"
@@ -20,7 +20,11 @@
       @resizing="handleResizing"
     >
       <template #aside>
-        <template v-if="!isCollapse && (executionGroups?.length || keyword?.length) && renderMode !== RenderMode.Share">
+        <div
+          v-if="!isCollapse && (executionGroups?.length || keyword?.length) && renderMode !== RenderMode.Share"
+          ref="fullScreenRef"
+          class="ai-full-screen-wrapper"
+        >
           <Tab
             :active="selectedTab.name"
             class="ai-chat-container-tab"
@@ -71,6 +75,27 @@
               "
               :name="tab.name"
             />
+            <template #setting>
+              <div class="screen-wrapper">
+                <ToolBtn
+                  class="screen-btn"
+                  :tippy-options="{
+                    ...commonTippyOptions,
+                    appendTo: isFullScreen ? fullScreenRef! : commonTippyOptions?.appendTo,
+                    content: isFullScreen ? t('退出全屏') : t('全屏'),
+                  }"
+                >
+                  <FullScreenIcon
+                    v-if="!isFullScreen"
+                    @click="enter"
+                  />
+                  <UnFullScreenIcon
+                    v-else
+                    @click="exit"
+                  />
+                </ToolBtn>
+              </div>
+            </template>
           </Tab>
           <template v-if="selectedTab?.name === EXECUTION_TAB_NAME">
             <ExecutionSummary
@@ -105,15 +130,14 @@
               </component>
             </div>
           </template>
-        </template>
+        </div>
         <div
           v-if="executionGroups?.length && renderMode !== RenderMode.Share"
           class="collapse-button"
-          :class="{ 'is-right': placement === 'right' }"
+          :class="{ 'is-right': placement === 'right', 'is-collapsed': isCollapse }"
           @click="handleCollapse"
         >
-          <ExecutionIcon />
-          {{ t('执行情况') }}
+          <CollapsedIcon />
         </div>
       </template>
       <template #main>
@@ -166,10 +190,10 @@
         >
           <slot
             name="welcome"
-            v-bind="{ openingRemark }"
+            v-bind="{ openingRemark, welcomeTitle }"
           >
             <AIBluekingBannerIcon />
-            <h2 class="ai-welcome-title">{{ t('你好，我是小鲸') }}</h2>
+            <h2 class="ai-welcome-title">{{ welcomeTitle ?? t('你好，我是小鲸') }}</h2>
             <div
               v-if="openingRemark"
               class="ai-welcome-remark"
@@ -192,6 +216,7 @@
           <ShortcutRender
             v-else-if="selectedShortcut?.components?.length"
             v-bind="selectedShortcut"
+            :class="{ 'is-welcome-overlay': !messages?.length }"
             @close="handleShortcutRenderClose"
             @submit="handleShortcutRenderSubmit"
           />
@@ -208,6 +233,7 @@
               :resources="resources"
               :shortcut-id="selectedShortcut?.id"
               :shortcuts="shortcuts"
+              :skills="skills"
               :support-upload="supportUpload"
               :tippy-options="commonTippyOptions"
               @delete-shortcut="handleCloseShortcut"
@@ -229,6 +255,7 @@
     nextTick,
     onUnmounted,
     shallowRef,
+    useTemplateRef,
     watch,
     withDirectives,
   } from 'vue';
@@ -240,11 +267,14 @@
   import { useMessageGroup } from '../../composables';
   import { useCommonTippyProvider, useRenderModeProvider } from '../../composables/use-common';
   import { EXECUTION_TAB_NAME, useCustomTabProvider } from '../../composables/use-custom-tab';
+  import { useFullScreen } from '../../composables/use-full-screen';
   import { useGlobalConfig } from '../../composables/use-global-config';
   import { OverflowTips as vOverflowTips } from '../../directives';
-  import { CloseIcon, ExecutionIcon, NodeTabIcon } from '../../icons';
+  import { FullScreenIcon, UnFullScreenIcon } from '../../icons';
+  import { CloseIcon, CollapsedIcon, ExecutionIcon, NodeTabIcon } from '../../icons';
   import { AIBluekingBannerIcon } from '../../icons';
   import { t } from '../../lang/lang';
+  import ToolBtn from '../ai-buttons/tool-btn/tool-btn.vue';
   import ShortcutRender from '../ai-shortcut/shortcut-render/shortcut-render.vue';
   import ContentRender from '../chat-content/content-render/content-render.vue';
   import ChatInput, { type ChatInputEmits, type ChatInputProps } from '../chat-input/chat-input.vue';
@@ -287,6 +317,7 @@
       max?: number;
       min?: number;
     };
+    welcomeTitle?: string;
   };
   const TabPanel = Tab.TabPanel;
   defineSlots<{
@@ -309,7 +340,10 @@
       message: Message;
       messageToolsStatus: MessageContainerProps['messageToolsStatus'];
     }) => null | undefined | VNode;
-    welcome: (props: { openingRemark: ChatContainerProps['openingRemark'] }) => null | undefined | VNode;
+    welcome: (props: {
+      openingRemark: ChatContainerProps['openingRemark'];
+      welcomeTitle: ChatContainerProps['welcomeTitle'];
+    }) => null | undefined | VNode;
   }>();
   const props = withDefaults(
     defineProps<
@@ -325,6 +359,9 @@
     required: false,
     default: RenderMode.Chat,
   });
+
+  const fullScreenRef = useTemplateRef<HTMLElement>('fullScreenRef');
+  const { isFullScreen, enter, exit } = useFullScreen(fullScreenRef);
 
   useRenderModeProvider({ renderMode });
 
@@ -531,6 +568,7 @@
     height: 100%;
     font-size: 12px;
     border: none;
+    border-top: 1px solid transparent;
 
     &-loading {
       display: flex;
@@ -538,6 +576,64 @@
       justify-content: center;
       width: 100%;
       height: 100%;
+    }
+
+    .collapse-button {
+      position: absolute;
+      top: 50%;
+      left: -16px;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      min-height: 64px;
+      padding: 8px 2px;
+      font-size: 14px;
+      color: #fff;
+      background: #dcdee5;
+      border-radius: 4px 0 0 4px;
+
+      // box-shadow: 2px 0 4px 0 #0000001a;
+      transform: translateY(-50%);
+
+      .ai-common-icon {
+        width: 14px;
+        height: 14px;
+        margin-bottom: 2px;
+        font-size: 14px;
+        transition: transform 0.2s ease-in-out;
+      }
+
+      &.is-collapsed {
+        .ai-common-icon {
+          transform: rotate(180deg);
+        }
+      }
+
+      &.is-right {
+        right: -17px;
+        left: auto;
+        border-radius: 0 4px 4px 0;
+
+        .ai-common-icon {
+          transform: rotate(180deg) !important;
+        }
+
+        &.is-collapsed {
+          .ai-common-icon {
+            transform: rotate(0deg) !important;
+          }
+        }
+      }
+
+      &:hover {
+        color: #fff;
+        cursor: pointer;
+        background: #3a84ff;
+        box-shadow: 2px 0 4px 0 #0000001a;
+      }
     }
 
     &-tab {
@@ -582,6 +678,41 @@
           opacity: 0.8;
         }
       }
+
+      .screen-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+
+        // padding-left: 8px;
+        color: #979ba5;
+
+        &::before {
+          position: absolute;
+          top: 14px;
+          left: -8px;
+          display: block;
+          width: 1px;
+          height: 12px;
+          content: '';
+          background: #eaebf0;
+        }
+
+        .screen-btn {
+          font-size: 12px;
+        }
+
+        .ai-common-icon {
+          /* stylelint-disable-next-line no-descending-specificity */
+          &:hover {
+            color: #3a84ff;
+            cursor: pointer;
+          }
+        }
+      }
     }
 
     &-resize-layout {
@@ -606,7 +737,26 @@
         position: relative;
         width: var(--resize-main-width);
         padding: 8px;
-        overflow: visible;
+
+        // overflow: visible;
+
+        // 空态下快捷指令保持在输入框位置（贴底），内容过高时向上生长并遮挡欢迎内容，而非被压缩
+        .shortcut-render.is-welcome-overlay {
+          position: absolute;
+          right: 8px;
+          bottom: 8px;
+          left: 8px;
+          z-index: 1;
+
+          // 覆盖自身的 width: 100%，由 left/right 决定宽度，避免超出
+          width: auto;
+          max-height: calc(100% - 16px);
+
+          // 高度随内容自然撑开，超过可视高度时由外层 max-height 兜底滚动
+          .shortcut-render-content {
+            max-height: none;
+          }
+        }
       }
 
       &.ai-is-collapse {
@@ -625,6 +775,12 @@
           }
         }
       }
+
+      .ai-full-screen-wrapper {
+        width: 100%;
+        height: 100%;
+        background-color: white;
+      }
     }
 
     &-message-slot {
@@ -638,63 +794,25 @@
       }
     }
 
-    .collapse-button {
-      position: absolute;
-      top: 50%;
-      left: -20px;
-      z-index: 2;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      width: 20px;
-      min-height: 96px;
-      padding: 8px 4px;
-      font-size: 12px;
-      color: #4d4f56;
-      background: #dcdee5;
-      border-radius: 4px 0 0 4px;
-
-      // box-shadow: 2px 0 4px 0 #0000001a;
-      transform: translateY(-50%);
-
-      &.is-right {
-        right: -21px;
-        left: auto;
-        border-radius: 0 4px 4px 0;
-      }
-
-      .ai-common-icon {
-        width: 12px;
-        height: 12px;
-        margin-bottom: 2px;
-        font-size: 12px;
-      }
-
-      &:hover {
-        color: #fff;
-        cursor: pointer;
-        background: #3a84ff;
-        box-shadow: 2px 0 4px 0 #0000001a;
-      }
-    }
-
     .ai-welcome-content {
       display: flex;
       flex-direction: column;
       align-items: center;
       width: 100%;
+      min-height: 0;
       max-width: 1000px;
       padding: 16px;
       margin: 0 auto;
       text-align: center;
 
       .ai-blueking-banner-icon {
+        flex-shrink: 0;
         width: 309px;
-        height: 100%;
+        height: auto;
       }
 
       .ai-welcome-title {
+        flex-shrink: 0;
         margin: 0 0 16px;
         font-size: 20px;
         font-weight: 600;
@@ -703,9 +821,9 @@
       }
 
       .ai-welcome-remark {
-        flex-shrink: 0;
+        flex: 0 1 auto;
         width: 100%;
-        max-height: 240px;
+        min-height: 0;
         margin-bottom: 24px;
         overflow-y: auto;
         scrollbar-color: #dcdee5 transparent;

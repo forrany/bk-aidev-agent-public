@@ -7,13 +7,14 @@
  * 蓝鲸智云PaaS平台 (BlueKing PaaS) is licensed under the MIT License.
  */
 
-import { onBeforeUnmount, ref, shallowRef, watch } from 'vue';
-import type { Ref } from 'vue';
+import { computed, onBeforeUnmount, ref, shallowRef, toValue, watch } from 'vue';
+import type { ComputedRef, Ref } from 'vue';
 
 import { AGUIProtocol, useChatHelper } from '@blueking/chat-helper';
 
+import { runAgentBootstrap } from '../../bootstrap/agent-bootstrap';
 import { ChatBusinessManager, SessionBusinessManager, ShortcutManager } from '../../manager';
-import { normalizeUrl } from '../../utils';
+import { buildRequestDataFromOptions, normalizeUrl } from '../../utils';
 
 import type { IChatHelper } from '../../types';
 import type { ChatBotProps } from '../types';
@@ -32,9 +33,19 @@ export interface UseChatbotInitReturn {
   chatHelper: Ref<IChatHelper | null>;
   initError: Ref<Error | null>;
   isInitialized: Ref<boolean>;
+  isReady: ComputedRef<boolean>;
   isStandaloneMode: Ref<boolean>;
   sessionBusinessManager: Ref<null | SessionBusinessManager>;
   shortcutManager: Ref<null | ShortcutManager>;
+  whenReady: () => Promise<void>;
+}
+
+/** URL / chatHelper 变更导致上一轮初始化被取代 */
+export class ChatBotInitStaleError extends Error {
+  constructor() {
+    super('[ChatBot] Initialization was superseded by a newer init');
+    this.name = 'ChatBotInitStaleError';
+  }
 }
 
 export function useChatbotInit(params: UseChatbotInitParams): UseChatbotInitReturn {
@@ -47,6 +58,7 @@ export function useChatbotInit(params: UseChatbotInitParams): UseChatbotInitRetu
   const isInitialized = ref(false);
   const isStandaloneMode = ref(!props.chatHelper);
   const initError = ref<Error | null>(null);
+  const isReady = computed(() => isInitialized.value);
 
   /**
    * 验证 props 配置
@@ -104,11 +116,7 @@ export function useChatbotInit(params: UseChatbotInitParams): UseChatbotInitRetu
     });
 
     const helper = useChatHelper({
-      requestData: {
-        urlPrefix: normalizeUrl(props.url!),
-        headers: props.requestOptions?.headers,
-        data: props.requestOptions?.data,
-      },
+      requestData: buildRequestDataFromOptions(normalizeUrl(props.url!), () => toValue(props.requestOptions)),
       protocol,
     }) as unknown as IChatHelper;
 
@@ -138,30 +146,52 @@ export function useChatbotInit(params: UseChatbotInitParams): UseChatbotInitRetu
    * 使用 generation counter 防止快速连续 URL 变化导致的竞态
    */
   let initGeneration = 0;
+  let initializeInFlight: null | Promise<void> = null;
+  let readyResolved: null | Promise<void> = null;
+  let settleInFlight: null | {
+    reject: (error: Error) => void;
+    resolve: () => void;
+  } = null;
 
-  const initialize = async () => {
-    const currentGen = ++initGeneration;
+  const abortInFlightInit = (error?: Error) => {
+    if (settleInFlight) {
+      if (error) {
+        settleInFlight.reject(error);
+      } else {
+        settleInFlight.resolve();
+      }
+      settleInFlight = null;
+    }
+    initializeInFlight = null;
+  };
 
+  const assertGeneration = (currentGen: number) => {
+    if (currentGen !== initGeneration) {
+      throw new ChatBotInitStaleError();
+    }
+  };
+
+  const runInitialize = async (currentGen: number): Promise<void> => {
     const oldHelper = chatHelper.value;
     const wasStandalone = isStandaloneMode.value;
 
-    // 1. 立即重置状态，让 UI 马上展示 loading（不等 stop 请求返回）
     isInitialized.value = false;
     initError.value = null;
     isStandaloneMode.value = !props.chatHelper;
 
-    // 2. 清理旧实例（stop 请求可能较慢，但 loading 已在展示）
     await destroyChatHelper(oldHelper, wasStandalone);
+    assertGeneration(currentGen);
 
-    // 3. 清空旧 ref
     chatHelper.value = null;
     sessionBusinessManager.value = null;
     chatBusinessManager.value = null;
     shortcutManager.value = null;
 
-    // 4. 创建新实例
     const newHelper = createChatHelper();
-    if (!newHelper) return;
+    if (!newHelper) {
+      const err = initError.value ?? new Error('[ChatBot] Failed to create chatHelper');
+      throw err;
+    }
 
     const sessionMgr = new SessionBusinessManager(newHelper.session, newHelper.agent, null, {
       enableChatSession: true,
@@ -184,28 +214,81 @@ export function useChatbotInit(params: UseChatbotInitParams): UseChatbotInitRetu
     chatBusinessManager.value = chatMgr;
     shortcutManager.value = shortcutMgr;
 
-    // 5. 执行初始化流程
     try {
       if (isStandaloneMode.value) {
-        await Promise.all([newHelper.agent.getAgentInfo(), newHelper.session.getSessions()]);
-        if (currentGen !== initGeneration) return;
+        await runAgentBootstrap(newHelper);
+        assertGeneration(currentGen);
 
         await sessionMgr.loadRecentSession({ skipLoadSessions: true });
-        if (currentGen !== initGeneration) return;
+        assertGeneration(currentGen);
       }
+
+      assertGeneration(currentGen);
       isInitialized.value = true;
       emit('agent-info-loaded', newHelper);
     } catch (error) {
-      if (currentGen !== initGeneration) return;
+      assertGeneration(currentGen);
       console.error('Failed to initialize ChatBot:', error);
       initError.value = error as Error;
       emit('error', error as Error);
+      throw error;
     }
+  };
+
+  const initialize = () => {
+    abortInFlightInit(new ChatBotInitStaleError());
+    readyResolved = null;
+
+    const currentGen = ++initGeneration;
+
+    initializeInFlight = new Promise<void>((resolve, reject) => {
+      settleInFlight = { resolve, reject };
+      runInitialize(currentGen)
+        .then(() => {
+          if (settleInFlight) {
+            readyResolved = Promise.resolve();
+            settleInFlight.resolve();
+            settleInFlight = null;
+          }
+        })
+        .catch((error: unknown) => {
+          if (settleInFlight) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            settleInFlight.reject(err);
+            settleInFlight = null;
+          }
+        })
+        .finally(() => {
+          if (currentGen === initGeneration) {
+            initializeInFlight = null;
+          }
+        });
+    });
+
+    // 避免未调用 whenReady 时产生 unhandled rejection；whenReady 调用方仍会收到 reject
+    void initializeInFlight.catch(() => {});
+  };
+
+  const whenReady = (): Promise<void> => {
+    if (isInitialized.value) {
+      if (!readyResolved) {
+        readyResolved = Promise.resolve();
+      }
+      return readyResolved;
+    }
+    if (initError.value) {
+      return Promise.reject(initError.value);
+    }
+    if (initializeInFlight) {
+      return initializeInFlight;
+    }
+    return Promise.resolve();
   };
 
   watch([() => props.url, () => props.chatHelper], () => initialize(), { immediate: true });
 
   onBeforeUnmount(() => {
+    abortInFlightInit();
     destroyChatHelper(chatHelper.value, isStandaloneMode.value);
   });
 
@@ -213,7 +296,9 @@ export function useChatbotInit(params: UseChatbotInitParams): UseChatbotInitRetu
     chatHelper,
     isStandaloneMode,
     isInitialized,
+    isReady,
     initError,
+    whenReady,
     chatBusinessManager,
     sessionBusinessManager,
     shortcutManager,

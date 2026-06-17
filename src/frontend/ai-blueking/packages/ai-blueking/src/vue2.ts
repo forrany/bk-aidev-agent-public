@@ -140,6 +140,10 @@ export default createVue2Wrapper(AIBlueking, {
       type: String,
       default: () => t('你好，我是小鲸'),
     },
+    useAgentName: {
+      type: Boolean,
+      default: false,
+    },
     requestOptions: {
       type: Object,
       default: () => ({}),
@@ -264,6 +268,18 @@ export default createVue2Wrapper(AIBlueking, {
       type: Function,
       default: undefined,
     },
+    getSideRenderComponent: {
+      type: Function,
+      default: undefined,
+    },
+    getSideTabRenderComponent: {
+      type: Function,
+      default: undefined,
+    },
+    onCustomTabChange: {
+      type: Function,
+      default: undefined,
+    },
   },
   emitNames: [...aiBluekingEmitNames],
   exposeKeys: [...aiBluekingExposeKeys],
@@ -363,6 +379,8 @@ const chatBotExposeKeys = [
   'currentSession',
   'isGenerating',
   'messages',
+  'isReady',
+  'whenReady',
 ] as const;
 
 // 编译时断言：chatBotExposeKeys 与 ChatBotExpose 的 keys 完全一致
@@ -399,6 +417,10 @@ export const ChatBotV2 = createVue2Wrapper(ChatBot, {
     helloText: {
       type: String,
       default: undefined,
+    },
+    useAgentName: {
+      type: Boolean,
+      default: false,
     },
     placeholder: {
       type: String,
@@ -446,6 +468,18 @@ export const ChatBotV2 = createVue2Wrapper(ChatBot, {
     },
     resizeProps: {
       type: Object,
+      default: undefined,
+    },
+    getSideRenderComponent: {
+      type: Function,
+      default: undefined,
+    },
+    getSideTabRenderComponent: {
+      type: Function,
+      default: undefined,
+    },
+    onCustomTabChange: {
+      type: Function,
       default: undefined,
     },
   },

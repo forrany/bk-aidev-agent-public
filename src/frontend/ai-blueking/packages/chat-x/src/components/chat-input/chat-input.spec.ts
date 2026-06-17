@@ -64,6 +64,29 @@ vi.mock('../../edix', () => ({
   voidNode: vi.fn(() => ({})),
 }));
 
+vi.mock('./ai-slash-input/constants', () => ({
+  tagSchemaToMessageString: (doc: unknown) => {
+    if (!Array.isArray(doc)) {
+      return '';
+    }
+    return doc
+      .flat()
+      .map((node: { data?: { label?: string; type?: string; value?: string }; text?: string; type?: string }) => {
+        if (node.type === 'text') {
+          return node.text ?? '';
+        }
+        if (node.type === 'tag' && node.data?.type === 'skill') {
+          return `/${node.data.value ?? ''}`;
+        }
+        if (node.type === 'tag') {
+          return `@${node.data?.label ?? ''}`;
+        }
+        return '';
+      })
+      .join('');
+  },
+}));
+
 // Mock CiteContent
 vi.mock('../chat-content/cite-content/cite-content.vue', () => ({
   default: defineComponent({
@@ -91,6 +114,7 @@ vi.mock('./ai-slash-input/ai-slash-input.vue', () => ({
       placeholder: { type: String, default: '' },
       prompts: { type: Array, default: () => [] },
       resources: { type: Array, default: () => [] },
+      skills: { type: Array, default: () => [] },
     },
     emits: ['update:modelValue', 'keydown', 'upload'],
     setup(_, { emit, expose }) {
@@ -421,6 +445,21 @@ describe('ChatInput', () => {
 
       expect(wrapper.find('.chat-input-container').exists()).toBe(true);
     });
+
+    it('应该正确接收 skills 属性', () => {
+      const skills = [
+        { skill_code: 'test_skill', skill_name: 'Test Skill', description: 'A test skill', icon: '' },
+      ];
+
+      wrapper = mount(ChatInput, {
+        props: {
+          modelValue: '',
+          skills,
+        },
+      });
+
+      expect(wrapper.find('.chat-input-container').exists()).toBe(true);
+    });
   });
 
   describe('update:modelValue 事件测试', () => {
@@ -484,7 +523,50 @@ describe('ChatInput', () => {
         },
       });
 
-      expect(wrapper.find('.mock-input-attachment').exists()).toBe(true);
+      const inputAttachment = wrapper.findComponent({ name: 'InputAttachment' });
+      expect(inputAttachment.props('messageState')).toBe(MessageStatus.Disabled);
+    });
+
+    it('数组 modelValue 仅包含 skill 标签时不应为 Disabled', () => {
+      wrapper = mount(ChatInput, {
+        props: {
+          modelValue: [
+            [
+              {
+                type: 'tag',
+                data: { label: 'Test Skill', value: 'test_skill', type: 'skill' },
+              },
+            ],
+          ],
+          messageStatus: MessageStatus.Complete,
+        },
+      });
+
+      const inputAttachment = wrapper.findComponent({ name: 'InputAttachment' });
+      expect(inputAttachment.props('messageState')).toBe(MessageStatus.Complete);
+    });
+
+    it('发送消息时 skill 标签应序列化为 /skill_code 格式', async () => {
+      const onSendMessage = vi.fn();
+
+      wrapper = mount(ChatInput, {
+        props: {
+          modelValue: [
+            [
+              {
+                type: 'tag',
+                data: { label: 'Test Skill', value: 'test_skill', type: 'skill' },
+              },
+            ],
+          ],
+          messageStatus: MessageStatus.Complete,
+          onSendMessage,
+        },
+      });
+
+      await wrapper.find('.send-btn').trigger('click');
+
+      expect(onSendMessage).toHaveBeenCalledWith('/test_skill', expect.any(Array));
     });
 
     it('messageStatus 为 Pending 时应优先返回 Pending（即使输入为空）', () => {

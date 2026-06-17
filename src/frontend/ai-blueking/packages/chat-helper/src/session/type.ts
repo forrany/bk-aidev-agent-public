@@ -26,12 +26,18 @@
 
 import type { IMessage } from '../message';
 
+export enum SessionStatus {
+  Running = 'running',
+  Finished = 'finished',
+  Failed = 'failed',
+  Cancelled = 'cancelled',
+}
+
 export interface ISession<ITool = unknown, IAnchorPathResources = unknown> {
   anchorPathResources?: IAnchorPathResources;
   comment?: string;
   createdAt?: string;
   isTemporary?: boolean;
-  labels?: string[];
   model?: string;
   rate?: number;
   sessionCode: string;
@@ -40,6 +46,7 @@ export interface ISession<ITool = unknown, IAnchorPathResources = unknown> {
   sessionName: string;
   tools?: ITool[];
   updatedAt?: string;
+  status?: SessionStatus;
   roleInfo?: {
     collectionId: number;
     collectionName: string;
@@ -52,6 +59,7 @@ export interface ISession<ITool = unknown, IAnchorPathResources = unknown> {
   sessionProperty?: {
     isAutoCalcPrompt?: boolean;
     isAutoClear?: boolean;
+    labels?: string[];
   };
 }
 
@@ -60,7 +68,6 @@ export interface ISessionApi<IToolApi = unknown, IAnchorPathResourcesApi = unkno
   comment?: string;
   created_at?: string;
   is_temporary?: boolean;
-  labels?: string[];
   model?: string;
   rate?: number;
   session_code: string;
@@ -69,6 +76,7 @@ export interface ISessionApi<IToolApi = unknown, IAnchorPathResourcesApi = unkno
   session_name: string;
   tools?: IToolApi[];
   updated_at?: string;
+  status?: SessionStatus;
   role_info?: {
     collection_id: number;
     collection_name: string;
@@ -81,6 +89,7 @@ export interface ISessionApi<IToolApi = unknown, IAnchorPathResourcesApi = unkno
   session_property?: {
     is_auto_clac_prompt?: boolean;
     is_auto_clear?: boolean;
+    labels?: string[];
   };
 }
 

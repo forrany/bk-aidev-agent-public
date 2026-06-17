@@ -30,5 +30,6 @@ export * from './execution';
 export * from './image-preview';
 export * from './input';
 export * from './messages';
+export * from './screen';
 export * from './shortcuts';
 export * from './tools';
