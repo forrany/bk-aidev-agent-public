@@ -31,12 +31,29 @@ class BKAidevTokenUsageSink(TokenUsageSink):
         session_code = payload.get("session_code") or ""
         message_id = payload.get("message_id") or ""
         if not session_code or not message_id:
+            logger.warning(
+                "token usage skipped: missing session_code/message_id, "
+                "session_code=%s, message_id=%s, channel_type=%s",
+                session_code,
+                message_id,
+                payload.get("channel_type") or "",
+            )
             return
 
         try:
             self.resource_manager.get_client().api.create_chat_session_token_usage(
                 json=payload,
                 headers={"X-BKAIDEV-USER": self.username or ""},
+            )
+            logger.info(
+                "token usage reported: session_code=%s, message_id=%s, channel_type=%s, "
+                "input=%s, output=%s, total=%s",
+                session_code,
+                message_id,
+                payload.get("channel_type") or "",
+                payload.get("input_tokens"),
+                payload.get("output_tokens"),
+                payload.get("total_tokens"),
             )
         except Exception:
             logger.exception("failed to report token usage: payload=%s", payload)

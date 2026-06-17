@@ -26,6 +26,14 @@ class ChatCompletionViewSet(PluginViewSet):
 
     @property
     def channel_type(self):
+        """区分用户态调用渠道：
+        - 走网关API（API渠道）
+        - 走应用域名直连（小鲸弹窗渠道）
+        """
+        request = getattr(self, "request", None)
+        app = getattr(request, "app", None) if request is not None else None
+        if app is not None and getattr(app, "verified", False):
+            return ChannelType.API.value
         return ChannelType.POPUP.value
 
     def create(self, request):

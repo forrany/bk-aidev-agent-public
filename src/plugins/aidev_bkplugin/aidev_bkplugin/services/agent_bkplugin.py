@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from aidev_agent.config import settings as agent_settings
-from aidev_agent.enums import AgentBuildType, AgentType, PromptRole
+from aidev_agent.enums import AgentBuildType, AgentType, ChannelType, PromptRole
 from aidev_agent.packages.resource_manager.agent import AgentResourceManager
 from aidev_agent.pydantic_models import ExecuteKwargs
 from aidev_agent.services.agent import AgentInstanceFactory
@@ -92,8 +92,13 @@ def build_chat_agent_for_session(
     username: str | None,
     version: str | None = None,
     turn_id: str = "",
+    channel_type: str | None = None,
 ):
-    """构建带 AG-UI 回写器的 Chat Agent 实例（供同步执行与 Celery worker 共用）。"""
+    """构建带 AG-UI 回写器的 Chat Agent 实例（供同步执行与 Celery worker 共用）。
+
+    :param channel_type: 调用渠道类型（如 ``ChannelType.BKPLUGIN.value``），透传到 SDK 的
+        ``TokenUsageCallbackHandler`` metadata，便于 token usage 上报落表时区分渠道。
+    """
     user = username or ""
     event_handler = AGUISessionWriter(
         session_code=session_code,
@@ -112,6 +117,7 @@ def build_chat_agent_for_session(
         resource_manager=resource_manager,
         username=user,
         version=version,
+        channel_type=channel_type or ChannelType.BKPLUGIN.value,
     )
 
 
@@ -255,6 +261,7 @@ class BkpluginChat(BkpluginAgentRunner):
             username=self.username,
             version=ek.version,
             turn_id=turn_id,
+            channel_type=ChannelType.BKPLUGIN.value,
         )
         result = AgentExecutor(manager).execute_with_save(agent_instance, ek, session_code, turn_id=turn_id)
         return self._extract_chat_output(result)
@@ -293,6 +300,7 @@ class BkpluginChat(BkpluginAgentRunner):
             username=self.username,
             version=ek.version,
             turn_id=turn_id,
+            channel_type=ChannelType.BKPLUGIN.value,
         )
         AgentExecutor.run_agent_to_completion(agent, ek, session_code, manager, turn_id=turn_id)
 
@@ -364,6 +372,7 @@ class BkpluginFlow(BkpluginAgentRunner):
             flow_start_params=params,
             poll_interval=execute_payload.get("poll_interval") or agent_settings.FLOW_AGENT_POLL_INTERVAL,
             poll_timeout=execute_payload.get("poll_timeout") or agent_settings.FLOW_AGENT_POLL_TIMEOUT,
+            channel_type=ChannelType.BKPLUGIN.value,
         )
         # Flow 始终走 AG-UI 事件流；构造带 stream=True 的 ek 以触发 writer 会话状态收尾
         ek = build_execute_kwargs({**execute_payload, "stream": True}, self.username)
