@@ -259,12 +259,15 @@ class AgentExecutor:
         input_text: str,
         username: str,
         execute_kwargs: ExecuteKwargs,
-        channel_type: str,
+        channel_type: str | None = None,
         save_content: bool = True,
     ):
         """通过 ``thread_id`` 统一执行 ChatCompletion 并自动处理会话保存。
 
         供 builtin view 与 wxbot 共用，避免 HTTP 自调用。
+
+        :param channel_type: 调用渠道（如 ``api`` / ``popup`` / ``bkplugin`` / ``rtx``），
+            透传到 SDK 用于 token usage 渠道分类；不传时按空处理（不上报渠道）。
         """
         if not input_text:
             raise ValueError("input_text is required when using thread_id")

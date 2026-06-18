@@ -115,6 +115,8 @@ class ChannelType(str, enum.Enum):
     POPUP = "popup"
     # 蓝鲸插件调用渠道
     BKPLUGIN = "bkplugin"
+    # 企微机器人渠道（aidev_wxbot）
+    RTX = "rtx"
 
 
 class SessionsStatus(enum.Enum):

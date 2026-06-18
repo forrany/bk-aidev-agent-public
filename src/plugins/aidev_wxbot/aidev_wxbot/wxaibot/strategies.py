@@ -21,7 +21,7 @@ from logging import getLogger
 from typing import TYPE_CHECKING, Protocol
 
 from aidev_agent.config import settings as agent_settings
-from aidev_agent.enums import AgentBuildType, AgentType
+from aidev_agent.enums import AgentBuildType, AgentType, ChannelType
 from aidev_agent.services.agent import AgentInstanceFactory
 from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
 from aidev_bkplugin.services.agent_config import AgentConfigFetcher
@@ -87,6 +87,7 @@ class ChatAgentStrategy:
             input_text=content,
             username=username,
             execute_kwargs=execute_kwargs,
+            channel_type=ChannelType.RTX.value,
             save_content=True,
         )
         logger.info(f"stream_id:{stream_id} chat agent ok, session_code={session_code}")
