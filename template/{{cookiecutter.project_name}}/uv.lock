@@ -16,10 +16,10 @@ wheels = [
 
 [[package]]
 name = "ai-plugin"
-version = "2.1.0rc133"
+version = "2.1.0rc148"
 source = { editable = "." }
 dependencies = [
-    { name = "aidev-agent" },
+    { name = "aidev-agent", extra = ["opentelemetry"] },
     { name = "aidev-ai-blueking" },
     { name = "aidev-bkplugin" },
     { name = "aidev-wxbot" },
@@ -29,31 +29,14 @@ dependencies = [
     { name = "django" },
     { name = "django-celery-beat" },
     { name = "django-celery-results" },
+    { name = "drf-yasg" },
     { name = "gunicorn" },
     { name = "langchain-community" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-jaeger" },
-    { name = "opentelemetry-exporter-jaeger-proto-grpc" },
-    { name = "opentelemetry-exporter-jaeger-thrift" },
-    { name = "opentelemetry-exporter-otlp" },
-    { name = "opentelemetry-exporter-otlp-proto-common" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-instrumentation-celery" },
     { name = "opentelemetry-instrumentation-dbapi" },
     { name = "opentelemetry-instrumentation-django" },
-    { name = "opentelemetry-instrumentation-httpx" },
-    { name = "opentelemetry-instrumentation-langchain" },
     { name = "opentelemetry-instrumentation-logging" },
     { name = "opentelemetry-instrumentation-redis" },
-    { name = "opentelemetry-instrumentation-requests" },
-    { name = "opentelemetry-instrumentation-threading" },
-    { name = "opentelemetry-instrumentation-wsgi" },
-    { name = "opentelemetry-proto" },
-    { name = "opentelemetry-sdk" },
-    { name = "opentelemetry-semantic-conventions" },
-    { name = "opentelemetry-semantic-conventions-ai" },
     { name = "opentelemetry-util-http" },
     { name = "tiktoken" },
 ]
@@ -67,41 +50,24 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aidev-agent", specifier = "==2.1.0rc133" },
-    { name = "aidev-ai-blueking", specifier = "==2.1.4b26" },
-    { name = "aidev-bkplugin", specifier = "==2.1.0rc133" },
-    { name = "aidev-wxbot", specifier = "==2.1.0rc133" },
+    { name = "aidev-agent", extras = ["opentelemetry"], specifier = "==2.1.0rc148" },
+    { name = "aidev-ai-blueking", specifier = "==2.1.4" },
+    { name = "aidev-bkplugin", specifier = "==2.1.0rc148" },
+    { name = "aidev-wxbot", specifier = "==2.1.0rc148" },
     { name = "bk-plugin-framework", specifier = "==2.3.13" },
     { name = "bkapi-bk-apigateway", specifier = "==1.0.12" },
     { name = "celery", specifier = "==5.4.0" },
     { name = "django", specifier = ">=4.2.28,<5.0" },
     { name = "django-celery-beat", specifier = "==2.7.0" },
     { name = "django-celery-results", specifier = "==2.5.1" },
+    { name = "drf-yasg", specifier = "==1.21.11" },
     { name = "gunicorn", specifier = "==23.0.0" },
     { name = "langchain-community", specifier = ">=0.4.1" },
-    { name = "opentelemetry-api", specifier = "==1.33.1" },
-    { name = "opentelemetry-exporter-jaeger", specifier = "==1.21.0" },
-    { name = "opentelemetry-exporter-jaeger-proto-grpc", specifier = "==1.21.0" },
-    { name = "opentelemetry-exporter-jaeger-thrift", specifier = "==1.21.0" },
-    { name = "opentelemetry-exporter-otlp", specifier = "==1.33.1" },
-    { name = "opentelemetry-exporter-otlp-proto-common", specifier = "==1.33.1" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = "==1.33.1" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = "==1.33.1" },
-    { name = "opentelemetry-instrumentation", specifier = "==0.54b1" },
     { name = "opentelemetry-instrumentation-celery", specifier = "==0.54b1" },
     { name = "opentelemetry-instrumentation-dbapi", specifier = "==0.54b1" },
     { name = "opentelemetry-instrumentation-django", specifier = "==0.54b1" },
-    { name = "opentelemetry-instrumentation-httpx", specifier = "==0.54b1" },
-    { name = "opentelemetry-instrumentation-langchain", specifier = "==0.38.10" },
     { name = "opentelemetry-instrumentation-logging", specifier = "==0.54b1" },
     { name = "opentelemetry-instrumentation-redis", specifier = "==0.54b1" },
-    { name = "opentelemetry-instrumentation-requests", specifier = "==0.54b1" },
-    { name = "opentelemetry-instrumentation-threading", specifier = "==0.54b1" },
-    { name = "opentelemetry-instrumentation-wsgi", specifier = "==0.54b1" },
-    { name = "opentelemetry-proto", specifier = "==1.33.1" },
-    { name = "opentelemetry-sdk", specifier = "==1.33.1" },
-    { name = "opentelemetry-semantic-conventions", specifier = "==0.54b1" },
-    { name = "opentelemetry-semantic-conventions-ai", specifier = "==0.4.3" },
     { name = "opentelemetry-util-http", specifier = "==0.54b1" },
     { name = "tiktoken", specifier = "==0.11.0" },
 ]
@@ -115,7 +81,7 @@ dev = [
 
 [[package]]
 name = "aidev-agent"
-version = "2.1.0rc133"
+version = "2.1.0rc148"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ag-ui-protocol" },
@@ -145,41 +111,57 @@ dependencies = [
     { name = "werkzeug" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/09/7310a71ddb6cdf92e34d571a0a9be4621a73021fb03dc16648efdc31f16c/aidev_agent-2.1.0rc133.tar.gz", hash = "sha256:68d0131cc6cf7cb2d95d1a138c6c2db13fee8b3f147fb9bfeccacf049fa7428e", size = 587479, upload-time = "2026-06-17T07:07:56.627Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/60/e6563f22dd8dd852e9ebcb5af7dcf63fa5709be70c2875c8123793b5ea17/aidev_agent-2.1.0rc148.tar.gz", hash = "sha256:48f0aee7007727a909cae6b2a3fcc95aa2e9d0a1942dbad41437194c97874bde", size = 587694, upload-time = "2026-06-24T08:59:43.053Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/86/dee39c545ea3359a11d2f77cc7ff7fc65056f96e17abaafc06accfcc58f4/aidev_agent-2.1.0rc133-py3-none-any.whl", hash = "sha256:e517d533be0ed44be7c71ad1241aa18b0768937c43e4f1dba986309d09a9dacd", size = 447091, upload-time = "2026-06-17T07:07:52.638Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/0e/1b8190b2494883ee976b5576b0362fc07f040ae113001a98dd58bfe7f871/aidev_agent-2.1.0rc148-py3-none-any.whl", hash = "sha256:c10cd7f52e616a03e144dbb333afc9cf59867ef5d38d5a597c9975579ce61bde", size = 447123, upload-time = "2026-06-24T08:59:46.377Z" },
+]
+
+[package.optional-dependencies]
+opentelemetry = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-exporter-otlp-proto-common" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "opentelemetry-instrumentation-langchain" },
+    { name = "opentelemetry-instrumentation-threading" },
+    { name = "opentelemetry-sdk" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-semantic-conventions-ai" },
 ]
 
 [[package]]
 name = "aidev-ai-blueking"
-version = "2.1.4b26"
+version = "2.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aidev-agent" },
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/a4/a1e12a3626e62e32e34d60770a04240b49a362fe2c574796ee17838adfbc/aidev_ai_blueking-2.1.4b26.tar.gz", hash = "sha256:25c577ef64fb20827163af869665d537233887cbf0835671618c48b689e55ece", size = 3886099, upload-time = "2026-06-17T04:09:54.55Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/46/d36b0afc1646674a4d6c2e86ad9d1fc0c37c4d3a50f272d92be38e3857b1/aidev_ai_blueking-2.1.4.tar.gz", hash = "sha256:144f91bc2b4514451a7572e3f41cace7e426eb1e95f8f135ad1870f5f04b3a9b", size = 3886548, upload-time = "2026-06-17T08:01:52.524Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/9e/4db6e7ebac3e8714838301d27460ea5d474ab256a545afe4fe595a053a03/aidev_ai_blueking-2.1.4b26-py3-none-any.whl", hash = "sha256:28cdcc326f0b19c5daedc000e40feda3887500a03d45a8d764b360102c350e29", size = 3938982, upload-time = "2026-06-17T04:09:52.747Z" },
+    { url = "https://files.pythonhosted.org/packages/37/e7/d4ecc8e880ed34ae9f91da4ed9fb4afc0efac5e31198303cec653835ac1e/aidev_ai_blueking-2.1.4-py3-none-any.whl", hash = "sha256:60e279212f246bbdaa9da7c5521d39726f9a266d0f05bfe84cf9c0c4b94f983f", size = 3939515, upload-time = "2026-06-17T08:01:50.955Z" },
 ]
 
 [[package]]
 name = "aidev-bkplugin"
-version = "2.1.0rc133"
+version = "2.1.0rc148"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aidev-agent" },
     { name = "blueapps" },
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/16/88/a14119f14e64e0318678a9e7414b763892fee5946dcb886b6b5075789634/aidev_bkplugin-2.1.0rc133.tar.gz", hash = "sha256:19ead5ac7d7b994f99e64f36041b5809e6a87e34b36c49016f11f7aa5ee02db8", size = 60824, upload-time = "2026-06-17T07:08:01.064Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/a1/85373030ccedc3d8460fa2f706e00c65b2a33e4670b77e8cc682f3f37aef/aidev_bkplugin-2.1.0rc148.tar.gz", hash = "sha256:df3b399a8593ecf795c30ee7d7d7fa4d688f1f3992d4d5efc8855c88a367b603", size = 60791, upload-time = "2026-06-24T08:59:51.093Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/63/9aa78ba29a4ed8a145062ef44eeefe9affa399a58681a40e8f70942d8f56/aidev_bkplugin-2.1.0rc133-py3-none-any.whl", hash = "sha256:a89f3623733670f624d881fd8334cb4bc34185609f10f60bc9288913b2b051ac", size = 68517, upload-time = "2026-06-17T07:08:03.09Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/3b/c27464f3d3f45afd81b1c330bad1abe63338d18892eedb5bc8c1fb30c040/aidev_bkplugin-2.1.0rc148-py3-none-any.whl", hash = "sha256:1ea3d7956aaee92e8cb65258ae444771f3c46fe5175a01340de1b39c2bb52d72", size = 68455, upload-time = "2026-06-24T08:59:52.594Z" },
 ]
 
 [[package]]
 name = "aidev-wxbot"
-version = "2.1.0rc133"
+version = "2.1.0rc148"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aidev-bkplugin" },
@@ -191,9 +173,9 @@ dependencies = [
     { name = "requests" },
     { name = "stackprinter" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/82/05/36b641b6fea48e7a0068cef1d86bebfad388a02fd6a59303d7f6e74a11a4/aidev_wxbot-2.1.0rc133.tar.gz", hash = "sha256:c537ff2b1e86e6642ba23a4366d957a12235c523318efdf1d33a6a8aa6872fac", size = 161179, upload-time = "2026-06-17T07:08:09.061Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/e1/7217dd7530d45892388c41e5f2b0eb657c82aac1d58ada8c788f6159493f/aidev_wxbot-2.1.0rc148.tar.gz", hash = "sha256:ce8629a38f74e4e2141031e45bc24ddb76afc80b35b6e9d0b14a1af51debba1a", size = 161196, upload-time = "2026-06-24T08:59:58.509Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/44/3dae7d3b09b4a20bb994638f5fe634cd719109ff01888b91db824c724b32/aidev_wxbot-2.1.0rc133-py3-none-any.whl", hash = "sha256:e0b9580e6ab7b3f4c06550326d5535dda43e65587cbefbde7f4115a3ca140570", size = 39577, upload-time = "2026-06-17T07:08:10.47Z" },
+    { url = "https://files.pythonhosted.org/packages/58/ef/2dc03fbb4b1795cd0706055133fb391b35c2c73cf43ed213cd7d8d750956/aidev_wxbot-2.1.0rc148-py3-none-any.whl", hash = "sha256:0e26579400dcf7dddac29211aefff1bc2a6a241d0eba41df9b8a4f02607162a4", size = 39603, upload-time = "2026-06-24T08:59:59.925Z" },
 ]
 
 [[package]]
@@ -894,6 +876,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5e/0e/a4f50d83e76cbe797eda88fc0083c8ca970cfa362b5586359ef06ec6f70a/drf_spectacular-0.29.0.tar.gz", hash = "sha256:0a069339ea390ce7f14a75e8b5af4a0860a46e833fd4af027411a3e94fc1a0cc", size = 241722, upload-time = "2025-11-02T03:40:26.348Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/d9/502c56fc3ca960075d00956283f1c44e8cafe433dada03f9ed2821f3073b/drf_spectacular-0.29.0-py3-none-any.whl", hash = "sha256:d1ee7c9535d89848affb4427347f7c4a22c5d22530b8842ef133d7b72e19b41a", size = 105433, upload-time = "2025-11-02T03:40:24.823Z" },
+]
+
+[[package]]
+name = "drf-yasg"
+version = "1.21.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+    { name = "djangorestframework" },
+    { name = "inflection" },
+    { name = "packaging" },
+    { name = "pytz" },
+    { name = "pyyaml" },
+    { name = "uritemplate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/19/8aa1eac9a67aaa09ff9761c6aec7878fb6d7bdbac59a9398c3dda2cd9d9d/drf_yasg-1.21.11.tar.gz", hash = "sha256:0190b3de884aa593a39c75e6daba2ae69f285f0691de1eb0e3f4c6307faa1817", size = 4599786, upload-time = "2025-09-26T22:18:27.333Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/ea/c94362b34f3d81ac2cf5e3e955773f7d6c3813866bdc3869480c230827b7/drf_yasg-1.21.11-py3-none-any.whl", hash = "sha256:ec741f313b3b5f0b5fc8c1e1b6ed323c34f1f492a41fe7cc7421d8c6de9753e4", size = 4291885, upload-time = "2025-09-26T22:18:25.506Z" },
 ]
 
 [[package]]

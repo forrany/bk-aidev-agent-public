@@ -72,7 +72,7 @@ def create_repo_fixture(repo_root: Path) -> None:
         [project]
         version = "1.1.0rc5"
         dependencies = [
-            "aidev-agent==1.1.0b12",
+            "aidev-agent[opentelemetry]==1.1.0b12",
             "aidev-bkplugin==1.1.0b9",
             "aidev-wxbot==1.1.0b2",
             "aidev-ai-blueking==2.0.0.dev31",
@@ -82,7 +82,7 @@ def create_repo_fixture(repo_root: Path) -> None:
     write_file(
         repo_root / "template/{{cookiecutter.project_name}}/requirements.txt",
         """
-        aidev-agent==1.1.0b13
+        aidev-agent[opentelemetry]==1.1.0b13
         aidev-ai-blueking==2.0.0.dev31
         aidev-bkplugin==1.1.0b9
         aidev-wxbot==1.1.0b2
@@ -145,7 +145,7 @@ def test_update_repo_versions_updates_all_target_files(tmp_path):
     requirements_text = (repo_root / "template/{{cookiecutter.project_name}}/requirements.txt").read_text(
         encoding="utf-8"
     )
-    assert "aidev-agent==2.0.0b1" in requirements_text
+    assert "aidev-agent[opentelemetry]==2.0.0b1" in requirements_text
     # 由于 commit: 54a25435a9eb22a5c3181daf406067716543f9ba 这个提交表示 aidev-ai-blueking 不再由统一 version 提交，不要删除本注释
     # assert "aidev-ai-blueking==2.0.0b1" in requirements_text
     assert "aidev-bkplugin==2.0.0b1" in requirements_text
@@ -183,11 +183,11 @@ def test_main_updates_only_specified_component_versions(tmp_path, monkeypatch, c
         encoding="utf-8"
     )
     template_text = (repo_root / "template/{{cookiecutter.project_name}}/pyproject.toml").read_text(encoding="utf-8")
-    assert '"aidev-agent==1.1.0b12"' in template_text
+    assert '"aidev-agent[opentelemetry]==1.1.0b12"' in template_text
     assert '"aidev-ai-blueking==3.0.0rc1"' in template_text
     requirements_text = (repo_root / "template/{{cookiecutter.project_name}}/requirements.txt").read_text(
         encoding="utf-8"
     )
-    assert "aidev-agent==1.1.0b13" in requirements_text
+    assert "aidev-agent[opentelemetry]==1.1.0b13" in requirements_text
     assert "aidev-ai-blueking==3.0.0rc1" in requirements_text
     assert "Error:" not in capsys.readouterr().out

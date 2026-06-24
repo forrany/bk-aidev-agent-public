@@ -30,7 +30,7 @@ VERSION_RULES: list[tuple[str, str, str]] = [
     ("template/{{cookiecutter.project_name}}/pyproject.toml", r'^version = "[^"]*"$', "template"),
     (
         "template/{{cookiecutter.project_name}}/pyproject.toml",
-        r'"aidev-agent==[^"]*"',
+        r'"aidev-agent(?P<agent_extras>\[[^"]+\])?==[^"]*"',
         "agent",
     ),
     (
@@ -50,7 +50,7 @@ VERSION_RULES: list[tuple[str, str, str]] = [
     ),
     (
         "template/{{cookiecutter.project_name}}/requirements.txt",
-        r'^"?aidev-agent==.*"?$',
+        r'^"?aidev-agent(?P<agent_extras>\[[^\]"]+\])?==.*"?$',
         "agent",
     ),
     (
@@ -101,6 +101,10 @@ def replacement_for(pattern: str, version: str) -> str:
         return f'"aidev-agent>={version}"'
     if "aidev-bkplugin>=" in pattern:
         return f'"aidev-bkplugin>={version}"'
+    if "aidev-agent(?P<agent_extras>" in pattern:
+        if pattern.startswith('^"?'):
+            return rf"aidev-agent\g<agent_extras>=={version}"
+        return rf'"aidev-agent\g<agent_extras>=={version}"'
     if pattern.startswith(("^aidev-agent==", '^"?aidev-agent==')):
         return f"aidev-agent=={version}"
     if pattern.startswith(("^aidev-ai-blueking==", '^"?aidev-ai-blueking==')):

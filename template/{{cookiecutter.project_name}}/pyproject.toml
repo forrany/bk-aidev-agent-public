@@ -1,14 +1,14 @@
 [project]
 name = "ai-plugin"
-version = "2.1.0rc133"
+version = "2.1.0rc148"
 description = ""
 readme = "readme.md"
 authors = [{ name = "blueking" }]
 requires-python = "~=3.11.9"
 dependencies = [
-    "aidev-agent==2.1.0rc133",
-    "aidev-bkplugin==2.1.0rc133",
-    "aidev-wxbot==2.1.0rc133",
+    "aidev-agent[opentelemetry]==2.1.0rc148",
+    "aidev-bkplugin==2.1.0rc148",
+    "aidev-wxbot==2.1.0rc148",
     "aidev-ai-blueking==2.1.4",
     "bk-plugin-framework==2.3.13",
     "bkapi-bk-apigateway==1.0.12",
@@ -16,33 +16,16 @@ dependencies = [
     "django-celery-beat==2.7.0",
     "django-celery-results==2.5.1",
     "gunicorn==23.0.0",
-    "opentelemetry-api==1.33.1",
-    "opentelemetry-exporter-jaeger==1.21.0",
-    "opentelemetry-exporter-jaeger-proto-grpc==1.21.0",
-    "opentelemetry-exporter-jaeger-thrift==1.21.0",
-    "opentelemetry-exporter-otlp==1.33.1",
-    "opentelemetry-exporter-otlp-proto-common==1.33.1",
-    "opentelemetry-exporter-otlp-proto-grpc==1.33.1",
-    "opentelemetry-exporter-otlp-proto-http==1.33.1",
-    "opentelemetry-instrumentation==0.54b1",
     "opentelemetry-instrumentation-celery==0.54b1",
     "opentelemetry-instrumentation-dbapi==0.54b1",
     "opentelemetry-instrumentation-django==0.54b1",
-    "opentelemetry-instrumentation-httpx==0.54b1",
-    "opentelemetry-instrumentation-threading==0.54b1",
-    "opentelemetry-instrumentation-langchain==0.38.10",
     "opentelemetry-instrumentation-logging==0.54b1",
     "opentelemetry-instrumentation-redis==0.54b1",
-    "opentelemetry-instrumentation-requests==0.54b1",
-    "opentelemetry-instrumentation-wsgi==0.54b1",
-    "opentelemetry-proto==1.33.1",
-    "opentelemetry-sdk==1.33.1",
-    "opentelemetry-semantic-conventions==0.54b1",
-    "opentelemetry-semantic-conventions-ai==0.4.3",
     "opentelemetry-util-http==0.54b1",
     "tiktoken==0.11.0",
     "langchain-community>=0.4.1",
     "django>=4.2.28,<5.0",
+    "drf-yasg==1.21.11",
 ]
 
 [tool.pdm.build]
