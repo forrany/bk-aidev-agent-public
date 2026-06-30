@@ -113,6 +113,46 @@ class SessionManager:
         )
         return result.get("data") or {}
 
+    def get_flow_info(self, session_code: str) -> dict:
+        """读取 ``session_property.flow_info``（流程智能体执行信息），不存在时返回空 dict。"""
+        session_property = self.retrieve_session(session_code).get("session_property") or {}
+        return session_property.get("flow_info") or {}
+
+    def set_flow_resume_pending(
+        self,
+        session_code: str,
+        pending: bool,
+        *,
+        action: str | None = None,
+    ) -> None:
+        """设置/清除 flow agent 续流标记 ``session_property.flow_info.resume_pending``。
+
+        采用 read-modify-write：先取出整个 ``session_property``，仅叠加
+        ``flow_info.resume_pending``，保留 ``task_id`` / ``flow_id`` 等已有字段后整体回写，
+        避免 PUT 覆盖语义清掉其他元数据。
+
+        ``action`` 用于记录本次置位/清除对应的续流动作（如 ``"retry"`` / ``"skip"``）：
+        - ``pending=True`` 且传入 ``action``：写入 ``flow_info.resume_action``，供下一次
+          ``chat_completion`` 续流时构造 ``flow_agent_restart`` / ``flow_agent_update`` 事件。
+        - ``pending=False`` 默认清空 ``resume_action``（一次性消费语义），保持与
+          ``resume_pending`` 状态机一致；若显式希望保留旧值，可传 ``action=""``（None 走默认清空）。
+        """
+        session_property = self.retrieve_session(session_code).get("session_property") or {}
+        flow_info = session_property.get("flow_info") or {}
+        flow_info["resume_pending"] = pending
+        if pending:
+            if action is not None:
+                flow_info["resume_action"] = action
+        else:
+            # 清除续流标记时同步清空 action，避免下一轮被误读
+            flow_info["resume_action"] = ""
+        session_property["flow_info"] = flow_info
+        self._client().api.update_chat_session(
+            path_params={"session_code": session_code},
+            json={"session_property": session_property},
+            headers=self._user_headers(),
+        )
+
     def save_chat_history(self, session_code: str, chat_history: Iterable[ChatPrompt] | None) -> None:
         """按顺序持久化 ``chat_history``；部分失败时记录错误但不中断循环。"""
         errors: list[tuple[int, str]] = []

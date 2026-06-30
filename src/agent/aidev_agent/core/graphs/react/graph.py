@@ -19,12 +19,13 @@ to the current version of the project delivered to anyone in the future.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated, Callable, List, Optional, Sequence, Tuple, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Dict, List, Optional, Sequence, Tuple, get_type_hints
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
 )
+from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.runnables import RunnableConfig
@@ -37,6 +38,7 @@ from langgraph.constants import END, START
 from langgraph.graph import add_messages
 from langgraph.graph.state import StateGraph
 from langgraph.store.memory import InMemoryStore
+from langgraph.types import Command, interrupt
 from typing_extensions import Literal, TypedDict, TypeVar
 
 from aidev_agent.config import settings
@@ -52,9 +54,16 @@ from aidev_agent.core.nodes.model import ModelNodeSettings
 from aidev_agent.core.nodes.model import build_model_node as std_make_model_node
 from aidev_agent.core.nodes.pv import add_pv_info, make_pv_node
 from aidev_agent.core.nodes.tool import ToolNodeSettings, build_tool_node
+from aidev_agent.core.nodes.tool.approval_wrapper import (
+    get_tool_call_approval_record_from_state,
+    identify_message_approval_targets,
+    request_approval_decision,
+    update_tool_call_approval_record,
+)
 from aidev_agent.core.tools.a2a_tools.bkai_backend import BkaiBackend
 from aidev_agent.core.tools.a2a_tools.local_backend import LocalBackend
 from aidev_agent.core.tools.a2a_tools.provider import AgentBackendResolver, get_agent_tools
+from aidev_agent.core.tools.add_image_to_chat_context import add_image_to_chat_context
 from aidev_agent.core.tools.runtime_tools import get_client_tools_with_runtime
 from aidev_agent.core.tools.runtime_tools.e2b_backend import E2BSandboxBackend
 from aidev_agent.core.tools.runtime_tools.local_backend import FilesystemBackend
@@ -74,6 +83,8 @@ if TYPE_CHECKING:
 
     from aidev_agent.core.tools.a2a_tools.types import AgentSpec
 
+from aidev_agent.core.ag_ui.types import LangGraphEventTypes
+from aidev_agent.packages.resource_manager.registry import resource_manager
 
 ResponseT = TypeVar("ResponseT")
 
@@ -790,18 +801,15 @@ class ReActAgentBuilder:
         langchain_middleware: Sequence[AgentMiddleware],
         node_options: ToolNodeSettings = None,
     ):
-        # 处理执行时的包装器
         middleware_w_wrap_tool_call = [
-            m
+            m.wrap_tool_call
             for m in langchain_middleware
             if m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
-            or m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
         ]
         middleware_w_awrap_tool_call = [
-            m
+            m.awrap_tool_call
             for m in langchain_middleware
             if m.__class__.awrap_tool_call is not AgentMiddleware.awrap_tool_call
-            or m.__class__.wrap_tool_call is not AgentMiddleware.wrap_tool_call
         ]
         if tools:
             return build_tool_node(
@@ -905,11 +913,90 @@ class ReActAgentBuilder:
 
         last_message = messages[-1]
 
-        # 检查最后一条消息是否是 AIMessage 并且包含 tool_calls
         if isinstance(last_message, AIMessage) and last_message.tool_calls:
             return "pv_node"
 
         return "end"
+
+    @staticmethod
+    def _should_continue_with_approval(state: dict) -> "Literal['approval_check', 'end']":
+        """条件路由函数：决定 model 节点后的下一步（带审批检查）。"""
+        messages = state.get("messages", [])
+        if not messages:
+            return "end"
+
+        last_message = messages[-1]
+
+        if isinstance(last_message, AIMessage) and last_message.tool_calls:
+            return "approval_check"
+
+        return "end"
+
+    @staticmethod
+    def _make_approval_check_node(tools: List[BaseTool]):
+        """创建审批检查节点函数。
+
+        在 model 节点之后、tools 节点之前检查工具是否需要审批。
+        如果需要审批，会基于 tool_call 逐个识别审批目标并写回消息级审批状态。
+        审批通过的 tool_call 继续执行，审批拒绝的 tool_call 由 tools 节点包装器返回拒绝结果。
+        """
+        tool_map = {tool.name: tool for tool in tools}
+
+        def _check(state: dict, config: RunnableConfig) -> Command:
+            messages = state.get("messages", [])
+            if not messages:
+                return Command(goto="end")
+
+            last_message = messages[-1]
+
+            if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
+                return Command(goto="end")
+
+            _cfg_execute_kwargs = config.get("configurable", {}).get("execute_kwargs")
+            _is_resuming = bool(getattr(_cfg_execute_kwargs, "resume", None)) if _cfg_execute_kwargs else False
+
+            approval_targets = identify_message_approval_targets(last_message.tool_calls, tool_map)
+            if not approval_targets:
+                return Command(goto="pv_node")
+
+            updated_message = last_message
+            for target in approval_targets:
+                existing_record = get_tool_call_approval_record_from_state(state, target.target_id)
+                existing_status = existing_record.get("status") if isinstance(existing_record, dict) else None
+
+                if existing_status == "approved":
+                    continue
+                if existing_status == "rejected":
+                    continue
+
+                interrupt_holder: dict[str, dict] = {}
+
+                def _emit_interrupt(payload: dict[str, Any]) -> None:
+                    interrupt_holder["payload"] = payload
+                    dispatch_custom_event(
+                        LangGraphEventTypes.OnInterrupt.value,
+                        payload,
+                        config=config,
+                    )
+
+                approved = request_approval_decision(
+                    target,
+                    execute_kwargs=_cfg_execute_kwargs,
+                    is_resuming=_is_resuming,
+                    on_interrupt=_emit_interrupt,
+                    interrupt_payload=existing_record.get("interrupt") if isinstance(existing_record, dict) else None,
+                )
+                status = "approved" if approved else "rejected"
+                updated_message = update_tool_call_approval_record(
+                    updated_message,
+                    target,
+                    status=status,
+                    interrupt_payload=interrupt_holder.get("payload")
+                    or (existing_record.get("interrupt") if isinstance(existing_record, dict) else None),
+                )
+            return Command(update={"messages": [updated_message]}, goto="pv_node")
+
+        return _check
 
     def _build_graph(
         self,
@@ -928,6 +1015,7 @@ class ReActAgentBuilder:
         model_node,
         tool_node,
         pv_node=None,
+        tools: "List[BaseTool] | None" = None,
     ) -> Tuple["Runnable", RunnableConfig]:
         """构建 LangGraph 图。
 
@@ -977,15 +1065,31 @@ class ReActAgentBuilder:
         if tool_node:
             graph.add_node("pv_node", pv_node)
             graph.add_node("tools", tool_node)
-            # model → (should_continue) → pv_node / end
-            graph.add_conditional_edges(
-                "model",
-                self._should_continue,
-                {
-                    "pv_node": "pv_node",
-                    "end": END,
-                },
-            )
+            # 如果提供了 tools 列表，添加 approval_check 节点（审批闭环）
+            if tools:
+                approval_check_func = self._make_approval_check_node(tools)
+                graph.add_node("approval_check", approval_check_func)
+                # model → (should_continue) → approval_check / end
+                graph.add_conditional_edges(
+                    "model",
+                    self._should_continue_with_approval,
+                    {
+                        "approval_check": "approval_check",
+                        "end": END,
+                    },
+                )
+                # approval_check 内部通过 Command(goto=...) 决定下一步：
+                # 审批通过 → pv_node（再到 tools）；拒绝 → model；无需审批 → pv_node
+            else:
+                # model → (should_continue) → pv_node / end
+                graph.add_conditional_edges(
+                    "model",
+                    self._should_continue,
+                    {
+                        "pv_node": "pv_node",
+                        "end": END,
+                    },
+                )
             # pv_node → tools → model (形成 ReAct 循环)
             graph.add_edge("pv_node", "tools")
             graph.add_edge("tools", "model")
@@ -1106,6 +1210,7 @@ class ReActAgentBuilder:
             model_node=model_node,
             tool_node=tool_node,
             pv_node=pv_node,
+            tools=tools if tools else None,
         )
 
         # 添加适配器

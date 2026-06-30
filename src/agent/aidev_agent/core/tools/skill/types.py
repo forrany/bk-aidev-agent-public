@@ -22,6 +22,7 @@ class SkillOptions(TypedDict):
     allowed_tools: NotRequired[list[str]]
     instructions: NotRequired[str]
     runtime: NotRequired[str]
+    approval: NotRequired[dict]
 
 
 @runtime_checkable

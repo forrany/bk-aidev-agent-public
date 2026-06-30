@@ -6,9 +6,23 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
+from collections.abc import Iterator
+
 from ag_ui.core import (
     BinaryInputContent,
     TextInputContent,
+)
+from ag_ui.core.events import (
+    BaseEvent,
+    EventType,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+    ThinkingTextMessageContentEvent,
+    ThinkingTextMessageEndEvent,
+    ThinkingTextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
 )
 from langchain_core.messages import (
     AIMessage,
@@ -18,8 +32,10 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from .events import ExtendToolCallResultEvent, ExtendToolCallStartEvent
 from .types import (
     ActivityMessage,
+    InterruptMessage,
     LangGraphReasoning,
     ReasoningMessage,
     SchemaKeys,
@@ -33,6 +49,9 @@ from .types import (
 )
 from .types import (
     ExtendFunctionCall as AGUIFunctionCall,
+)
+from .types import (
+    ExtendInterruptMessage as AGUIInterruptMessage,
 )
 from .types import (
     ExtendMessage as AGUIMessage,
@@ -187,6 +206,17 @@ def langchain_messages_to_agui(messages: list[BaseMessage]) -> list[AGUIMessage]
                     duration=message.additional_kwargs.get("duration", None),
                 )
             )
+        elif isinstance(message, InterruptMessage):
+            # 必须在 ActivityMessage 分支之前判断：InterruptMessage 继承 ActivityMessage，
+            # 否则会被上一分支提前命中。还原为 role=interrupt 的中断/审批卡片，
+            # 供 MESSAGES_SNAPSHOT 在前端展示。
+            agui_messages.append(
+                AGUIInterruptMessage(
+                    id=str(message.id),
+                    content=message.content,
+                    name=message.name,
+                )
+            )
         elif isinstance(message, ActivityMessage):
             agui_messages.append(
                 AGUIActivityMessage(
@@ -285,6 +315,18 @@ def agui_messages_to_langchain(messages: list[AGUIMessage]) -> list[BaseMessage]
                     id=message.id,
                     content=message.content,
                     tool_call_id=message.tool_call_id,
+                )
+            )
+        elif role == PromptRole.INTERRUPT.value:
+            # 前端历史回放中带入的 role=interrupt 卡片：还原为 InterruptMessage
+            # （继承 ActivityMessage），既进入 state["messages"] 供 MESSAGES_SNAPSHOT
+            # 重建与前端展示，又会被 basic_middleware 的 isinstance(ActivityMessage)
+            # 过滤剔除，不会进入 LLM 输入。
+            langchain_messages.append(
+                InterruptMessage(
+                    id=message.id,
+                    content=message.content if isinstance(message.content, (dict, list)) else {},
+                    name=message.name,
                 )
             )
         elif role in PromptRole.skip_roles():
@@ -474,3 +516,102 @@ def make_json_safe(value: Any, _seen: set[int] | None = None) -> Any:
 def get_reasoning_message_id(message_id: str) -> str:
     """对于思考的内容,需要更新一下messageId格式"""
     return f"reasoning-{message_id}"
+
+
+def langchain_messages_to_streaming_events(
+    messages: list[BaseMessage],
+) -> Iterator[BaseEvent]:
+    """把 LangChain 消息列表转换为「与正常流式同构」的 AG-UI 增量事件序列。
+
+    转换规则：
+      - ``AIMessage``：
+          1. 若 ``additional_kwargs.reasoning_content`` 存在，先发 ``reasoning``
+             custom event（沿用 ``ReasoningMessage`` 同源字段，但走流式 START/END
+             序列）；
+          2. 若 ``content`` 非空，发 ``TEXT_MESSAGE_START`` + 单条
+             ``TEXT_MESSAGE_CONTENT``（整段 delta） + ``TEXT_MESSAGE_END``；
+          3. 若 ``tool_calls`` 非空，对每个 tool_call 发 ``TOOL_CALL_START`` +
+             ``TOOL_CALL_ARGS``（整段 args JSON） + ``TOOL_CALL_END``。
+      - ``ToolMessage``：发一条 ``TOOL_CALL_RESULT``，``tool_call_id`` 与
+        ``message_id`` 保留 DB 原值，``content`` 错误时通过 ``is_error`` 标记。
+      - ``HumanMessage`` / ``SystemMessage`` / ``InterruptMessage`` /
+        ``ActivityMessage``：不下发（前端历史已持有，且这些类型没有"逐条增量"
+        语义；resume 终态场景只补 worker 续流新写的消息）。
+    """
+    for message in messages:
+        if isinstance(message, AIMessage):
+            yield from _ai_message_to_events(message)
+        elif isinstance(message, ToolMessage):
+            yield _tool_message_to_event(message)
+
+
+def _ai_message_to_events(message: AIMessage) -> Iterator[BaseEvent]:
+    """把单条 AIMessage 展开为 reasoning / text / tool_call 事件序列"""
+    message_id = str(message.id) if message.id else str(uuid.uuid4())
+
+    # 1) reasoning（如有），与 AGUIAgent 流式路径产出形态保持同源（START/END 配对）
+    reasoning_content = (message.additional_kwargs or {}).get("reasoning_content")
+    if reasoning_content:
+        yield ThinkingTextMessageStartEvent(
+            type=EventType.THINKING_TEXT_MESSAGE_START,
+        )
+        yield ThinkingTextMessageContentEvent(
+            type=EventType.THINKING_TEXT_MESSAGE_CONTENT,
+            delta=stringify_if_needed(reasoning_content),
+        )
+        yield ThinkingTextMessageEndEvent(
+            type=EventType.THINKING_TEXT_MESSAGE_END,
+        )
+
+    # 2) text 内容（非空才发）：保留 DB 中的 message_id，前端按 id 合并不会产生新卡片
+    content_text = stringify_if_needed(resolve_message_content(message.content))
+    if content_text:
+        yield TextMessageStartEvent(
+            type=EventType.TEXT_MESSAGE_START,
+            message_id=message_id,
+            role="assistant",
+        )
+        yield TextMessageContentEvent(
+            type=EventType.TEXT_MESSAGE_CONTENT,
+            message_id=message_id,
+            delta=content_text,
+        )
+        yield TextMessageEndEvent(
+            type=EventType.TEXT_MESSAGE_END,
+            message_id=message_id,
+        )
+
+    # 3) tool_calls（如有）：对每个 tool_call 输出完整的 START/ARGS/END 三元组
+    for tc in message.tool_calls or []:
+        tc_id = str(tc.get("id") or uuid.uuid4())
+        yield ExtendToolCallStartEvent(
+            type=EventType.TOOL_CALL_START,
+            tool_call_id=tc_id,
+            tool_call_name=tc.get("name", ""),
+            parent_message_id=message_id,
+        )
+        yield ToolCallArgsEvent(
+            type=EventType.TOOL_CALL_ARGS,
+            tool_call_id=tc_id,
+            delta=json.dumps(tc.get("args", {})),
+        )
+        yield ToolCallEndEvent(
+            type=EventType.TOOL_CALL_END,
+            tool_call_id=tc_id,
+        )
+
+
+def _tool_message_to_event(message: ToolMessage) -> BaseEvent:
+    """把单条 ToolMessage 展开为一条 TOOL_CALL_RESULT 事件"""
+    content = stringify_if_needed(resolve_message_content(message.content))
+    is_error = getattr(message, "status", None) == "error"
+    return ExtendToolCallResultEvent(
+        type=EventType.TOOL_CALL_RESULT,
+        tool_call_id=message.tool_call_id,
+        message_id=str(message.id) if message.id else str(uuid.uuid4()),
+        content=content if not is_error else "",
+        role="tool",
+        is_error=is_error or None,
+        duration=(message.additional_kwargs or {}).get("duration"),
+    )
+

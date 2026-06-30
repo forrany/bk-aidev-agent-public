@@ -467,6 +467,55 @@ class TestReActAgentBuilder:
         tool_names = [t.name for t in captured_tools["tools"]]
         assert "activate_skill" in tool_names
 
+    def test_build_activate_skill_tool_carries_skill_approval_map(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        llm = MagicMock()
+        llm.model_name = "gpt-4o"
+
+        provider = MagicMock()
+        provider.discover.return_value = [
+            {
+                "name": "approved-skill",
+                "description": "d",
+                "path": "api://11/latest",
+                "approval": {
+                    "enabled": True,
+                    "approval_strategy_id": "s1",
+                    "skill_id": 11,
+                    "skill_name": "approved-skill",
+                    "skill_code": "approved-skill",
+                },
+            }
+        ]
+        provider.fetch_instructions.return_value = "body"
+
+        captured_tools = {}
+
+        def _fake_make_model_node(*, llm, non_thinking_llm, tools, node_options):
+            captured_tools["tools"] = tools
+            return MagicMock()
+
+        with (
+            patch("aidev_agent.core.graphs.react.graph.std_make_model_node", new=_fake_make_model_node),
+            patch(
+                "aidev_agent.core.graphs.react.graph.ReActAgentBuilder._build_graph",
+                return_value=(MagicMock(), {}),
+            ),
+        ):
+            (
+                ReActAgentBuilder()
+                .set_llm(llm)
+                .set_enable_skills(True)
+                .set_skill_sources([provider])
+                .build()
+            )
+
+        activate_tool = next(t for t in captured_tools["tools"] if t.name == "activate_skill")
+        approval_map = (activate_tool.metadata or {}).get("skill_approval_map", {})
+        assert approval_map["approved-skill"]["target"]["type"] == "skill"
+        assert approval_map["approved-skill"]["approval_strategy_id"] == "s1"
+
     def test_build_runtime_tools_injected(self, tmp_path, monkeypatch):
         """enable_runtime_tool=True 时应注入 7 个运行时客户端工具"""
         monkeypatch.chdir(tmp_path)
@@ -736,11 +785,10 @@ class TestReActAgentBuilder:
         # mw_no should not appear in wrappers
         assert mw_no not in kw["wrappers"]
         assert mw_no not in kw["async_wrappers"]
-        # mw_wrap and mw_awrap should appear in both wrappers and async_wrappers
-        assert mw_wrap in kw["wrappers"]
-        assert mw_awrap in kw["wrappers"]
-        assert mw_wrap in kw["async_wrappers"]
-        assert mw_awrap in kw["async_wrappers"]
+        assert mw_wrap.wrap_tool_call in kw["wrappers"]
+        assert mw_awrap.awrap_tool_call in kw["async_wrappers"]
+        assert mw_awrap.wrap_tool_call not in kw["wrappers"]
+        assert mw_wrap.awrap_tool_call not in kw["async_wrappers"]
 
     def test_prepare_agent_tool_node_returns_none_for_empty_tools(self):
         """tools 为空时 _prepare_agent_tool_node 应返回 None"""
@@ -762,6 +810,190 @@ class TestReActAgentBuilder:
 
     def test_should_continue_returns_end_for_empty_messages(self):
         assert ReActAgentBuilder._should_continue({"messages": []}) == "end"
+
+    def test_approval_check_processes_all_tool_calls(self):
+        """approval_check 不应只处理第一个需要审批的 tool_call。"""
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "approval": {"approval_enabled": True},
+        }
+        try:
+            approval_check = ReActAgentBuilder._make_approval_check_node([calculator])
+            state = {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        id="ai_approval_all",
+                        tool_calls=[
+                            {"id": "call_1", "name": "calculator", "args": {"a": 1, "b": 2}, "type": "tool_call"},
+                            {"id": "call_2", "name": "calculator", "args": {"a": 3, "b": 4}, "type": "tool_call"},
+                        ],
+                    )
+                ]
+            }
+
+            with patch(
+                "aidev_agent.core.graphs.react.graph.request_approval_decision",
+                side_effect=[True, False],
+            ) as mock_request:
+                command = approval_check(state, {"configurable": {"execute_kwargs": MagicMock(resume=None)}})
+
+            assert command.goto == "tools"
+            updated_messages = command.update["messages"]
+            assert len(updated_messages) == 1
+            updated_ai_message = updated_messages[0]
+            approval_state = updated_ai_message.additional_kwargs["tool_approval"]
+            assert approval_state["call_1"]["status"] == "approved"
+            assert approval_state["call_2"]["status"] == "rejected"
+            assert mock_request.call_count == 2
+        finally:
+            calculator.metadata = original_metadata
+
+    def test_approval_check_skips_decided_calls_and_continues_pending_one(self):
+        """已决策 tool_call 不应重复审批，后续 pending call 应继续处理。"""
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "approval": {"approval_enabled": True},
+        }
+        try:
+            approval_check = ReActAgentBuilder._make_approval_check_node([calculator])
+            state = {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        id="ai_approval_resume",
+                        tool_calls=[
+                            {"id": "call_1", "name": "calculator", "args": {"a": 1, "b": 2}, "type": "tool_call"},
+                            {"id": "call_2", "name": "calculator", "args": {"a": 3, "b": 4}, "type": "tool_call"},
+                        ],
+                        additional_kwargs={
+                            "tool_approval": {
+                                "call_1": {"status": "approved"},
+                                "call_2": {"status": "pending", "interrupt": {"id": "int-approval-call_2"}},
+                            }
+                        },
+                    )
+                ]
+            }
+
+            with patch(
+                "aidev_agent.core.graphs.react.graph.request_approval_decision",
+                return_value=True,
+            ) as mock_request:
+                command = approval_check(state, {"configurable": {"execute_kwargs": MagicMock(resume=[{"approved": True}] )}})
+
+            assert command.goto == "tools"
+            updated_ai_message = next(msg for msg in command.update["messages"] if isinstance(msg, AIMessage))
+            approval_state = updated_ai_message.additional_kwargs["tool_approval"]
+            assert approval_state["call_1"]["status"] == "approved"
+            assert approval_state["call_2"]["status"] == "approved"
+            assert mock_request.call_count == 1
+            target = mock_request.call_args.args[0]
+            assert target.target_id == "call_2"
+            assert mock_request.call_args.kwargs["interrupt_payload"] == {"id": "int-approval-call_2"}
+        finally:
+            calculator.metadata = original_metadata
+
+    def test_approval_check_matches_skill_metadata_without_need_approval(self):
+        """skill 只要 approval metadata 完整，也应进入统一审批链路。"""
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "skill_name": "skill-runner",
+            "approval": {
+                "tool_type": "skill",
+                "skill_code": "skill-runner",
+                "tool_name": "Skill Runner",
+                "target": {
+                    "type": "skill",
+                    "skill_name": "skill-runner",
+                    "display_name": "Skill Runner",
+                },
+            },
+        }
+        try:
+            approval_check = ReActAgentBuilder._make_approval_check_node([calculator])
+            state = {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        id="ai_skill_approval",
+                        tool_calls=[
+                            {"id": "call_skill_1", "name": "calculator", "args": {"a": 1, "b": 2}, "type": "tool_call"}
+                        ],
+                    )
+                ]
+            }
+
+            with patch(
+                "aidev_agent.core.graphs.react.graph.request_approval_decision",
+                return_value=True,
+            ) as mock_request:
+                command = approval_check(state, {"configurable": {"execute_kwargs": MagicMock(resume=None)}})
+
+            assert command.goto == "tools"
+            updated_ai_message = command.update["messages"][0]
+            approval_state = updated_ai_message.additional_kwargs["tool_approval"]
+            assert approval_state["call_skill_1"]["status"] == "approved"
+            target = mock_request.call_args.args[0]
+            assert target.target_type == "skill"
+            assert target.target_code == "skill-runner"
+            assert target.target_name == "Skill Runner"
+        finally:
+            calculator.metadata = original_metadata
+
+    def test_approval_check_matches_mcp_metadata_without_need_approval(self):
+        """mcp tool 只要 approval metadata 完整，也应进入统一审批链路。"""
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "tool_code": "query-time",
+            "mcp_name": "time-server",
+            "approval": {
+                "tool_type": "mcp",
+                "mcp_code": "time-server",
+                "tool_code": "query-time",
+                "tool_name": "Query Time",
+                "target": {
+                    "type": "mcp",
+                    "mcp_name": "time-server",
+                    "code": "query-time",
+                    "display_name": "Query Time",
+                },
+            },
+        }
+        try:
+            approval_check = ReActAgentBuilder._make_approval_check_node([calculator])
+            state = {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        id="ai_mcp_approval",
+                        tool_calls=[
+                            {"id": "call_mcp_1", "name": "calculator", "args": {"a": 1, "b": 2}, "type": "tool_call"}
+                        ],
+                    )
+                ]
+            }
+
+            with patch(
+                "aidev_agent.core.graphs.react.graph.request_approval_decision",
+                return_value=True,
+            ) as mock_request:
+                command = approval_check(state, {"configurable": {"execute_kwargs": MagicMock(resume=None)}})
+
+            assert command.goto == "tools"
+            updated_ai_message = command.update["messages"][0]
+            approval_state = updated_ai_message.additional_kwargs["tool_approval"]
+            assert approval_state["call_mcp_1"]["status"] == "approved"
+            target = mock_request.call_args.args[0]
+            assert target.target_type == "mcp"
+            assert target.target_code == "query-time"
+            assert target.target_name == "Query Time"
+        finally:
+            calculator.metadata = original_metadata
 
     # ----------------------------------------------------------------
     # B (continued). _prepare_store 测试

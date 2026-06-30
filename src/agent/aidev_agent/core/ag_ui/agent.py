@@ -28,6 +28,7 @@ from ag_ui.core import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from .types import Interrupt, RunFinishedInterruptOutcome, RunFinishedSuccessOutcome
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
@@ -36,7 +37,6 @@ from langchain_core.messages import (
     message_to_dict,
 )
 from langchain_core.runnables import RunnableConfig, ensure_config
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
@@ -55,6 +55,7 @@ from .types import (
     RunMetadata,
     SchemaKeys,
     SessionPersistenceEventNames,
+    serialize_run_finished_outcome,
     State,
 )
 from .utils import (
@@ -108,8 +109,6 @@ class LangGraphAgent:
         self.messages_in_process: MessagesInProgressRecord = {}
         self.active_run: RunMetadata | None = None
         self.constant_schema_keys = ["messages", "tools"]
-        # 控制是否应将 on_chat_model_stream 事件发送到前端
-        self.front_end_display = True
         # 取消检测回调，返回 True 表示应该取消
         self._cancel_checker = cancel_checker
 
@@ -283,6 +282,7 @@ class LangGraphAgent:
                         type=EventType.RUN_FINISHED,
                         thread_id=thread_id,
                         run_id=RunId.CANCELLED,
+                        outcome=serialize_run_finished_outcome(RunFinishedSuccessOutcome()),
                     )
                 )
             self.active_run = INITIAL_ACTIVE_RUN
@@ -300,70 +300,108 @@ class LangGraphAgent:
 
         node_name = "__end__" if is_end_node else node_name
 
-        for interrupt in interrupts:
-            yield self._dispatch_event(
-                CustomEvent(
-                    type=EventType.CUSTOM,
-                    name=LangGraphEventTypes.OnInterrupt.value,
-                    value=dump_json_safe(interrupt.value),
-                    raw_event=interrupt,
-                )
-            )
+        interrupt_values = [self._normalize_interrupt_value(interrupt.value) for interrupt in interrupts]
 
         if self.active_run.get("node_name") != node_name:
             for ev in self.handle_node_change(node_name):
                 yield ev
 
         state_values = state.values if state.values else state
-        yield self._dispatch_event(
-            StateSnapshotEvent(
-                type=EventType.STATE_SNAPSHOT,
-                snapshot=self.get_state_snapshot(state_values),
-            )
-        )
-
-        yield self._dispatch_event(
-            MessageSnapshotEventExtend(
-                type=EventType.MESSAGES_SNAPSHOT,
-                messages=langchain_messages_to_agui(state_values.get("messages", [])),
-            )
-        )
-
         for ev in self.handle_node_change(None):
             yield ev
+
+        final_snapshot_events = self._build_terminal_snapshot_events(state_values)
+        yield self._dispatch_event(
+            final_snapshot_events[0]
+        )
+
+        # 续流（resume）场景不再下发终态 MESSAGES_SNAPSHOT：
+        # resume 时 state["messages"] 仅来自中断点的 checkpoint，并非完整会话历史
+        if not resume_input:
+            yield self._dispatch_event(
+                final_snapshot_events[1]
+            )
+
+        # 构造 outcome（使用官方类型）
+        if interrupt_values:
+            outcome = RunFinishedInterruptOutcome(interrupts=interrupt_values)
+        else:
+            outcome = RunFinishedSuccessOutcome()
 
         yield self._dispatch_event(
             RunFinishedEvent(
                 type=EventType.RUN_FINISHED,
                 thread_id=thread_id,
                 run_id=self.active_run["id"],
+                outcome=serialize_run_finished_outcome(outcome),
             )
         )
         # Reset active run to how it was before the stream started
         self.active_run = INITIAL_ACTIVE_RUN
+
+    @staticmethod
+    def _normalize_interrupt_value(value: Any) -> Interrupt:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                value = {"message": value}
+        if not isinstance(value, dict):
+            value = {"message": str(value)}
+
+        metadata = LangGraphAgent._normalize_interrupt_metadata(value)
+        interrupt_id = value.get("id") or value.get("interruptId") or f"int-{uuid.uuid4().hex[:12]}"
+        return Interrupt(
+            id=interrupt_id,
+            reason=value.get("reason") or "tool_call",
+            message=value.get("message"),
+            toolCallId=value.get("toolCallId"),  # 驼峰命名
+            metadata=metadata or None,
+        )
+
+    @staticmethod
+    def _normalize_interrupt_metadata(value: dict[str, Any]) -> dict[str, Any]:
+        metadata = value.get("metadata")
+        return metadata.copy() if isinstance(metadata, dict) else {}
+
+    def _build_terminal_snapshot_events(self, state_values: State) -> tuple[StateSnapshotEvent, MessageSnapshotEventExtend]:
+        return (
+            StateSnapshotEvent(
+                type=EventType.STATE_SNAPSHOT,
+                snapshot=self.get_state_snapshot(state_values),
+            ),
+            MessageSnapshotEventExtend(
+                type=EventType.MESSAGES_SNAPSHOT,
+                messages=langchain_messages_to_agui(state_values.get("messages", [])),
+            ),
+        )
 
     async def prepare_stream(self, input: RunAgentInput, agent_state: State, config: RunnableConfig):
         state_input = input.state or {}
         messages = input.messages or []
         forwarded_props = input.forwarded_props or {}
         thread_id = input.thread_id
-
-        # 检查点消息同步已在 chat.py:_execute() 中完成（覆盖流式和非流式两条路径）
-        # 此处直接使用平台传入的消息作为消息来源
-        state_input["messages"] = []
-        self.active_run["current_graph_state"] = agent_state.values.copy()
-        langchain_messages = agui_messages_to_langchain(messages)
-        state = self.langgraph_default_merge_state(state_input, langchain_messages, input)
-        self.active_run["current_graph_state"].update(state)
         config["configurable"]["thread_id"] = thread_id
         interrupts = agent_state.tasks[0].interrupts if agent_state.tasks and len(agent_state.tasks) > 0 else []
         has_active_interrupts = len(interrupts) > 0
         resume_input = forwarded_props.get("command", {}).get("resume", None)
 
+        if resume_input:
+            state = agent_state.values.copy() if agent_state.values else state_input
+            langchain_messages = []
+        else:
+            # 不再依赖 checkpoint 中的 messages，直接使用后端数据库传来的完整历史
+            state_input["messages"] = []
+            langchain_messages = agui_messages_to_langchain(messages)
+            state = self.langgraph_default_merge_state(state_input, langchain_messages, input)
+
+        self.active_run["current_graph_state"] = agent_state.values.copy()
+        self.active_run["current_graph_state"].update(state)
+
         self.active_run["schema_keys"] = self.get_schema_keys(config)
 
         non_system_messages = [msg for msg in langchain_messages if not isinstance(msg, SystemMessage)]
-        if len(agent_state.values.get("messages", [])) > len(non_system_messages):
+        if not resume_input and len(agent_state.values.get("messages", [])) > len(non_system_messages):
             # Find the last user message by working backwards from the last message
             last_user_message = None
             for i in range(len(langchain_messages) - 1, -1, -1):
@@ -378,29 +416,17 @@ class LangGraphAgent:
 
         events_to_dispatch = []
         if has_active_interrupts and not resume_input:
-            events_to_dispatch.append(
-                RunStartedEvent(
-                    type=EventType.RUN_STARTED,
-                    thread_id=thread_id,
-                    run_id=self.active_run["id"],
-                )
-            )
+            interrupt_values = [self._normalize_interrupt_value(interrupt.value) for interrupt in interrupts]
+            terminal_state = agent_state.values if agent_state.values else state
+            events_to_dispatch.extend(self._build_terminal_snapshot_events(terminal_state))
 
-            for interrupt in interrupts:
-                events_to_dispatch.append(
-                    CustomEvent(
-                        type=EventType.CUSTOM,
-                        name=LangGraphEventTypes.OnInterrupt.value,
-                        value=dump_json_safe(interrupt.value),
-                        raw_event=interrupt,
-                    )
-                )
-
+            outcome = RunFinishedInterruptOutcome(interrupts=interrupt_values)
             events_to_dispatch.append(
                 RunFinishedEvent(
                     type=EventType.RUN_FINISHED,
                     thread_id=thread_id,
                     run_id=self.active_run["id"],
+                    outcome=serialize_run_finished_outcome(outcome),
                 )
             )
             return {
@@ -425,10 +451,14 @@ class LangGraphAgent:
 
         subgraphs_stream_enabled = input.forwarded_props.get("stream_subgraphs") if input.forwarded_props else False
 
-        # 传完整的消息历史给 LangGraph
-        stream_messages = stream_input["messages"] if stream_input else []
+        # 普通请求传完整消息历史；resume 请求直接传 Command(resume=...) 给 LangGraph。
+        if isinstance(stream_input, Command):
+            stream_payload = stream_input
+        else:
+            stream_messages = stream_input["messages"] if stream_input else []
+            stream_payload = {**state, "messages": stream_messages}
         kwargs = self.get_stream_kwargs(
-            input={**state, "messages": stream_messages},
+            input=stream_payload,
             config=config,
             subgraphs=bool(subgraphs_stream_enabled),
             version="v2",
@@ -567,9 +597,6 @@ class LangGraphAgent:
     ) -> AsyncGenerator[str, None]:
         event_type = event.get("event")
         if event_type == LangGraphEventTypes.OnChatModelStream:
-            # 当 front_end_display 为 False 时，跳过OnChatModelStream事件
-            if not self.front_end_display:
-                return
             should_emit_messages = event["metadata"].get("emit-messages", True)
             should_emit_tool_calls = event["metadata"].get("emit-tool-calls", True)
 
@@ -1192,7 +1219,3 @@ class LangGraphAGUIAgent(LangGraphAgent):
                 "context": agui_properties.get("context", []),
             },
         }
-
-
-# Default checkpointer (can be overridden)
-default_checkpointer = MemorySaver()

@@ -10,6 +10,7 @@ from logging import getLogger
 from typing import Any
 
 from aidev_agent.api.bk_aidev import Client
+from aidev_agent.core.ag_ui.types import RunFinishedOutcomeType
 from aidev_agent.enums import ActivityType, PromptRole, SessionsStatus
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 
@@ -58,7 +59,7 @@ class AGUISessionWriter(BaseSessionWriter):
             client: BKAidev API 客户端
             username: 用户名
             tools: 工具列表，用于获取工具描述信息
-            turn_id: 同一次 user-ai 回复的轮次 ID
+            turn_id: 同一次 user-ai 回复的轮次 ID，非空时会写入回写记录的 property.turn_id
             task_id: 本轮 bkflow 任务 ID；retry/skip 时按 content.task_id 绑定已有 activity
         """
         super().__init__(session_code=session_code, username=username, tools=tools, turn_id=turn_id)
@@ -118,6 +119,85 @@ class AGUISessionWriter(BaseSessionWriter):
             f"resume 回写失败：未找到 task_id={self.task_id} 的 flow_agent activity，session_code={self.session_code}"
         )
 
+    def handle_run_finished(self, event) -> None:
+        """处理 RUN_FINISHED 事件，额外检测中断并触发后台续流。"""
+        super().handle_run_finished(event)
+
+        outcome = getattr(event, "outcome", None)
+        # 兼容 outcome 为 dict 或对象的情况
+        outcome_type = (
+            outcome.get("type")
+            if isinstance(outcome, dict)
+            else getattr(outcome, "type", None) if outcome else None
+        )
+        if outcome and outcome_type == RunFinishedOutcomeType.INTERRUPT.value:
+            graph_thread_id = getattr(event, "thread_id", "")
+            interrupts = [
+                interrupt.model_dump(by_alias=True) if hasattr(interrupt, "model_dump") else interrupt
+                for interrupt in (
+                    (outcome.get("interrupts") if isinstance(outcome, dict) else getattr(outcome, "interrupts", []))
+                    or []
+                )
+            ]
+            self._set_pending_interrupt_context(graph_thread_id=graph_thread_id, interrupts=interrupts)
+            try:
+                # 延迟导入避免循环依赖：
+                # agui_writer -> approval_resume -> agent_builder -> services.agent -> chat -> event_handlers
+                from aidev_bkplugin.services.approval_resume import start_approval_resume_worker
+
+                start_approval_resume_worker(self.session_code, self.username, graph_thread_id, interrupts)
+            except Exception:
+                logger.exception(
+                    "[AGUISessionWriter] 触发后台续流失败: session_code=%s", self.session_code
+                )
+            return
+
+        self._clear_pending_interrupt_context()
+
+    def _ensure_session_property_cache(self) -> None:
+        if self._cached_session_property is not None:
+            return
+        headers = {"X-BKAIDEV-USER": self.username} if self.username else {}
+        result = self.client.api.retrieve_chat_session(
+            path_params={"session_code": self.session_code},
+            headers=headers,
+        )
+        data = result.get("data", {}) if isinstance(result, dict) else {}
+        session_property = data.get("session_property", {}) if isinstance(data, dict) else {}
+        self._cached_session_property = session_property if isinstance(session_property, dict) else {}
+
+    def _update_session_property(self) -> None:
+        headers = {"X-BKAIDEV-USER": self.username} if self.username else {}
+        self.client.api.update_chat_session(
+            path_params={"session_code": self.session_code},
+            json={"session_property": self._cached_session_property or {}},
+            headers=headers,
+        )
+
+    def _set_pending_interrupt_context(self, *, graph_thread_id: str, interrupts: list[dict[str, Any]]) -> None:
+        try:
+            self._ensure_session_property_cache()
+            self._cached_session_property["pending_interrupt"] = {
+                "graph_thread_id": graph_thread_id,
+                "interrupts": interrupts,
+            }
+            self._update_session_property()
+        except Exception:
+            logger.exception(
+                "[AGUISessionWriter] 写入 pending_interrupt 失败: session_code=%s, graph_thread_id=%s",
+                self.session_code,
+                graph_thread_id,
+            )
+
+    def _clear_pending_interrupt_context(self) -> None:
+        try:
+            self._ensure_session_property_cache()
+            if not self._cached_session_property.pop("pending_interrupt", None):
+                return
+            self._update_session_property()
+        except Exception:
+            logger.exception("[AGUISessionWriter] 清理 pending_interrupt 失败: session_code=%s", self.session_code)
+
     def _do_create_content(self, payload: dict[str, Any], headers: dict[str, str]) -> int | None:
         """通过 API 创建会话内容
         Returns:
@@ -160,8 +240,10 @@ class AGUISessionWriter(BaseSessionWriter):
             self._update_session_status(SessionsStatus.FINISHED.value)
 
     def handle_run_error(self, event) -> None:
-        """处理运行错误，并确保会话状态进入 failed。"""
+        """处理运行错误，并确保会话状态进入 failed；同时清理 pending_interrupt。"""
         super().handle_run_error(event)
+        # 中断审批场景下清理 pending_interrupt
+        self._clear_pending_interrupt_context()
         if not self._is_cancelled:
             self._has_run_error = True
             self._update_session_status(SessionsStatus.FAILED.value)

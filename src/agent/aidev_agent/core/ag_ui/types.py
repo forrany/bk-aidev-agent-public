@@ -1,6 +1,8 @@
 from enum import Enum
 from typing import Annotated, Any, Literal, TypedDict
 
+from typing import List
+
 from ag_ui.core import (
     ActivityMessage as AGUIActivityMessage,
 )
@@ -16,10 +18,13 @@ from ag_ui.core import (
     ToolMessage,
     UserMessage,
 )
+from typing import Dict
+
 from ag_ui.core.events import MessagesSnapshotEvent
+from ag_ui.core.types import ConfiguredBaseModel
 from langchain_core.messages import ChatMessage
-from pydantic import BaseModel, Field, computed_field
-from typing_extensions import NotRequired
+from pydantic import BaseModel, Field, computed_field, field_validator
+from typing_extensions import Literal, NotRequired
 
 
 class LangGraphEventTypes(str, Enum):
@@ -144,12 +149,14 @@ class CustomMessageType(Enum):
     CUSTOM = "custom"
     MCP_TOOL_FETCH_FAILED = "mcp_tool_fetch_failed"
     TEMP_MESSAGE = "temp_message"
+    APPROVAL_RESULT = "approval_result"
 
     # Flow Agent 事件
     FLOW_AGENT_START = "flow_agent_start"
     FLOW_AGENT_RESULT = "flow_agent_result"
     FLOW_AGENT_END = "flow_agent_end"
     FLOW_AGENT_RESTART = "flow_agent_restart"
+    FLOW_AGENT_UPDATE = "flow_agent_update"
 
     # 压缩日志事件
     COMPRESS_LOG = "compress_log"
@@ -200,6 +207,19 @@ class ReasoningMessage(ExtendBaseMessage):
         return f"reasoning-{self.id}"
 
 
+class ExtendInterruptMessage(ExtendBaseMessage):
+    """AG-UI 侧的中断/审批消息（role=interrupt）。
+
+    用于在 MESSAGES_SNAPSHOT 中承载工具审批等中断卡片，content 与落库
+    ``role=interrupt`` 会话内容一致（形如 ``{"outcome": {"type": "interrupt", "interrupts": [...]}}``）。
+    """
+
+    id: str
+    role: Literal["interrupt"] = "interrupt"  # pyright: ignore[reportIncompatibleVariableOverride]
+    content: dict[str, Any] | list[dict]
+    name: str | None = None
+
+
 # 扩展 Message 的定义，使用 Annotated 和 Field(discriminator="role") 保持 Pydantic 的鉴别器行为
 ExtendMessage = Annotated[
     (
@@ -209,6 +229,7 @@ ExtendMessage = Annotated[
         | ExtendUserMessage
         | ExtendToolMessage
         | ExtendActivityMessage
+        | ExtendInterruptMessage
         | ReasoningMessage
     ),
     Field(discriminator="role"),
@@ -219,13 +240,22 @@ class MessageSnapshotEventExtend(MessagesSnapshotEvent):
     messages: list[ExtendMessage]
 
 
+class ResumeItem(ConfiguredBaseModel):
+    """恢复请求项，用于提交中断处理结果"""
+    interruptId: str
+    status: Literal["resolved", "cancelled"]
+    payload: Any | None = None
+
+
 class AgentInput(RunAgentInput):
+    """扩展的 Agent 输入，添加 resume 字段支持中断恢复"""
     thread_id: str | None = None
     run_id: str | None = None
     messages: list[ExtendMessage]
     tools: list[Tool] = Field(default_factory=list)
     context: list[Context] = Field(default_factory=list)
     forwarded_props: Any = Field(default_factory=dict)
+    resume: list[ResumeItem] | None = Field(default=None, description="中断恢复请求")
 
 
 class ActivityMessage(ChatMessage):
@@ -233,3 +263,65 @@ class ActivityMessage(ChatMessage):
 
     role: str = "activity"
     content: dict | list[dict] = Field(default_factory=dict)
+
+
+class InterruptMessage(ActivityMessage):
+    """承载中断/审批消息（role=interrupt）的 LangChain 消息。
+
+    继承 :class:`ActivityMessage`，以复用 model 节点中间件（``basic_middleware``）
+    按 ``isinstance(..., ActivityMessage)`` 进行的过滤逻辑——这样审批卡片虽进入
+    ``state["messages"]``（用于 MESSAGES_SNAPSHOT 重建与前端展示），但绝不会被
+    送入 LLM 输入，避免污染模型上下文。
+    """
+
+    role: str = "interrupt"
+    content: dict | list[dict] = Field(default_factory=dict)
+
+
+class Interrupt(ConfiguredBaseModel):
+    """中断信息，用于 RunFinishedInterruptOutcome"""
+
+    id: str
+    reason: str
+    message: str | None = None
+    toolCallId: str | None = None  # 官方协议使用驼峰命名
+    metadata: dict[str, Any] | None = None
+
+
+class RunFinishedOutcomeType(str, Enum):
+    """RunFinishedEvent.outcome 的 type 字段取值"""
+
+    SUCCESS = "success"
+    INTERRUPT = "interrupt"
+
+
+def serialize_run_finished_outcome(outcome: Any | None) -> dict[str, Any] | None:
+    """将本地 outcome 模型转换为 ag-ui 事件可接受的字典形态。"""
+
+    if outcome is None:
+        return None
+    if hasattr(outcome, "model_dump"):
+        return outcome.model_dump(by_alias=True)
+    if isinstance(outcome, dict):
+        return outcome
+    return dict(outcome)
+
+
+class RunFinishedSuccessOutcome(ConfiguredBaseModel):
+    """运行正常完成的 Outcome"""
+
+    type: Literal["success"] = "success"
+
+
+class RunFinishedInterruptOutcome(ConfiguredBaseModel):
+    """运行被中断暂停的 Outcome"""
+
+    type: Literal["interrupt"] = "interrupt"
+    interrupts: List[Interrupt]
+
+    @field_validator("interrupts")
+    @classmethod
+    def _interrupts_nonempty(cls, value: List[Interrupt]) -> List[Interrupt]:
+        if not value:
+            raise ValueError("outcome 'interrupt' requires at least one interrupt")
+        return value

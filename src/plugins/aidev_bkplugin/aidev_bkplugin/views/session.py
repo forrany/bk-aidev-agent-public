@@ -58,6 +58,15 @@ class ChatSessionViewSet(PluginViewSet):
         result = client.api.rename_chat_session(path_params={"session_code": pk})
         return Response(data=result["data"])
 
+    @action(["GET"], url_path="is_resume", detail=True)
+    def is_resume(self, request, pk, **kwargs):
+        logger.info(f"[is_resume][agent] 收到轮询请求, pk={pk}, kwargs={kwargs}, request_path={request.path}")
+        result = client.api.is_resume_session(path_params={"session_code": pk})
+        # is_resume_session 返回 True/False（收到回调即为 True）
+        data = result.get("data", False)
+        is_resume = bool(data) if isinstance(data, (bool, int)) else False
+        return Response(data=is_resume)
+
     @action(
         ["POST"],
         url_path="upload/(?P<file_name>.+)",

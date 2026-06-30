@@ -15,8 +15,9 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from aidev_agent.packages.resource_manager import resource_manager
+from aidev_bkplugin.models import Checkpoint, Write
+from aidev_bkplugin.packages.checkpoint import BKDjangoSaver
 from django.conf import settings
-from langgraph.checkpoint.memory import MemorySaver
 
 from .agent_config import AgentConfigFetcher
 
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
     from aidev_agent.api.bk_aidev import Client
 
 logger = getLogger(__name__)
-memory_checkpointer = MemorySaver()
 
 
 class AgentHelper:
@@ -43,8 +43,9 @@ class AgentHelper:
 
     @classmethod
     def get_checkpointer(cls):
-        """LangGraph 内存 checkpointer；当前与历史行为保持一致（每次新建 ``MemorySaver``）。"""
-        return memory_checkpointer
+        """LangGraph 持久化 checkpointer；使用 Django ORM 存储 checkpoint，支持 interrupt/resume。"""
+        logger.info('[AgentHelper] get_checkpointer: 创建 BKDjangoSaver 实例')
+        return BKDjangoSaver(checkpoint_model=Checkpoint, writes_model=Write)
 
     @classmethod
     def build_session_detail_url(cls, session_code: str, username: str | None = None) -> str:

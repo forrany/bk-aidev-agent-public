@@ -65,8 +65,10 @@ class GeneratorStreamingHelper:
     # 生产者结束后延迟清理会话资源的等待时间（秒）
     # 需足够长以允许活跃消费者处理 EOD_CHUNK，又不至于长时间占用资源
     _PRODUCER_CLEANUP_DELAY = 30.0
-    # 当业务流已经发出 [DONE] 且消费者断开时，给一个很短的重连宽限后立即清理
-    _DONE_ORPHAN_CLEANUP_GRACE = 0.5
+    # 业务流已发出 [DONE] 且当前无活跃消费者时，保留队列等待前端接管续流的窗口（秒）。
+    # 注意：后台 drain（background_only）完成后不会立即清理队列，需保留足够窗口让前端重连后
+    # 通过 restore_messages 接管已生产的完整内容；窗口内若有消费者接管则跳过清理。
+    _DONE_ORPHAN_CLEANUP_GRACE = 30.0
     _ORPHAN_CLEANUP_POLL_INTERVAL = 0.1
 
     @staticmethod
@@ -93,9 +95,17 @@ class GeneratorStreamingHelper:
                 return True
         return False
 
-    def __init__(self, message_handler: BaseMessageQueueHandler | None = None, thread_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message_handler: BaseMessageQueueHandler | None = None,
+        thread_id: str | None = None,
+        defer_cleanup_on_complete: bool = False,
+    ) -> None:
         self.message_handler = message_handler if message_handler else message_handler_factory.get()
         self.thread_id = thread_id or uuid.uuid4().hex
+        # 后台 drain（无 SSE 下游）场景：读到 EOD 时不立即 mark_completed 清队列，
+        # 保留 DLQ 历史供前端在清理窗口内接管续流；清理交由 producer 的延迟清理线程兜底。
+        self.defer_cleanup_on_complete = defer_cleanup_on_complete
 
     @classmethod
     def _check_cancel_status(
@@ -591,9 +601,20 @@ class GeneratorStreamingHelper:
                                     on_complete()
                                 except Exception as e:
                                     logger.exception(f"on_complete callback error: {e}")
-                            if not supports_replay_from_start:
+                            if not supports_replay_from_start and not self.defer_cleanup_on_complete:
                                 self.message_handler.mark_completed(self.thread_id)
-                            logger.info(f"Stream completed for thread_id={self.thread_id}")
+                                logger.info(f"Stream completed for thread_id={self.thread_id}")
+                            elif self.defer_cleanup_on_complete:
+                                # 后台 drain（无 SSE 下游）：不立即清理队列，保留 DLQ 历史供前端接管续流。
+                                # 实际清理由 producer 的 _schedule_session_cleanup 在窗口内兜底，
+                                # 若窗口内有前端接管消费则跳过清理。
+                                logger.info(
+                                    f"Stream completed for thread_id={self.thread_id} "
+                                    f"(background drain, defer cleanup for frontend takeover)"
+                                )
+                            else:
+                                # supports_replay_from_start 场景：由上层在合适时机统一 mark_completed
+                                logger.info(f"Stream completed for thread_id={self.thread_id}")
                             if should_notify_cancelled:
                                 # cancel 可能已发出但 Agent 恰好也完成了，此时仍需通知 stop 接口。
                                 self._notify_consumer_cancelled_safely()

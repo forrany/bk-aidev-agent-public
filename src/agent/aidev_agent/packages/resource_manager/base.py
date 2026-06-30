@@ -323,17 +323,38 @@ class BaseResourceManager(abc.ABC):
         # 构造 agent_info：完整的原始配置字典（不对 otel_info 解码，保持原始数据）
         agent_info = dict(res)
 
+        # 兼容 related_tools 新协议：可能为 list[str] 或 dict{"tools": [...]}
+        related_tools_data = res.get("related_tools") or []
+        if isinstance(related_tools_data, dict):
+            tool_codes = [
+                each.get("tool_code")
+                for each in related_tools_data.get("tools", []) or []
+                if isinstance(each, dict) and each.get("tool_code")
+            ]
+        else:
+            tool_codes = related_tools_data
+
+        # 兼容 related_skills 新协议：可能为 list 或 dict{"skills": [...]}
+        related_skills_data = res.get("related_skills") or []
+        if isinstance(related_skills_data, dict):
+            related_skills = related_skills_data.get("skills") or []
+        else:
+            related_skills = related_skills_data
+
         return AgentConfig(
             agent_code=agent_code,
             agent_name=res["agent_name"],
             chat_model=prompt_setting.get("llm_code", ""),
             non_thinking_llm=prompt_setting.get("non_thinking_llm") or prompt_setting.get("llm_code", ""),
-            role_prompts=role_prompts,
+            role_prompts=role_prompts or None,
             knowledgebase_ids=res["knowledgebase_settings"]["knowledgebases"],
-            tool_codes=res["related_tools"],
-            opening_mark=conversation_settings.get("opening_remark"),
+            tool_codes=tool_codes,
+            related_tools=related_tools_data,
+            opening_mark=conversation_settings.get("opening_remark") or None,
             mcp_server_config=res.get("mcp_server_config", {}).get("mcpServers", {}),
-            related_skills=res.get("related_skills"),
+            related_skills=related_skills,
+            approval_settings=res.get("approval_settings") or {},
+            resources=res.get("resources") or [],
             agent_options=None,
             model_context_options_data=model_context_options_data,
             knowledge_query_options_data=knowledge_query_options_data,
@@ -390,6 +411,7 @@ class BaseResourceManager(abc.ABC):
     def construct_mcp(
         self,
         mcp_config: dict,
+        agent_options: Any = None,
         username: str = None,
         executor_info: dict | None = None,
         **kwargs,
@@ -400,6 +422,7 @@ class BaseResourceManager(abc.ABC):
         支持凭证处理、selected_tools 过滤、异常处理等功能。
 
         :param mcp_config: MCP 客户端配置字典，格式为 ``{"server_name": {"url": ..., "transport": ...}}``
+        :param agent_options: Agent 选项，用于异常处理
         :param username: 用户名，用于 BLUEAPPS 认证
         :param executor_info: 执行用户信息（含 app_code/app_secret/access_token），
             优先用于 MCP 凭证注入，与 skill sandbox 保持一致
@@ -471,7 +494,8 @@ class BaseResourceManager(abc.ABC):
                         f"cost={time.monotonic() - _start:.2f}s"
                     )
                     for each in tools:
-                        each.coroutine = MCPExceptionWrapper(each.coroutine)
+                        if agent_options:
+                            each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
                         if not each.metadata:
                             each.metadata = {}
                         each.metadata["mcp_name"] = server_name
