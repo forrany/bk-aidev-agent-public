@@ -105,6 +105,13 @@ class OpenApiGroup(OperationGroup):
         path="/openapi/aidev/resource/v1/chat/session/{session_code}/ai_rename/",
     )
 
+    is_resume_session = bind_property(
+        Operation,
+        name="is_resume_session",
+        method="GET",
+        path="/openapi/aidev/resource/v1/agent/session/{session_code}/is_resume/",
+    )
+
     upload_chat_session_file = bind_property(
         Operation,
         name="upload_chat_session_file",
@@ -168,6 +175,13 @@ class OpenApiGroup(OperationGroup):
         path="/openapi/aidev/resource/v1/chat/session_content/stop/",
     )
 
+    user_operation = bind_property(
+        Operation,
+        name="user_operation",
+        method="POST",
+        path="/openapi/aidev/resource/v1/chat/user_operation/",
+    )
+
     create_chat_group = bind_property(
         Operation,
         name="create_chat_group",
@@ -180,6 +194,13 @@ class OpenApiGroup(OperationGroup):
         name="retrieve_agent_config",
         method="GET",
         path="/openapi/aidev/resource/v1/agent/{agent_code}/",
+    )
+
+    create_tool_approval = bind_property(
+        Operation,
+        name="create_tool_approval",
+        method="POST",
+        path="/openapi/aidev/resource/v1/agent/tool_approval/",
     )
 
     add_knowledge_item = bind_property(
@@ -354,10 +375,8 @@ class Client(BaseClient):
 
 class BKAidevApi(ApiProtocol):
     @classmethod
-    def get_client(cls, app_code=settings.APP_CODE, app_secret=settings.SECRET_KEY, **kwargs) -> Client:
-        return _get_client_by_settings(
-            Client, endpoint=BKAIDEV_URL, bk_app_code=app_code, bk_app_secret=app_secret, **kwargs
-        )
+    def get_client(cls, app_code=settings.APP_CODE, app_secret=settings.SECRET_KEY) -> Client:
+        return _get_client_by_settings(Client, endpoint=BKAIDEV_URL, bk_app_code=app_code, bk_app_secret=app_secret)
 
     @classmethod
     def get_client_by_request(cls, request):
@@ -366,9 +385,7 @@ class BKAidevApi(ApiProtocol):
     @classmethod
     def get_client_by_username(cls, username, app_code=None, app_secret=None, **kwargs):
         return _partial(Client, _get_client_by_username)(
-            username,
-            endpoint=BKAIDEV_URL,
-            bk_app_code=app_code,
-            bk_app_secret=app_secret,
+            username, endpoint=BKAIDEV_URL,
+            bk_app_code=app_code, bk_app_secret=app_secret,
             **kwargs,
         )

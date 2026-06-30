@@ -16,10 +16,12 @@ We undertake not to change the open source license (MIT license) applicable
 to the current version of the project delivered to anyone in the future.
 """
 
+import asyncio
 import contextlib
 import functools
 import json
 import re
+from copy import deepcopy
 from hashlib import md5
 from logging import getLogger
 from typing import Any, Dict, List, Optional, Type
@@ -29,11 +31,20 @@ from langchain_core.prompts import jinja2_formatter
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langchain_core.tools.base import ToolException
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import BaseModel, Field, ValidationError, create_model, field_validator
 from requests.exceptions import JSONDecodeError
 from typing_extensions import Annotated
 
 from aidev_agent.config import settings
+from aidev_agent.enums import CredentialType
+from aidev_agent.pydantic_models import AgentOptions
+from aidev_agent.utils.loop import run_coro_sync
+
+try:
+    from bkoauth import get_access_token_by_user
+except ImportError:
+    get_access_token_by_user = None
 
 from .enums import FieldType, FuncType
 from .exceptions import ToolValidationError
@@ -508,7 +519,7 @@ def make_structured_tool(
                 name=tool.tool_code,
                 args_schema=_model,
                 handle_validation_error=custom_handle_validation_error if not debug else None,
-                metadata={"tool_name": tool.tool_name},
+                metadata={"tool_id": tool.tool_id, "tool_code": tool.tool_code, "tool_name": tool.tool_name},
             )
 
         except ImportError:
@@ -523,7 +534,7 @@ def make_structured_tool(
             name=tool.tool_code,
             args_schema=_model,
             handle_validation_error=custom_handle_validation_error if not debug else None,
-            metadata={"tool_name": tool.tool_name},
+            metadata={"tool_id": tool.tool_id, "tool_code": tool.tool_code, "tool_name": tool.tool_name},
         )
 
     return _tool
@@ -546,27 +557,94 @@ class McpToolsResult(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-def make_mcp_tools(server_config: dict, username: str | None = None) -> McpToolsResult:
-    """按 MCP 配置装配 LangChain ``StructuredTool`` 列表。
+def make_mcp_tools(server_config: dict, agent_options: AgentOptions, username: str | None = None) -> McpToolsResult:
+    new_server_config = deepcopy(server_config)
 
-    .. deprecated::
-        推荐使用 ``resource_manager().construct_mcp()`` 替代。
+    # 提取每个 MCP Server 的 selected_tools 配置
+    selected_tools_map: dict[str, list[str]] = {}
+    for server_name, _server_config in new_server_config.items():
+        selected_tools = _server_config.pop("selected_tools", None)
 
-    这是 ``BaseResourceManager.construct_mcp()`` 的兼容层。
-    """
-    from aidev_agent.packages.resource_manager.registry import resource_manager
+        if selected_tools:
+            selected_tools_map[server_name] = selected_tools
 
-    return resource_manager().construct_mcp(
-        mcp_config=server_config,
-        username=username,
-    )
+    for _server_config in new_server_config.values():
+        if "mcp_type" in _server_config:
+            _server_config.pop("mcp_type")
+        if _server_config.pop("credential_type", "") == CredentialType.BLUEAPPS.value:
+            auth_info = {
+                "bk_app_code": settings.APP_CODE,
+                "bk_app_secret": settings.SECRET_KEY,
+            }
+            if username:
+                access_token = None
+                if get_access_token_by_user is not None:
+                    access_token = get_access_token_by_user(username)
+                if access_token:
+                    auth_info = {"access_token": access_token.access_token}
+                else:
+                    auth_info["bk_username"] = username
+            _server_config["headers"] = {"X-Bkapi-Authorization": json.dumps(auth_info)}
+            _server_config["headers"]["X-Bkapi-Timeout"] = settings.BK_APIGW_MCP_TIMEOUT
+
+    # 重试2次；返回 (tools, failure | None)，失败时返回 McpToolFetchFailure
+    async def _load_tool(server_name, selected_tools_map) -> tuple[list[StructuredTool], McpToolFetchFailure | None]:
+        for _i in range(2):
+            client = MultiServerMCPClient(new_server_config)
+            try:
+                tools: list[StructuredTool] = await client.get_tools(server_name=server_name)
+                total_count = len(tools)
+                if selected_tools_map.get(server_name):
+                    tools = [each for each in tools if each.name in selected_tools_map[server_name]]
+                _logger.info(
+                    f"[MCP] server={server_name}: fetched={total_count}, "
+                    f"after_filter={len(tools)}, names={[t.name for t in tools]}"
+                )
+                for each in tools:
+                    each.coroutine = MCPExceptionWrapper(each.coroutine, agent_options)
+                    if not each.metadata:
+                        each.metadata = {}
+                    each.metadata["mcp_name"] = server_name
+                return (tools, None)
+            except Exception as err:
+                error_detail = _extract_mcp_tools_error_detail(err)
+                error_msg = f"获取MCP工具列表失败:  {error_detail}"
+                if _i == 0:
+                    continue
+                _logger.warning(
+                    f"skip loading tools for server '{server_name}': {error_msg}",
+                    exc_info=err,
+                )
+                return (
+                    [],
+                    McpToolFetchFailure(
+                        server_name=server_name,
+                        message=error_msg,
+                        error_type=type(err).__name__,
+                    ),
+                )
+
+    coros = [_load_tool(server_name, selected_tools_map) for server_name in new_server_config]
+
+    async def _load_all_tools():
+        return await asyncio.gather(*coros)
+
+    coro_results = run_coro_sync(_load_all_tools())
+    tools_list: List[StructuredTool] = []
+    failures: List[McpToolFetchFailure] = []
+    for tlist, fail in coro_results:
+        tools_list.extend(tlist)
+        if fail is not None:
+            failures.append(fail)
+    return McpToolsResult(tools=tools_list, fetch_failures=failures)
 
 
 class MCPExceptionWrapper:
     """可序列化的MCP异常处理包装器"""
 
-    def __init__(self, coro):
+    def __init__(self, coro, agent_options):
         self.coro = coro
+        self.agent_options = agent_options
         functools.update_wrapper(self, coro)
         # 预编译正则表达式并存储为编译后的模式对象字典
         self.compiled_pattern_to_retry_guide = {

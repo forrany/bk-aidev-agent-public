@@ -15,6 +15,7 @@ from aidev_bkplugin.views.agent import AgentInfoViewSet
 from aidev_bkplugin.views.base import PluginViewSet
 from aidev_bkplugin.views.chat import ChatCompletionViewSet
 from aidev_bkplugin.views.session import ChatSessionContentViewSet, ChatSessionViewSet
+from aidev_bkplugin.views.user_operation import UserOperationViewSet
 
 USER_MODEL = get_user_model()
 
@@ -80,4 +81,8 @@ class OpenapiChatSessionContentViewSet(OpenapiPluginViewSet, ChatSessionContentV
 
 
 class OpenapiAgentInfoViewSet(OpenapiPluginViewSet, AgentInfoViewSet):
+    pass
+
+
+class OpenapiUserOperationViewSet(OpenapiPluginViewSet, UserOperationViewSet):
     pass

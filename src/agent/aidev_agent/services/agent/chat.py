@@ -6,7 +6,8 @@ from importlib.metadata import version as pkg_version
 from logging import getLogger
 from typing import Any, Callable, ClassVar, Generator, List, Optional
 
-from ag_ui.core import BaseEvent
+from ag_ui.core import BaseEvent, EventType, RunFinishedEvent, RunStartedEvent
+from ag_ui.encoder import EventEncoder
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
@@ -14,14 +15,21 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
 from aidev_agent.api.bk_agent import BkAgentApi
 from aidev_agent.config import settings
 from aidev_agent.core.ag_ui.aidev_agent import AidevAGUIAgent
-from aidev_agent.core.ag_ui.types import AgentInput
-from aidev_agent.core.ag_ui.utils import langchain_messages_to_agui
+from aidev_agent.core.ag_ui.types import (
+    AgentInput,
+    InterruptMessage,
+    RunFinishedSuccessOutcome,
+    serialize_run_finished_outcome,
+)
+from aidev_agent.core.ag_ui.utils import (
+    langchain_messages_to_agui,
+    langchain_messages_to_streaming_events,
+)
 
 # 延迟导入：遵守 services → tools 依赖方向，避免模块级 import 违规
 from aidev_agent.core.tools.a2a_tools.types import AgentBackendType, AgentSpec
@@ -37,6 +45,7 @@ from aidev_agent.pydantic_models import (
     KnowledgeSettings,
     ModelContextSettings,
 )
+from aidev_agent.services.agent.approval import ApprovalStateHandler
 from aidev_agent.services.agent.registry import AgentBuildContext, ChatBuildExtras
 from aidev_agent.services.common_agent import CommonAgentProtocol, CommonQAAgent
 from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
@@ -44,11 +53,6 @@ from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 from aidev_agent.utils.async_utils import async_to_sync_generator
 from aidev_agent.utils.loop import run_coro_sync
-from aidev_agent.utils.migrations import (
-    migration_chat_model_non_thinking_from_non_thinking_llm_v1,
-    migration_knowledge_query_options_from_agent_options_v1,
-    migration_model_context_options_from_agent_options_v1,
-)
 
 logger = getLogger(__name__)
 
@@ -87,9 +91,7 @@ class ChatCompletionAgent(BaseModel):
     """聊天模型；种子实例（``ChatCompletionAgent()``）为 ``None``，``build(ctx)``
     装配后由 :meth:`ChatAgentBuilder.build_chat_model` 填充为非空 ``BaseChatModel``。
     种子实例不可执行（``execute()`` 假设非空）。"""
-    chat_model_non_thinking: BaseChatModel | None = None
-    """非思考模型；由 :meth:`ChatAgentBuilder.build_chat_model_non_thinking` 填充。"""
-    non_thinking_llm: str | None = Field(default=None, deprecated="Use chat_model_non_thinking instead")
+    non_thinking_llm: str | None = None
     chat_history: list[ChatPrompt] | None = None
     files: list[dict] = Field(default_factory=list)
     tools: Optional[list[StructuredTool]] = None
@@ -98,20 +100,17 @@ class ChatCompletionAgent(BaseModel):
     executor_info: Optional[dict] = None
     knowledge_bases: Optional[list[dict]] = None
     knowledges: Optional[list[dict]] = None
-    knowledge_query_options: Any = None
-    model_context_options: ModelContextSettings | None = None
-    agent_options: AgentOptions | None = Field(
-        default=None,
-        deprecated="Use model_context_options and knowledge_query_options instead",
-    )
     support_vision: bool = False
     file_store: ByteStore | None = None
+    role_prompt: str | None = None
+    agent_prompt: str | None = None
     max_token_size: int | None = None
     callbacks: list[BaseCallbackHandler] | None = None
     agent_cls: CommonAgentProtocol = Field(default_factory=CommonQAAgent)
     """通用 agent 实例（实现 ``CommonAgentProtocol``）；ChatCompletionAgent 在 ``_get_agent`` 阶段
     通过 ``self.agent_cls.get_agent_executor(...)`` 触发执行器构建。
     字段名保留为 ``agent_cls`` 避免外部破坏，但语义已是「实例」。"""
+    agent_options: AgentOptions = Field(default_factory=AgentOptions)
     messages: list[BaseMessage] = Field(default_factory=list)
     checkpointer: BaseCheckpointSaver | None = None
 
@@ -152,7 +151,7 @@ class ChatCompletionAgent(BaseModel):
         builder.handle_agent_switch()
 
         self.chat_model = builder.build_chat_model()
-        self.chat_model_non_thinking = builder.build_chat_model_non_thinking()
+        self.non_thinking_llm = builder.build_non_thinking_llm()
         self.skills = builder.build_skills()
         # 先构建 executor_info，供 build_tools / construct_mcp 使用同一凭证源
         self.executor_info = builder.build_executor_info()
@@ -161,18 +160,16 @@ class ChatCompletionAgent(BaseModel):
         self.mcp_fetch_failures = builder.mcp_fetch_failures
         self.knowledge_bases = builder.build_knowledge_bases()
         self.knowledges = builder.build_knowledge_items()
-        self.knowledge_query_options = builder.build_knowledge_query_options()
-        self.model_context_options = builder.build_model_context_options()
-        if ctx.agent_config and ctx.agent_config.agent_options is not None:
-            self.agent_options = ctx.agent_config.agent_options
-        self.support_vision = builder.build_support_vision()
         self.chat_history = builder.build_chat_history(ctx.session_context_data)
+        self.agent_options = builder.build_agent_options()
+        self.agent_prompt = builder.build_agent_prompt()
         self.checkpointer = builder.build_checkpointer()
         self.subagent_specs = builder.build_subagents(ctx.agent_code)
+        self.role_prompt = builder.get_role_prompt()
         self.callbacks = chat.callbacks
         # 构造 RuntimeBackendResolver（在 ChatAgentBuilder 层管理生命周期）
         self.runtime_backend_resolver = builder.build_runtime_backend_resolver()
-        self.agent_info = ctx.agent_config.agent_info if ctx.agent_config else None
+        self.agent_info = getattr(ctx.agent_config, "agent_info", None) if ctx.agent_config else None
 
         if chat.agent_cls is not None:
             self.agent_cls = chat.agent_cls
@@ -183,7 +180,6 @@ class ChatCompletionAgent(BaseModel):
         return self
 
     def execute(self, execute_kwargs: ExecuteKwargs) -> Generator[str, None, None] | str:
-        self.migration_v1()
         if not self.messages:
             self.messages = self.convert_history_to_messages()
         messages = self.messages
@@ -215,6 +211,15 @@ class ChatCompletionAgent(BaseModel):
                 logger.warning("ChatCompletionAgent.release_resources: 关闭沙箱资源失败", exc_info=True)
             finally:
                 self.runtime_backend_resolver = None
+
+    def _query_approval_status(self, session_code: str) -> dict | None:
+        """查询 gongfeng 后端判断是否需要续流，并从 interrupt 记录获取审批结果及 interrupts。
+
+        Returns:
+            ``{"approve_result": ApproveResult, "interrupts": list, "id": int|None}``
+            或 None（尚未回调），其中 ``approve_result`` ∈ {approved, rejected, cancelled}。
+        """
+        return ApprovalStateHandler().query_approval_info(session_code)
 
     def convert_history_to_messages(self) -> list[BaseMessage]:
         if not self.chat_history:
@@ -334,7 +339,6 @@ class ChatCompletionAgent(BaseModel):
     def _execute(self, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs):
         if not messages:
             raise ValueError("The messages list cannot be empty.")
-        self._update_aidev_agent_header(execute_kwargs)
         agent_e, cfg = self._get_agent(messages, execute_kwargs=execute_kwargs)
         cfg.setdefault("configurable", {})
         cfg["configurable"]["thread_id"] = self.thread_id
@@ -342,7 +346,9 @@ class ChatCompletionAgent(BaseModel):
 
         # 清除 checkpoint 中的旧消息，避免与平台消息重复
         # 平台传入的 messages 已包含完整历史，无需拼接
-        self._sync_checkpoint_messages(agent_e, cfg)
+        # resume 时不能清checkpoint，否则 model 节点会拿到空 messages → 拒答。
+        if not execute_kwargs.resume:
+            self._sync_checkpoint_messages(agent_e, cfg)
 
         if execute_kwargs.stream:
             if execute_kwargs.legacy_streaming:
@@ -387,19 +393,53 @@ class ChatCompletionAgent(BaseModel):
     def _stream(
         self, agent_e: Runnable, cfg: RunnableConfig, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs
     ) -> Generator[Any, None, None]:
-        # self.thread_id 是 ChatCompletionAgent 唯一的 thread_id 来源，
-        # 同时用于 LangGraph checkpointer（跨请求持久化 state 如 PV）和 RabbitMQ 队列标识（断点续传）
-        # 消息同步通过 RemoveMessage 在 _execute 中处理
+        # 使用 session_code 作为 stream_thread_id，以支持断点续传（RabbitMQ 队列标识）
+        # 当用户刷新页面重新进入同一会话时，可以从 RabbitMQ 队列恢复之前的流
+        stream_thread_id = execute_kwargs.session_code or self.thread_id
+        # 兼容前端：``execute_kwargs.resume`` 历史协议为 ``list[ResumeItem]``，部分前端会直接
+        # 传单条 dict（如 ``{"interruptId": "...", "status": "resolved"}``），此处统一归一化为
+        # 列表，确保后续 ``hydrate_resume_payload`` / LangGraph 续流逻辑接收到一致形态。
+        if isinstance(execute_kwargs.resume, dict):
+            execute_kwargs.resume = [execute_kwargs.resume]
+        # 普通请求继续使用新的 graph_thread_id，避免 LangGraph checkpoint 累积历史消息；
+        # resume 请求必须复用中断时的 thread_id，才能找到中断前的 checkpoint。
+        # 调用方注入优先：若 ``execute_kwargs.thread_id`` 已显式指定（例如平台调试入口在自身
+        # 进程内已经通过 ORM 查到 graph_thread_id，不希望 SDK 再绕一次 openapi/网关反查），
+        # 直接使用调用方传入的值；否则回退到原有的反查兜底逻辑。
+        if execute_kwargs.resume:
+            graph_thread_id = execute_kwargs.thread_id or ApprovalStateHandler() \
+                .get_graph_thread_id_from_interrupt_content(stream_thread_id)
+            if not graph_thread_id:
+                raise AgentException(
+                    message=(
+                        "resume 请求缺少可恢复的 graph_thread_id，未能从 role=interrupt 会话内容"
+                        "的 property.builtin_property 定位到待恢复中断"
+                    )
+                )
+        else:
+            graph_thread_id = f"{stream_thread_id}_{uuid.uuid4().hex[:8]}"
+        logger.info(
+            "[ToolApproval] _stream: execute_kwargs.resume=%s, execute_kwargs.thread_id=%s, "
+            "stream_thread_id=%s, graph_thread_id=%s",
+            bool(execute_kwargs.resume),
+            repr(execute_kwargs.thread_id),
+            repr(stream_thread_id),
+            repr(graph_thread_id),
+        )
+
+        # 拉取平台已存在的 sandbox PV 注入 state（runtime_paas_sbx_pv）
         platform_pv = self._fetch_platform_pv()
-        state = {}
+        state: dict[str, Any] = {}
         if platform_pv:
             state["runtime_paas_sbx_pv"] = platform_pv
         body = {
-            "thread_id": self.thread_id,
+            "thread_id": graph_thread_id,
             "run_id": messages[-1].id or uuid.uuid4().hex,
             "state": state,
             "messages": langchain_messages_to_agui(messages),
         }
+        if execute_kwargs.resume:
+            body["forwarded_props"] = {"command": {"resume": execute_kwargs.resume}}
         agent_input = AgentInput(**body)
 
         # 取消信号传递：cancel_checker 在用户点停止时由 Agent 内部轮询，
@@ -411,23 +451,51 @@ class ChatCompletionAgent(BaseModel):
             return cancel_checker
 
         if isinstance(self.event_handler, BaseSessionWriter):
-            if execute_kwargs.turn_id:
-                self.event_handler.turn_id = execute_kwargs.turn_id
             self.event_handler.set_tools(self.tools)
+
+        # 续流时，查询审批结果供 AidevAGUIAgent 发送 custom 事件及填充 resume payload
+        approve_result = None
+        approval_interrupts = []
+        if execute_kwargs.resume:
+            approval_info = self._query_approval_status(execute_kwargs.session_code or self.thread_id)
+            if approval_info is not None:
+                approve_result = approval_info["approve_result"]
+                approval_interrupts = approval_info.get("interrupts") or []
+            ApprovalStateHandler.hydrate_resume_payload(execute_kwargs.resume, approve_result)
+
         agui_entry = AidevAGUIAgent(
             name="test_agui_agent",
             graph=agent_e,
             event_handler=self.event_handler,
             config=cfg,
             tools={each.name: each for each in self.tools} if self.tools else {},
-            cancel_checker=make_cancel_checker(self.thread_id),
+            cancel_checker=make_cancel_checker(stream_thread_id),
             mcp_fetch_failures=getattr(self, "mcp_fetch_failures", []) or [],
+            approve_result=approve_result,
+            approval_interrupts=approval_interrupts,
         )
 
-        return self._stream_with_queue(agui_entry, agent_input, queue_thread_id=self.thread_id)
+        return self._stream_with_queue(
+            agui_entry,
+            agent_input,
+            queue_thread_id=stream_thread_id,
+            background_only=execute_kwargs.background_only,
+            agent_e=agent_e,
+            cfg=cfg,
+            graph_thread_id=graph_thread_id,
+            resume=bool(execute_kwargs.resume),
+        )
 
     def _stream_with_queue(
-        self, agui_entry: AidevAGUIAgent, agent_input: AgentInput, queue_thread_id: str | None = None
+        self,
+        agui_entry: AidevAGUIAgent,
+        agent_input: AgentInput,
+        queue_thread_id: str | None = None,
+        background_only: bool = False,
+        agent_e: Runnable | None = None,
+        cfg: RunnableConfig | None = None,
+        graph_thread_id: str | None = None,
+        resume: bool = False,
     ) -> Generator[Any, None, None]:
         """使用队列处理器缓存流式请求，支持断点续传
 
@@ -448,25 +516,180 @@ class ChatCompletionAgent(BaseModel):
         """
         helper = GeneratorStreamingHelper(
             thread_id=queue_thread_id or agent_input.thread_id,
+            defer_cleanup_on_complete=background_only,
         )
-        return helper.stream(async_to_sync_generator(agui_entry.run(agent_input)), on_complete=self._on_complete)
+        producer = self._build_resume_aware_producer(
+            agui_entry, agent_input, agent_e=agent_e, cfg=cfg, graph_thread_id=graph_thread_id, resume=resume
+        )
+        return helper.stream(producer, on_complete=self._on_complete)
+
+    def _build_resume_aware_producer(
+        self,
+        agui_entry: AidevAGUIAgent,
+        agent_input: AgentInput,
+        agent_e: Runnable | None,
+        cfg: RunnableConfig | None,
+        graph_thread_id: str | None,
+        resume: bool,
+    ) -> Generator[Any, None, None]:
+        """构造「resume 感知」的生产者生成器（方案 B 兜底入口）。
+
+        生成器惰性执行：仅当队列处理器决定启动新生产者（即队列已空、错过方案 A 的接管
+        窗口）时才会被拉取。届时若这是一次 resume 且对应 graph 已处于终态，则改为从
+        checkpoint 重放完整 turn（见 :meth:`_build_terminal_resume_replay`），避免对终态图
+        跑空 astream 只拿到空快照；否则回退到正常的 astream 流。
+
+        队列内仍有历史时（方案 A 的接管窗口内），队列处理器走 restore 分支、不会拉取此
+        生成器，因此不会触发多余的 ``aget_state`` 查询。
+        """
+
+        def _gen() -> Generator[Any, None, None]:
+            if resume and agent_e is not None and cfg is not None and graph_thread_id:
+                replay = self._build_terminal_resume_replay(agui_entry, agent_input, agent_e, cfg, graph_thread_id)
+                if replay is not None:
+                    logger.info(
+                        "[ResumeReplay] graph terminal, replay persisted turn from checkpoint "
+                        "(scheme B fallback), thread_id=%s, graph_thread_id=%s",
+                        agent_input.thread_id,
+                        graph_thread_id,
+                    )
+                    yield from replay
+                    return
+            yield from async_to_sync_generator(agui_entry.run(agent_input))
+
+        return _gen()
+
+    def _build_terminal_resume_replay(
+        self,
+        agui_entry: AidevAGUIAgent,
+        agent_input: AgentInput,
+        agent_e: Runnable,
+        cfg: RunnableConfig,
+        graph_thread_id: str,
+    ) -> Generator[Any, None, None] | None:
+        """方案 B：resume 的 graph 已终态时，从 checkpoint 重放完整 turn。
+
+        终态判定与 ``LangGraphAGUIAgent`` 收尾逻辑同源：``state.next`` 为空且首个 task 无
+        pending interrupt。命中终态则返回「编码后的事件字符串生成器」（RUN_STARTED →
+        STATE_SNAPSHOT + MESSAGES_SNAPSHOT → RUN_FINISHED）；非终态、查询失败或无可重放
+        消息时返回 ``None``，由调用方回退正常 astream。
+
+        说明：重放仅用于把已落库内容交付前端，**不**再次触发 event_handler 落库（后台
+        drain 阶段的 BaseSessionWriter 已持久化该 turn），故绕过 ``_dispatch_event``。
+        """
+        try:
+            replay_cfg = dict(cfg)
+            replay_cfg["configurable"] = {**cfg.get("configurable", {}), "thread_id": graph_thread_id}
+            state = run_coro_sync(agent_e.aget_state(replay_cfg))
+        except Exception:
+            logger.warning(
+                "[ResumeReplay] aget_state failed, fallback to astream, graph_thread_id=%s",
+                graph_thread_id,
+                exc_info=True,
+            )
+            return None
+
+        tasks = state.tasks if state and len(state.tasks) > 0 else None
+        interrupts = tasks[0].interrupts if tasks else []
+        next_nodes = state.next or ()
+        is_terminal = len(next_nodes) == 0 and not interrupts
+        if not is_terminal:
+            logger.info(
+                "[ResumeReplay] graph not terminal (next=%s, interrupts=%d), use normal resume astream, "
+                "graph_thread_id=%s",
+                next_nodes,
+                len(interrupts),
+                graph_thread_id,
+            )
+            return None
+
+        state_values = state.values if state and state.values else {}
+        messages = state_values.get("messages", []) if isinstance(state_values, dict) else []
+        non_system = [m for m in messages if not isinstance(m, SystemMessage)]
+        if not non_system:
+            logger.info(
+                "[ResumeReplay] terminal graph has no replayable messages, fallback to astream, "
+                "graph_thread_id=%s",
+                graph_thread_id,
+            )
+            return None
+
+        return self._terminal_replay_event_stream(agui_entry, agent_input, non_system)
+
+    def _terminal_replay_event_stream(
+        self,
+        agui_entry: AidevAGUIAgent,
+        agent_input: AgentInput,
+        replayable_messages: list[BaseMessage] | None = None,
+    ) -> Generator[Any, None, None]:
+        """把终态 checkpoint 重建成与正常流一致的 AG-UI 编码事件序列。
+
+        续流（resume）场景仍然不下发终态 ``MESSAGES_SNAPSHOT``——前端 SNAPSHOT 是
+        覆盖式语义，会把前端已渲染的历史消息全部覆盖。同样不发 ``STATE_SNAPSHOT``——
+        其经 ``get_state_snapshot`` 依赖 ``agui_entry.active_run`` 运行期状态，而重放
+        路径下 ``agui_entry.run`` 从未执行，该状态未初始化。
+
+        关于"片段语义"：resume 路径下 ``_sync_checkpoint_messages`` 被显式跳过
+        （见 ``_execute``），故 checkpoint 中的 ``messages`` 是**完整 turn**
+        （``[Human, AI(tool_call), Tool, AI(回复)]``）而非历史上的"仅新增片段"。
+        但 ``langchain_messages_to_streaming_events`` 主动过滤
+        ``Human/System/Interrupt/Activity``，只下发 ``AI/Tool`` 的可重放事件，
+        因此最终前端拿到的仍是"前端缺的那段"（worker 异步跑完 + 30s 队列窗口已过
+        的兜底场景下，前端无法通过方案 A 队列接管拿到 worker 写的事件流）：
+        前端按 ``message_id`` / ``tool_call_id`` 增量合并，与正常 astream 路径下
+        的渲染同构，不会撞覆盖式语义。
+        """
+        encoder = EventEncoder()
+        run_id = agent_input.run_id or uuid.uuid4().hex
+
+        # 1) 审批中断恢复：先回放终态 RUN_FINISHED，让前端把原中断卡片更新为最终状态
+        #    （approved / rejected / cancelled），与 AidevAGUIAgent.run 续流首条事件同源。
+        try:
+            if agui_entry._should_emit_resume_approval_finished():
+                yield encoder.encode(agui_entry._build_resume_approval_finished_event(agent_input))
+        except Exception:
+            logger.exception("[ResumeReplay] emit resume approval RUN_FINISHED failed")
+
+        # 2) RUN_STARTED
+        yield encoder.encode(
+            RunStartedEvent(type=EventType.RUN_STARTED, thread_id=agent_input.thread_id or "", run_id=run_id)
+        )
+
+        # 3) 把 checkpoint 「片段」消息逐条转为流式增量事件下发，补齐前端缺失的本轮 worker 续流内容。
+        #    转换器内部会跳过 Human/System/Interrupt/Activity 消息，只下发 AI/Tool 的可重放事件。
+        if replayable_messages:
+            try:
+                event_count = 0
+                for ev in langchain_messages_to_streaming_events(replayable_messages):
+                    yield encoder.encode(ev)
+                    event_count += 1
+                logger.info(
+                    "[ResumeReplay] streamed %d incremental events from checkpoint fragment, "
+                    "thread_id=%s",
+                    event_count,
+                    agent_input.thread_id,
+                )
+            except Exception:
+                logger.exception(
+                    "[ResumeReplay] failed to stream checkpoint fragment, thread_id=%s",
+                    agent_input.thread_id,
+                )
+
+        # 4) RUN_FINISHED（续流场景不下发 MESSAGES_SNAPSHOT，前端复用已有消息状态 + 上面补发的增量事件）
+        yield encoder.encode(
+            RunFinishedEvent(
+                type=EventType.RUN_FINISHED,
+                thread_id=agent_input.thread_id or "",
+                run_id=run_id,
+                outcome=serialize_run_finished_outcome(RunFinishedSuccessOutcome()),
+            )
+        )
 
     def _on_complete(self):
         if self.event_handler and hasattr(self.event_handler, "set_streaming_finished"):
             self.event_handler.set_streaming_finished()
         # 流式执行结束后释放资源
         self.release_resources()
-
-    def migration_v1(self) -> None:
-        """兼容 v1 旧构造参数，统一迁移到当前运行时协议。"""
-        if not isinstance(self.model_context_options, ModelContextSettings):
-            self.model_context_options = migration_model_context_options_from_agent_options_v1(self.agent_options)
-        if not isinstance(self.knowledge_query_options, KnowledgeSettings):
-            self.knowledge_query_options = migration_knowledge_query_options_from_agent_options_v1(self.agent_options)
-        if not isinstance(self.chat_model_non_thinking, BaseChatModel):
-            self.chat_model_non_thinking = migration_chat_model_non_thinking_from_non_thinking_llm_v1(
-                self.non_thinking_llm,
-            )
 
     def _get_agent(
         self, messages: list[BaseMessage], *, execute_kwargs: ExecuteKwargs
@@ -475,28 +698,30 @@ class ChatCompletionAgent(BaseModel):
         由于在流式的时候，Response 立即返回会导致 trace 断掉，所以在_get_agent中添加 execute_kwargs
         execute_kwargs 有携带了 trace 上下文，以便于不要让 trace 断掉
         """
-        # 合并 knowledge_bases / knowledge_items 到 knowledge_query_options
         if self.knowledge_bases:
-            self.knowledge_query_options.knowledge_bases = self.knowledge_bases
+            self.agent_options.knowledge_query_options.knowledge_bases = self.knowledge_bases
         if self.knowledges:
-            self.knowledge_query_options.knowledge_items = self.knowledges
+            self.agent_options.knowledge_query_options.knowledge_items = self.knowledges
         logger.info(f"callbacks: {self.callbacks}")
         return self.agent_cls.get_agent_executor(
             llm=self.chat_model,
-            non_thinking_llm=self.chat_model_non_thinking or self.chat_model,
+            knowledge_llm=self.chat_model
+            if self.non_thinking_llm is None
+            else ChatModel.get_setup_instance(model=self.non_thinking_llm),
             extra_tools=self.tools,
             chat_history=messages[:-1],
             tool_execution_interval=self.TOOL_EXECUTION_INTERVAL,
             support_vision=self.support_vision,
             file_store=self.file_store,
+            role_prompt=self.role_prompt,
+            agent_prompt=self.agent_prompt,
             callbacks=self.callbacks,
-            knowledge_query_options=self.knowledge_query_options,
-            model_context_options=self.model_context_options,
+            agent_options=self.agent_options,
             skills=self.skills,
             subagent_specs=self.subagent_specs,
             executor_info=self.executor_info,
             execute_kwargs=execute_kwargs,
-            checkpointer=self.checkpointer if self.checkpointer else MemorySaver(),
+            checkpointer=self.checkpointer,
             resource_manager=self.resource_manager,
             runtime_backend_resolver=self.runtime_backend_resolver,
         )
@@ -531,6 +756,22 @@ class ChatCompletionAgent(BaseModel):
                 case PromptRole.TOOL.value:
                     content = each.content if isinstance(each.content, str) else str(each.content)
                     messages.append(ToolMessage(id=each.id, content=content, tool_call_id=bp.get("tool_call_id", "")))
+                case PromptRole.INTERRUPT.value:
+                    # 中断/审批卡片：content 落库为 JSON 字符串（形如
+                    # ``{"outcome": {"type": "interrupt"/"success", "interrupts": [...]}}``），
+                    # 历史回放时可能已被解析为 dict。统一还原为 dict 后封装成
+                    # InterruptMessage（继承 ActivityMessage），既进入 state["messages"]
+                    # 供 MESSAGES_SNAPSHOT 重建与前端展示，又会被 basic_middleware 的
+                    # isinstance(ActivityMessage) 过滤剔除，绝不进入 LLM 输入。
+                    interrupt_content = each.content
+                    if isinstance(interrupt_content, str):
+                        try:
+                            interrupt_content = json.loads(interrupt_content)
+                        except (json.JSONDecodeError, TypeError):
+                            interrupt_content = {}
+                    if not isinstance(interrupt_content, (dict, list)):
+                        interrupt_content = {}
+                    messages.append(InterruptMessage(id=each.id, content=interrupt_content))
         return messages
 
     def _convert_contents(self, contents: list[ChatPrompt]) -> list[ChatPrompt]:
@@ -550,7 +791,7 @@ class ChatCompletionAgent(BaseModel):
                 each.role = PromptRole.USER.value
                 match = self.IMAGE_FILE_PATTERN.search(each.content)
                 if match:
-                    file_path, _ = match.group(1), match.group(2)
+                    file_path, file_name = match.group(1), match.group(2)
                     each.content = [{"type": "image_url", "image_url": {"url": file_path}}]
                     # 图片不计算实际大小，但不能为 0 —— 给一个大于 0 的占位值
                     self.files.append({"file_name": file_path, "file_size": 100})
@@ -572,7 +813,7 @@ class ChatAgentBuilder:
     - 模型 / 工具 / 知识 / 技能装配
     - 聊天历史构建（含 tool_calls 过滤、think 移除、role_history 拼接、modify_last_system_message）
     - executor_info / checkpointer 取值
-    - model_context_options / knowledge_query_options 取值
+    - role_prompt / agent_prompt / agent_options 取值
     - handle_agent_switch（替换 system 消息）
     - specific_resources 提取（``_handle_last_human_message``）
 
@@ -638,37 +879,18 @@ class ChatAgentBuilder:
 
         return ChatModel.get_setup_instance(**kwargs)
 
-    def build_chat_model_non_thinking(self) -> BaseChatModel | None:
-        """构建非思考模型 (返回 ChatModel 实例)"""
-        model_name = self.ctx.agent_config.non_thinking_llm
-        if not model_name:
-            return None
-        kwargs: dict[str, Any] = {
-            "model": model_name,
-            "base_url": settings.LLM_GW_ENDPOINT,
-        }
-        chat = self.ctx.chat or ChatBuildExtras()
-        if chat.auth_headers:
-            kwargs["auth_headers"] = chat.auth_headers
-        return ChatModel.get_setup_instance(**kwargs)
-
     def build_chat_history(self, session_context_data: List[dict]) -> List[ChatPrompt]:
         """构建聊天历史"""
         config = self.ctx.agent_config
-        role_prompt_roles = {
-            PromptRole.USER.value,
-            PromptRole.ASSISTANT.value,
-            PromptRole.SYSTEM.value,
-            PromptRole.PAUSE.value,
-            "hidden-user",
-            "hidden-assistant",
-            "hidden-system",
-        }
-        role_history = [
-            ChatPrompt(role=each["role"].replace("hidden-", ""), content=each["content"])
-            for each in (config.role_prompts or [])
-            if each.get("content") and each.get("role") in role_prompt_roles
-        ]
+        role_history = (
+            [
+                ChatPrompt(role=each["role"].replace("hidden-", ""), content=each["content"])
+                for each in config.role_prompts
+                if each.get("role") in ["user", "assistant", "hidden-user", "hidden-assistant", "hidden-system"]
+            ]
+            if config.role_prompts
+            else []
+        )
 
         chat_history = [
             ChatPrompt.model_validate(each)
@@ -732,6 +954,7 @@ class ChatAgentBuilder:
             mcp_server_config = config.mcp_server_config
         mcp_result = self.ctx.resource_manager.construct_mcp(
             mcp_config=mcp_server_config,
+            agent_options=config.agent_options,
             username=self.ctx.username,
             executor_info=self._executor_info,
         )
@@ -743,7 +966,160 @@ class ChatAgentBuilder:
         else:
             tool_codes = config.tool_codes
         logger.info(f"ChatAgentBuilder: tool_codes->[{tool_codes}]")
-        return [self.ctx.resource_manager.construct_tool(tool_code) for tool_code in tool_codes] + mcp_result.tools
+        tools = [self.ctx.resource_manager.construct_tool(tool_code) for tool_code in tool_codes] + mcp_result.tools
+        self._apply_tool_approval_settings(tools)
+        return tools
+
+    def _apply_tool_approval_settings(self, tools: list[Any]) -> None:
+        approval_items = self._normalize_tool_approval_bindings()
+        logger.info("[ToolApproval] ========== _apply_tool_approval_settings 被调用 ==========")
+        logger.info("[ToolApproval] 归一化审批配置: %s", approval_items)
+        logger.info("[ToolApproval] 工具对象 id 列表: %s", [(getattr(t, "name", ""), id(t)) for t in tools])
+
+        if not approval_items:
+            logger.info("[ToolApproval] 没有需要审批的工具")
+            return
+
+        for tool in tools:
+            metadata = getattr(tool, "metadata", None) or {}
+            tool_name = getattr(tool, "name", "")
+            logger.info("[ToolApproval] 检查工具: %s, metadata: %s", tool_name, metadata)
+            matched = self._match_approval_item(metadata, tool_name, approval_items)
+            if not matched:
+                logger.info("[ToolApproval] 工具 %s 未匹配到审批配置", tool_name)
+                continue
+            logger.info("[ToolApproval] 工具 %s 匹配到审批配置: %s", tool_name, matched)
+            target_type = matched.get("tool_type") or "tool"
+            metadata["approval"] = {
+                **matched,
+                "tool_code": metadata.get("tool_code") or tool_name,
+                "tool_name": metadata.get("tool_name") or tool_name,
+                "tool_type": target_type,
+                "target": {
+                    "type": target_type,
+                    "id": metadata.get("tool_id"),
+                    "name": tool_name,
+                    "display_name": metadata.get("tool_name") or tool_name,
+                    "code": metadata.get("tool_code") or tool_name,
+                    "mcp_name": metadata.get("mcp_name"),
+                    "skill_name": metadata.get("skill_name"),
+                },
+            }
+            tool.metadata = metadata
+            logger.info("[ToolApproval] 工具 %s 已设置 approval metadata: %s", tool_name, metadata["approval"])
+
+    def _normalize_tool_approval_bindings(self) -> list[dict[str, Any]]:
+        config = self.ctx.agent_config
+        approval_settings = getattr(config, "approval_settings", None) or {}
+
+        strategy_index = self._build_approval_strategy_index(approval_settings)
+
+        # 从 config.resources 构建 id→code 映射，用于将 binding 中的整数 id 解析为字符串 code
+        resource_id_map = self._build_resource_id_map(getattr(config, "resources", None) or [])
+
+        bindings: list[dict[str, Any]] = []
+
+        # 从 approval_settings.bindings 读取绑定关系
+        # 字段命名与平台保持一致：approval_strategy_id / approval_enabled
+        # 审批人列表不直接出现在 binding 中，需要通过 approval_strategy_id 反查 strategies 拿 approvers
+        for binding_data in approval_settings.get("bindings", []) or []:
+            if not isinstance(binding_data, dict):
+                continue
+            approval_enabled = binding_data.get("approval_enabled") is True
+            strategy_id = str(binding_data.get("approval_strategy_id") or "").strip()
+            if not approval_enabled or not strategy_id:
+                continue
+            strategy = strategy_index.get(strategy_id)
+            if strategy is None:
+                logger.warning(
+                    "[ToolApproval] 绑定引用了不存在的策略: approval_strategy_id=%s, binding=%s",
+                    strategy_id, binding_data,
+                )
+                continue
+            resource_type = binding_data.get("resource_type", "")
+            tool_type = {"tool": "tool", "mcp_tool": "mcp"}.get(resource_type, resource_type)
+            binding = {
+                "resource_type": resource_type,
+                "tool_type": tool_type,
+                "approval_enabled": True,
+                "approval_strategy_id": strategy_id,
+                "approval_name": strategy.get("approval_name", ""),
+                "approvers": strategy.get("approvers") or [],
+                "strategy": strategy,
+            }
+            if resource_type == "tool":
+                tool_id = binding_data.get("tool_id")
+                binding["id"] = tool_id
+                # 优先从 resources 映射解析 tool_code，回退到 binding_data 中的字段
+                tool_code = resource_id_map.get(("tool", tool_id)) if tool_id else None
+                binding["tool_code"] = tool_code or binding_data.get("tool_code") or tool_id
+                binding["tool_name"] = tool_code or binding_data.get("tool_name") or tool_id
+            elif resource_type == "mcp_tool":
+                mcp_id = binding_data.get("mcp_id")
+                binding["mcp_id"] = mcp_id
+                # 从 resources 映射解析 mcp_name（即 mcp_code/服务器名），用于与工具 metadata 中的 mcp_name 匹配
+                mcp_code = resource_id_map.get(("mcp", mcp_id)) if mcp_id else None
+                binding["mcp_name"] = mcp_code or binding_data.get("mcp_name")
+                binding["tool_code"] = binding_data.get("mcp_tool_name", "")
+                binding["tool_name"] = binding_data.get("mcp_tool_name", "")
+            bindings.append(binding)
+
+        return bindings
+
+    @staticmethod
+    def _build_approval_strategy_index(approval_settings: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        strategies = approval_settings.get("strategies", []) if isinstance(approval_settings, dict) else []
+        strategy_index: dict[str, dict[str, Any]] = {}
+        for strategy in strategies or []:
+            strategy_id = strategy.get("strategy_id")
+            if strategy_id:
+                strategy_index[str(strategy_id)] = strategy
+        return strategy_index
+
+    @staticmethod
+    def _build_resource_id_map(resources: list[dict]) -> dict[tuple[str, int], str]:
+        """从 resources 列表构建 (type, id) → code 映射，用于将 binding 中的整数 id 解析为字符串 code。"""
+        id_map: dict[tuple[str, int], str] = {}
+        for r in resources:
+            if not isinstance(r, dict):
+                continue
+            r_type = r.get("type")
+            r_id = r.get("id")
+            r_code = r.get("code")
+            if r_type and r_id is not None and r_code:
+                id_map[(r_type, r_id)] = r_code
+        return id_map
+
+    @staticmethod
+    def _match_approval_item(metadata: dict, tool_name: str, approval_items: list[dict]) -> dict | None:
+        tool_code = metadata.get("tool_code") or tool_name
+        tool_id = metadata.get("tool_id")
+        mcp_name = metadata.get("mcp_name")
+        for item in approval_items:
+            resource_type = item.get("resource_type") or item.get("tool_type")
+            if resource_type == "tool":
+                if item.get("id") and item.get("id") == tool_id:
+                    return item
+                if item.get("tool_code") and item.get("tool_code") == tool_code:
+                    return item
+                if item.get("tool_name") and item.get("tool_name") in {tool_name, tool_code}:
+                    return item
+            elif resource_type in {"mcp_tool", "mcp"}:
+                if item.get("mcp_name") and item.get("mcp_name") != mcp_name:
+                    continue
+                if item.get("tool_name") and item.get("tool_name") in {tool_name, tool_code}:
+                    return item
+                if item.get("tool_code") and item.get("tool_code") == tool_code:
+                    return item
+                if item.get("mcp_code") and item.get("mcp_code") == mcp_name:
+                    expected_tool_code = item.get("code") or item.get("tool_code")
+                    if not expected_tool_code or expected_tool_code == tool_code:
+                        return item
+            if item.get("code") and item.get("code") == tool_code:
+                return item
+            if item.get("tool_code") and item.get("tool_code") == tool_code:
+                return item
+        return None
 
     def build_skills(self) -> list | None:
         """构建关联技能"""
@@ -894,17 +1270,13 @@ class ChatAgentBuilder:
             return KnowledgeSettings.model_validate(data)
         return migration_knowledge_query_options_from_agent_options_v1(self.ctx.agent_config.agent_options)
 
-    def build_model_context_options(self) -> ModelContextSettings | None:
-        """从 AgentConfig 构建 ModelContextSettings；新协议为空时兼容旧 agent_options。"""
-        data = self.ctx.agent_config.model_context_options_data
-        if data:
-            return ModelContextSettings.model_validate(data)
-        return migration_model_context_options_from_agent_options_v1(self.ctx.agent_config.agent_options)
+    def build_agent_options(self) -> AgentOptions:
+        """构建Agent选项"""
+        return self.ctx.agent_config.agent_options
 
-    def build_support_vision(self) -> bool:
-        """从 prompt_setting.support_upload.vision 构建 support_vision"""
-        support_upload = self.ctx.agent_config.model_context_options_data.get("support_upload") or {}
-        return bool(support_upload.get("vision", False))
+    def build_agent_prompt(self) -> str | None:
+        """构建Agent提示词"""
+        return self.ctx.agent_config.agent_prompt
 
     def build_executor_info(self) -> dict:
         """构建执行用户信息，包含 access_token / app_code / app_secret 用于沙箱认证和 MCP 调用"""
@@ -963,9 +1335,8 @@ class ChatAgentBuilder:
                 f"ChatAgentBuilder: handling last human message with resources in session_context_data->[{item}]"
             )
             if item.get("role") == PromptRole.USER.value:
-                extra = item.get("extra") or {}
-                if extra.get("resources"):
-                    self._specific_resources = extra.get("resources")
+                if item.get("extra", {}).get("resources"):
+                    self._specific_resources = item.get("extra", {}).get("resources")
                 break
 
     def _filter_unmatched_tool_calls(self, chat_history: List[ChatPrompt]) -> List[ChatPrompt]:

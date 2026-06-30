@@ -172,6 +172,21 @@ class TestRemoveMessageSync:
         assert sync_call_pos < stream_pos, "同步调用应在流式分支之前"
         assert sync_call_pos < ainvoke_pos, "同步调用应在 ainvoke 之前"
 
+    def test_sync_skipped_on_resume(self):
+        """resume 路径下必须跳过 _sync_checkpoint_messages，避免清空 checkpoint 中的 tool_call 上下文。"""
+        source = _read_chat_py()
+        execute_source = _extract_method_source(source, "_execute")
+        # _execute 内必须存在 resume 跳过判断（形如 `if not execute_kwargs.resume:` 包裹 sync 调用）
+        assert "execute_kwargs.resume" in execute_source, (
+            "_execute() 应基于 execute_kwargs.resume 决定是否跳过 _sync_checkpoint_messages"
+        )
+        # 粗略校验：sync 调用应被 if not ... resume 包裹（容忍空白差异）
+        normalized = " ".join(execute_source.split())
+        assert "if not execute_kwargs.resume" in normalized and (
+            normalized.find("if not execute_kwargs.resume")
+            < normalized.find("_sync_checkpoint_messages(agent_e, cfg)")
+        ), "resume 路径下必须显式跳过 _sync_checkpoint_messages 调用"
+
 
 class TestPVStatePersistence:
     """验证 PV 状态在稳定 thread_id 下跨请求持久化。"""

@@ -87,6 +87,56 @@ def test_save_content_generates_turn_id_for_user(session_manager, mock_plugin_rm
     assert saved["property"]["turn_id"] == payload["property"]["turn_id"]
 
 
+def test_set_flow_resume_pending_preserves_existing_fields(session_manager, mock_plugin_rm_client):
+    """read-modify-write：仅叠加 resume_pending，保留 flow_info 其它字段与同级属性。"""
+    mock_plugin_rm_client.api.retrieve_chat_session.return_value = {
+        "data": {
+            "session_property": {
+                "flow_info": {"flow_id": "f1", "flow_version": "v1", "task_id": "t1"},
+                "labels": ["x"],
+            }
+        }
+    }
+
+    session_manager.set_flow_resume_pending("sc-1", True)
+
+    call = mock_plugin_rm_client.api.update_chat_session.call_args
+    assert call.kwargs["path_params"] == {"session_code": "sc-1"}
+    session_property = call.kwargs["json"]["session_property"]
+    flow_info = session_property["flow_info"]
+    assert flow_info["resume_pending"] is True
+    # 既有字段不被覆盖
+    assert flow_info["task_id"] == "t1"
+    assert flow_info["flow_id"] == "f1"
+    assert flow_info["flow_version"] == "v1"
+    # session_property 同级其它字段不丢
+    assert session_property["labels"] == ["x"]
+
+
+def test_set_flow_resume_pending_creates_flow_info_when_absent(session_manager, mock_plugin_rm_client):
+    """session_property / flow_info 缺失时，仅写入 resume_pending，不报错。"""
+    mock_plugin_rm_client.api.retrieve_chat_session.return_value = {"data": {}}
+
+    session_manager.set_flow_resume_pending("sc-1", False)
+
+    session_property = mock_plugin_rm_client.api.update_chat_session.call_args.kwargs["json"]["session_property"]
+    assert session_property["flow_info"] == {"resume_pending": False}
+
+
+@pytest.mark.parametrize(
+    "data, expected",
+    [
+        ({"session_property": {"flow_info": {"task_id": "t1", "resume_pending": True}}}, {"task_id": "t1", "resume_pending": True}),
+        ({"session_property": {}}, {}),
+        ({}, {}),
+    ],
+)
+def test_get_flow_info(session_manager, mock_plugin_rm_client, data, expected):
+    """缺失 session_property / flow_info 时返回空 dict，否则原样返回。"""
+    mock_plugin_rm_client.api.retrieve_chat_session.return_value = {"data": data}
+    assert session_manager.get_flow_info("sc-1") == expected
+
+
 def test_prepare_session_turn_inherits_user_turn_id_without_input(session_manager, mock_plugin_rm_client, monkeypatch):
     mock_plugin_rm_client.api.retrieve_chat_session.return_value = {"data": {"session_code": "sc-1"}}
     monkeypatch.setattr(

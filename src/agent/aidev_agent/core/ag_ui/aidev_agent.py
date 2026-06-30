@@ -11,9 +11,12 @@ from ag_ui.core import (
     RawEvent,
     RunAgentInput,
     RunErrorEvent,
+    RunFinishedEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
     ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
@@ -22,18 +25,23 @@ from langchain_core.tools import StructuredTool
 from langgraph.graph.state import CompiledStateGraph
 
 from aidev_agent.exceptions import extract_model_error_message
+from aidev_agent.core.nodes.tool.approval_wrapper import TOOL_APPROVAL_REASON, is_approval_configured
 
 from .agent import LangGraphAGUIAgent
+from .approval import ApprovalOutcomeBuilder, ApproveResultLiteral
 from .events import (
     ExtendToolCallResultEvent,
     ExtendToolCallStartEvent,
 )
 from .types import (
+    AgentInput,
     CustomEventNames,
     CustomMessageType,
     MessagesInProgressRecord,
     MessageSnapshotEventExtend,
+    RunFinishedSuccessOutcome,
     SessionPersistenceEventNames,
+    serialize_run_finished_outcome,
 )
 
 logger = getLogger(__name__)
@@ -44,10 +52,13 @@ class EventDispatcher:
 
     def __init__(self, agent: "AidevAGUIAgent"):
         self.agent = agent
+        self._suppressed_tool_call_ids: set[str] = set()
         self._dispatch_handlers = {
             EventType.RAW: self._handle_raw_event,
             EventType.CUSTOM: self._handle_custom_event,
             EventType.TOOL_CALL_START: self._handle_tool_call_start,
+            EventType.TOOL_CALL_ARGS: self._handle_tool_call_args,
+            EventType.TOOL_CALL_END: self._handle_tool_call_end,
         }
 
     def dispatch(self, event: BaseEvent) -> str:
@@ -158,7 +169,16 @@ class EventDispatcher:
         return self.agent._parent_dispatch(event)
 
     def _handle_tool_call_start(self, event: ToolCallStartEvent) -> str:
-        """处理工具调用开始事件，添加描述信息"""
+        """处理工具调用开始事件，添加描述信息
+
+        对于需要审批的工具，抑制流式 TOOL_CALL 事件，
+        审批通知由 approval_check 节点通过 ManuallyEmitMessage 事件发送。
+        """
+        if self._tool_needs_approval(event.tool_call_name):
+            logger.info(f"[EventDispatcher] 抑制需要审批的工具流式事件: {event.tool_call_name} ({event.tool_call_id})")
+            self._suppressed_tool_call_ids.add(event.tool_call_id)
+            return ""
+
         _tool = self.agent._tool_mapping.get(event.tool_call_name, None)
         _event = ExtendToolCallStartEvent(
             **{
@@ -168,6 +188,24 @@ class EventDispatcher:
             }
         )
         return self.agent._parent_dispatch(_event)
+
+    def _handle_tool_call_args(self, event: ToolCallArgsEvent) -> str:
+        """处理工具调用参数事件，抑制已标记为需要审批的工具"""
+        if event.tool_call_id in self._suppressed_tool_call_ids:
+            return ""
+        return self.agent._parent_dispatch(event)
+
+    def _handle_tool_call_end(self, event: ToolCallEndEvent) -> str:
+        """处理工具调用结束事件，抑制已标记为需要审批的工具"""
+        if event.tool_call_id in self._suppressed_tool_call_ids:
+            self._suppressed_tool_call_ids.discard(event.tool_call_id)
+            return ""
+        return self.agent._parent_dispatch(event)
+
+    def _tool_needs_approval(self, tool_call_name: str) -> bool:
+        """检查工具是否需要审批"""
+        _tool = self.agent._tool_mapping.get(tool_call_name, None)
+        return is_approval_configured(_tool)
 
 
 class AidevAGUIAgent(LangGraphAGUIAgent):
@@ -192,12 +230,16 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
         event_handler: Callable[[BaseEvent], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
         mcp_fetch_failures: list[dict] | None = None,
+        approve_result: ApproveResultLiteral | None = None,
+        approval_interrupts: list[dict] | None = None,
     ):
         super().__init__(name=name, graph=graph, description=description, config=config, cancel_checker=cancel_checker)
         self._tool_mapping = tools or {}
         self._event_handler = event_handler
         self._event_dispatcher = EventDispatcher(self)
         self._mcp_fetch_failures = mcp_fetch_failures or []
+        self._approve_result = approve_result
+        self._approval_interrupts = approval_interrupts or []
 
     @staticmethod
     def _format_mcp_fetch_failure_message(failures: list[dict[str, Any]]) -> str:
@@ -224,10 +266,27 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
             )
         )
 
+        # 续流场景：在 SDK 任何事件之前，先回放一条"终态形态"的 RUN_FINISHED，
+        # 让前端能立即据此把原中断卡片更新为审批最终状态（approved / rejected / cancelled）。
+        # 仅对"审批中断恢复"场景触发；普通续聊或其他类型恢复不发。
+        if self._should_emit_resume_approval_finished():
+            try:
+                resume_finished = self._build_resume_approval_finished_event(input)
+                # 仅做 SSE 输出，不进入 _dispatch_event：
+                #   - 不再向 BaseSessionWriter 重复派发（DB 已在审批回调 / cancel 落库时刷写）
+                #   - 不进入 EventDispatcher 转换（这是一条纯回放事件，不参与工具事件路由）
+                yield event_encoder.encode(resume_finished)
+            except Exception:
+                logger.exception("[Approval] Failed to emit resume RUN_FINISHED event")
+
         async for event in super().run(input):
             try:
+                # 跳过被抑制的空事件（如审批工具的流式 TOOL_CALL 事件被抑制时返回空字符串）
+                if not event:
+                    continue
+
                 event_type = getattr(event, "type", "")
-                # 特殊处理：不输出 message snapshot 事件
+                # 特殊处理：不输出 message snapshot 事件（已在上方手动 yield 过完整快照）
                 if event_type == EventType.MESSAGES_SNAPSHOT:
                     logger.debug(f"message snapshot: {event}")
                 elif event_type == EventType.CUSTOM and getattr(event, "name", "") in skip_encode_custom:
@@ -255,6 +314,16 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
                         TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=compress_log_id)
                     )
                 else:
+                    # RUN_FINISHED 事件：SSE 输出仅保留 metadata.ticket，减少冗余字段
+                    if getattr(event, "type", "") == EventType.RUN_FINISHED.value:
+                        _outcome = getattr(event, "outcome", None)
+                        if isinstance(_outcome, dict) and _outcome.get("type") == "interrupt":
+                            for _interrupt in _outcome.get("interrupts", []):
+                                _metadata = _interrupt.get("metadata")
+                                if isinstance(_metadata, dict):
+                                    _interrupt["metadata"] = (
+                                        {"ticket": _metadata["ticket"]} if "ticket" in _metadata else None
+                                    )
                     yield event_encoder.encode(event)
 
                 # MCP 工具拉取失败消息需要紧跟在 RUN_STARTED 后返回
@@ -273,6 +342,58 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
             except Exception as e:
                 logger.exception(f"Failed to encode event: {e}")
                 raise e
+
+    def _should_emit_resume_approval_finished(self) -> bool:
+        """是否需要在续流首位发送"终态 RUN_FINISHED"。
+
+        触发条件（&，全部满足）：
+
+        1. 存在 ``approve_result``（上游 chat 入口仅审批续流时透传）；
+        2. ``approval_interrupts`` 非空（DB 解析出原中断）；
+        3. ``interrupts[0].reason == TOOL_APPROVAL_REASON``，保险起见限定审批类型，
+           避免未来其他 interrupt 类型误触发。
+
+        其他续流（普通续聊、非审批类型恢复）一律不发。
+        """
+        if not self._approve_result:
+            return False
+        if not self._approval_interrupts:
+            return False
+        first = self._approval_interrupts[0] or {}
+        return isinstance(first, dict) and first.get("reason") == TOOL_APPROVAL_REASON
+
+    def _build_resume_approval_finished_event(
+        self, input: RunAgentInput
+    ) -> RunFinishedEvent:
+        """构造续流首条"终态形态" RUN_FINISHED 事件。
+
+        - ``run_id`` 优先取前端续流请求 ``input.resume[0].interruptId``，
+          兜底取 ``approval_interrupts[0].id``——确保前端能据此精确定位原中断卡片。
+        - ``outcome.type = "success"``，保留 interrupts；同时事件顶层 ``result``
+          字段（与 ``outcome`` 平级）承载 interrupts[0] 扁平化数据（metadata 移入
+          payload.metadata）。二者由 :meth:`ApprovalOutcomeBuilder.build_run_finished_payload`
+          同源构造，与 DB 落库形态一致。
+
+        说明：``ag_ui`` 官方 ``RunFinishedEvent`` 模型原生支持 ``result`` 字段
+        （类型为 ``Any | None``），且基于 ConfiguredBaseModel ``extra=allow`` 也允许
+        额外的 ``outcome`` 字段透传——直接使用官方事件类型即可输出符合协议的 SSE 载荷。
+        """
+        interrupt_id: str = ""
+        if isinstance(input, AgentInput) and input.resume:
+            interrupt_id = input.resume[0].interruptId or ""
+        if not interrupt_id and self._approval_interrupts:
+            interrupt_id = (self._approval_interrupts[0] or {}).get("id", "") or ""
+
+        outcome_dict, result_dict = ApprovalOutcomeBuilder.build_run_finished_payload(
+            self._approval_interrupts, self._approve_result
+        )
+        return RunFinishedEvent(
+            type=EventType.RUN_FINISHED,
+            thread_id=input.thread_id or "",
+            run_id=interrupt_id,
+            outcome=outcome_dict,
+            result=result_dict,
+        )
 
     def _dispatch_event(self, event: BaseEvent) -> str:
         """分发事件，使用 EventDispatcher 处理不同类型的事件"""
@@ -298,3 +419,12 @@ class AidevAGUIAgent(LangGraphAGUIAgent):
             logger.exception(f"Failed to handle stream events: {e}")
             error_chunk = extract_model_error_message(e)
             yield self._dispatch_event(RunErrorEvent(message=error_chunk))
+            # 补发 RunFinishedEvent 确保前端和 BaseSessionWriter 收到完整的结束信号
+            yield self._dispatch_event(
+                RunFinishedEvent(
+                    type=EventType.RUN_FINISHED,
+                    thread_id=input.thread_id or "",
+                    run_id=self.active_run.get("id", "") if self.active_run else "",
+                    outcome=serialize_run_finished_outcome(RunFinishedSuccessOutcome()),
+                )
+            )

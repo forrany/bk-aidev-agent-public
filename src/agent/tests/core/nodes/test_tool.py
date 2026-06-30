@@ -8,6 +8,11 @@ from typing import AsyncGenerator, List
 
 import pytest
 from aidev_agent.core.nodes.tool import ToolNodeSettings, build_tool_node
+from aidev_agent.core.nodes.tool.approval_wrapper import (
+    TOOL_APPROVAL_STATE_KEY,
+    identify_message_approval_targets,
+    is_approval_configured,
+)
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables.schema import StreamEvent
 from langchain_core.tools import tool
@@ -418,6 +423,132 @@ class TestBuildToolNode:
         assert fail_msg.tool_call_id == "call_fail"
         assert fail_msg.status == "error"
         assert "duration" in fail_msg.additional_kwargs
+
+    def test_approval_state_isolated_per_tool_call(self):
+        """同一工具多个 tool_call 的审批状态应按 tool_call_id 隔离。"""
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "approval": {"approval_enabled": True},
+        }
+        try:
+            tool_node = build_tool_node(tools=[calculator])
+            state = {
+                "messages": [
+                    HumanMessage(content="Run two approved states"),
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "calculator",
+                                "args": {"a": 2, "b": 3},
+                                "id": "call_approved",
+                                "type": "tool_call",
+                            },
+                            {
+                                "name": "calculator",
+                                "args": {"a": 4, "b": 5},
+                                "id": "call_rejected",
+                                "type": "tool_call",
+                            },
+                        ],
+                        additional_kwargs={
+                            TOOL_APPROVAL_STATE_KEY: {
+                                "call_approved": {"status": "approved"},
+                                "call_rejected": {"status": "rejected"},
+                            }
+                        },
+                    ),
+                ]
+            }
+
+            result = run_tool_node_in_graph(tool_node, state)
+            tool_messages = [msg for msg in result["messages"] if isinstance(msg, ToolMessage)]
+            assert len(tool_messages) == 2
+
+            approved_msg = next(msg for msg in tool_messages if msg.tool_call_id == "call_approved")
+            rejected_msg = next(msg for msg in tool_messages if msg.tool_call_id == "call_rejected")
+
+            assert approved_msg.content == "5"
+            assert rejected_msg.content == "工具审批未通过，已取消执行。"
+            assert getattr(calculator, "metadata", {}).get("approval") == {"approval_enabled": True}
+        finally:
+            calculator.metadata = original_metadata
+
+    def test_is_approval_configured_accepts_skill_metadata_without_need_approval(self):
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "skill_name": "skill-runner",
+            "approval": {
+                "tool_type": "skill",
+                "skill_code": "skill-runner",
+                "tool_name": "Skill Runner",
+                "target": {"type": "skill", "skill_name": "skill-runner", "display_name": "Skill Runner"},
+            },
+        }
+        try:
+            assert is_approval_configured(calculator) is True
+        finally:
+            calculator.metadata = original_metadata
+
+    def test_is_approval_configured_accepts_mcp_metadata_without_need_approval(self):
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "tool_code": "query-time",
+            "mcp_name": "time-server",
+            "approval": {
+                "tool_type": "mcp",
+                "mcp_code": "time-server",
+                "tool_code": "query-time",
+                "tool_name": "Query Time",
+                "target": {"type": "mcp", "mcp_name": "time-server", "code": "query-time"},
+            },
+        }
+        try:
+            assert is_approval_configured(calculator) is True
+        finally:
+            calculator.metadata = original_metadata
+
+    def test_identify_message_approval_targets_uses_skill_name_from_activate_skill_args(self):
+        original_metadata = dict(getattr(calculator, "metadata", None) or {})
+        calculator.metadata = {
+            **original_metadata,
+            "skill_approval_map": {
+                "skill-runner": {
+                    "tool_type": "skill",
+                    "skill_code": "skill-runner",
+                    "tool_name": "skill-runner",
+                    "target": {
+                        "type": "skill",
+                        "id": 9,
+                        "name": "activate_skill",
+                        "display_name": "skill-runner",
+                        "code": "skill-runner",
+                        "skill_name": "skill-runner",
+                    },
+                }
+            },
+        }
+        try:
+            targets = identify_message_approval_targets(
+                [
+                    {
+                        "id": "call_skill_1",
+                        "name": "activate_skill",
+                        "args": {"skill_name": "skill-runner"},
+                        "type": "tool_call",
+                    }
+                ],
+                {"activate_skill": calculator},
+            )
+            assert len(targets) == 1
+            assert targets[0].target_type == "skill"
+            assert targets[0].target_code == "skill-runner"
+            assert targets[0].target_name == "skill-runner"
+        finally:
+            calculator.metadata = original_metadata
 
     def test_timing_accuracy(self):
         """测试6: 验证执行时间记录的准确性"""

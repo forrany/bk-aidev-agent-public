@@ -90,6 +90,9 @@ class AgentExecutor:
         turn_id: str = "",
     ):
         """执行 agent 直至结束；AG-UI 流式负责事件落库并收尾会话状态。"""
+        # 后台 drain（for _ in out: pass，无 SSE 下游）：标记为 background_only，
+        # 使消费者读到 EOD 时不立即清理队列，保留 DLQ 历史供前端在清理窗口内接管续流。
+        execute_kwargs.background_only = True
         handler = getattr(agent_instance, "event_handler", None)
         if execute_kwargs.stream and isinstance(handler, BaseSessionWriter):
             if turn_id:

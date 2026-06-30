@@ -8,7 +8,7 @@
 - 兼容字段（``session_code``/``thread_id``/``task_id``/``flow_*``/``poll_*``）保留为可选项。
 - ``thread_id``/``agent_type`` 的兜底/解析规则也下沉到本 serializer：
 
-  - ``agent_type``：**不接受用户输入**，由 :class:`AgentConfigFetcher` 按
+  - ``agent_type``：**不接受用户输入**，由 :func:`get_agent_config_info` 按
     ``execute_kwargs.version`` 拉取的 agent 配置唯一决定，写入 ``validated_data["agent_type"]``。
   - ``thread_id``：未传时回落到 ``execute_kwargs.thread_id``；仍为空且 ``session_code`` 也为空时，
     本 serializer 自动生成 uuid 兜底（与 view 旧行为一致，覆盖所有 agent_type 路径）。
@@ -19,8 +19,8 @@ import uuid
 from aidev_agent.pydantic_models import ExecuteKwargs
 from rest_framework import serializers
 
-from aidev_bkplugin.services.agent_config import AgentConfigFetcher
 from aidev_bkplugin.services.agent_execution import build_execute_kwargs
+from aidev_bkplugin.services.agent_config import AgentConfigFetcher
 
 
 class ChatPromptContentField(serializers.Field):
@@ -56,12 +56,13 @@ class ChatCompletionRequestSerializer(serializers.Serializer):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         execute_kwargs = data["execute_kwargs"]  # ExecuteKwargs 实例
-        agent_type = data["agent_type"]          # 来自 AgentConfigFetcher.get_info(...)
+        agent_type = data["agent_type"]          # 来自 get_agent_config_info(...)
     """
 
     input = serializers.CharField(required=False, allow_blank=True, default="")
     chat_history = ChatPromptItemSerializer(many=True, required=False, default=list)
     execute_kwargs = serializers.DictField(required=False, default=dict)
+    resume = serializers.ListField(child=serializers.DictField(), required=False, default=list)
 
     session_code = serializers.CharField(required=False, allow_blank=True, default="")
     thread_id = serializers.CharField(required=False, allow_blank=True, default="")
@@ -89,6 +90,8 @@ class ChatCompletionRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError("chat_history, input or session_code is required")
 
         execute_kwargs: ExecuteKwargs = attrs["execute_kwargs"]
+        if attrs.get("resume"):
+            execute_kwargs.resume = attrs["resume"]
         username = (self.context or {}).get("username")
 
         # agent_type：完全由 agent_info 决定，按 execute_kwargs.version 路由（version 为空 → 最新版）。

@@ -4,7 +4,6 @@ from typing import Any, Callable, List, Optional, cast
 
 from ag_ui.core import BaseEvent
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import MemorySaver
 
 from aidev_agent.config import settings
 from aidev_agent.enums import AgentBuildType, AgentType
@@ -175,7 +174,7 @@ class AgentInstanceFactory:
             switch_agent_by_scene=switch_agent_by_scene,
             resource_manager=resource_manager,
             is_temporary=is_temporary,
-            checkpointer=checkpointer or MemorySaver(),
+            checkpointer=checkpointer,
             username=username,
             version=version,
             _token=_FACTORY_TOKEN,

@@ -257,7 +257,37 @@ class ChatCompletionViewSet(PluginViewSet):
         :param data: ``ChatCompletionRequestSerializer.validated_data``
         :param channel_type: 调用渠道，透传给 flow_agent/start/接口
         """
-        task_id = data["task_id"] or None
+        # 续流判别：节点 retry/skip 成功后 user_operation 会在
+        # session.property.flow_info.resume_pending 置位（并记录 resume_action="retry"/"skip"）；
+        # 此处读到标记即用 flow_info.task_id 续流轮询，并把 resume_action 透传给
+        # FlowAgentCompletionAgent.resume_from_node，触发 flow_agent_restart 和后续
+        # flow_agent_update 状态推送；使用后一次性清除标记，否则（无标记）起新 bkflow 任务。
+        session_manager = SessionManager(username=username)
+        task_id = None
+        resume_action: str = ""
+        if session_code:
+            flow_info = session_manager.get_flow_info(session_code)
+            if flow_info.get("resume_pending"):
+                resume_task_id = flow_info.get("task_id") or ""
+                if resume_task_id:
+                    task_id = resume_task_id
+                    resume_action = flow_info.get("resume_action") or ""
+                    logger.info(
+                        "[FLOW_AGENT] resume_pending 命中，续流既有任务: session_code=%s, task_id=%s, action=%s",
+                        session_code,
+                        task_id,
+                        resume_action,
+                    )
+                else:
+                    logger.warning(
+                        "[FLOW_AGENT] resume_pending=True 但 flow_info 无 task_id，回落起新任务: session_code=%s",
+                        session_code,
+                    )
+                # 一次性消费标记，避免下一轮新对话被误判为续流（同时清除 resume_action）
+                try:
+                    session_manager.set_flow_resume_pending(session_code, False)
+                except Exception:
+                    logger.exception("[FLOW_AGENT] 清除 resume_pending 失败: session_code=%s", session_code)
         flow_start_params = dict(data["flow_start_params"])
         # serializer 已用 FloatField 校验，此处仅做 None → 默认值 回落
         poll_interval = (
@@ -315,6 +345,7 @@ class ChatCompletionViewSet(PluginViewSet):
             flow_start_params=flow_start_params,
             poll_interval=poll_interval,
             poll_timeout=poll_timeout,
+            resume_from_node=resume_action or None,
         )
 
         try:

@@ -13,6 +13,7 @@ from .views.session import (
     ChatSessionShareView,
     ChatSessionViewSet,
 )
+from .views.user_operation import UserOperationViewSet
 
 _router = DefaultRouter()
 _router.register("agent", AgentInfoViewSet, "agent_info")
@@ -23,6 +24,7 @@ _router.register("session_content", ChatSessionContentViewSet, "chat_session_con
 _router.register("session_feedback", ChatSessionContentFeedbackViewSet, "chat_session_feedback")
 _router.register("chat_group", ChatGroupViewSet, "chat_group")
 _router.register("share", ChatSessionShareView, "share")
+_router.register("user_operation", UserOperationViewSet, "user_operation")
 
 
 urlpatterns = [

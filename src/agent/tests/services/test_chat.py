@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +24,7 @@ from aidev_agent.services.agent import ChatCompletionAgent
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler.streaming_helper import GeneratorStreamingHelper
 from aidev_agent.utils.event import RunId
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 
 
@@ -1805,3 +1806,434 @@ class TestAgentFactory2Chat:
         """related_tools → tools"""
         agent = self._build_agent()
         assert len(agent.tools) == 2
+
+
+# ---------------------------------------------------------------------------
+# TestTerminalResumeReplay: resume 的 graph 已终态时从 checkpoint 重放
+# 覆盖三个新增私有方法的核心分支，纯逻辑、不依赖真实 LLM / graph。
+# ---------------------------------------------------------------------------
+
+# chat.py 内被 patch 的模块级符号路径
+_CHAT_MODULE = "aidev_agent.services.agent.chat"
+
+
+def _parse_sse(chunk: str) -> dict:
+    """解析 EventEncoder().encode(...) 产出的 "data: {json}\\n\\n" 形态。"""
+    return json.loads(chunk[len("data: ") :])
+
+
+def _fake_graph_state(next_nodes=(), interrupts=None, messages=None):
+    """构造一个最小的 LangGraph StateSnapshot 替身（仅含被读取的字段）。"""
+    task = SimpleNamespace(interrupts=list(interrupts or []))
+    return SimpleNamespace(
+        next=tuple(next_nodes),
+        tasks=[task],
+        values={"messages": list(messages or [])},
+    )
+
+
+def _seed_agent() -> ChatCompletionAgent:
+    """方法不依赖 self 的运行期状态，用最小种子实例即可。"""
+    return ChatCompletionAgent(chat_model=MockChatModel(responses=["x"]))
+
+
+def _mock_agui_entry(emit_approval_finished: bool = False) -> MagicMock:
+    entry = MagicMock()
+    entry._should_emit_resume_approval_finished.return_value = emit_approval_finished
+    return entry
+
+
+class TestTerminalResumeReplay:
+    """终态 resume 从 checkpoint 重放的单元测试"""
+
+    # ---------------- _terminal_replay_event_stream ----------------
+
+    def test_replay_event_stream_emits_expected_sequence(self):
+        """终态重放应产出 RUN_STARTED → RUN_FINISHED（续流不下发 MESSAGES_SNAPSHOT）"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=False)
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        events = [_parse_sse(e) for e in agent._terminal_replay_event_stream(agui_entry, agent_input)]
+        types_seq = [e["type"] for e in events]
+        assert types_seq == [
+            EventType.RUN_STARTED,
+            EventType.RUN_FINISHED,
+        ]
+        # 续流场景不应下发 MESSAGES_SNAPSHOT
+        assert EventType.MESSAGES_SNAPSHOT not in types_seq
+        run_finished = events[-1]
+        assert run_finished["runId"] == "r1"
+        assert run_finished["threadId"] == "t1"
+
+    def test_replay_event_stream_run_id_fallback_when_missing(self):
+        """agent_input.run_id 缺失时应回退到自动生成的 run_id（RUN_STARTED 与 RUN_FINISHED 一致）"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=False)
+        agent_input = SimpleNamespace(thread_id="t1", run_id=None)
+
+        events = [_parse_sse(e) for e in agent._terminal_replay_event_stream(agui_entry, agent_input)]
+        started = next(e for e in events if e["type"] == EventType.RUN_STARTED)
+        finished = next(e for e in events if e["type"] == EventType.RUN_FINISHED)
+        assert started["runId"]
+        assert started["runId"] == finished["runId"]
+
+    def test_replay_event_stream_prepends_approval_finished(self):
+        """审批续流场景应在最前面补一条终态 RUN_FINISHED（更新中断卡片）"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=True)
+        agui_entry._build_resume_approval_finished_event.return_value = RunFinishedEvent(
+            type=EventType.RUN_FINISHED, thread_id="t1", run_id="approval-run"
+        )
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        events = [_parse_sse(e) for e in agent._terminal_replay_event_stream(agui_entry, agent_input)]
+        types_seq = [e["type"] for e in events]
+        assert types_seq == [
+            EventType.RUN_FINISHED,  # 审批终态卡片
+            EventType.RUN_STARTED,
+            EventType.RUN_FINISHED,
+        ]
+        assert events[0]["runId"] == "approval-run"
+
+    def test_replay_event_stream_swallows_approval_finished_error(self):
+        """审批终态事件构造异常时不应中断重放（仍输出 RUN_STARTED/RUN_FINISHED）"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=True)
+        agui_entry._build_resume_approval_finished_event.side_effect = RuntimeError("boom")
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        events = [_parse_sse(e) for e in agent._terminal_replay_event_stream(agui_entry, agent_input)]
+        types_seq = [e["type"] for e in events]
+        assert types_seq == [
+            EventType.RUN_STARTED,
+            EventType.RUN_FINISHED,
+        ]
+
+    def test_replay_event_stream_emits_ai_text_message(self):
+        """checkpoint 片段含 AIMessage 文本 → 在 RUN_STARTED/RUN_FINISHED 之间补发流式增量事件"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=False)
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+        replayable = [AIMessage(content="hello world", id="ai-1")]
+
+        events = [
+            _parse_sse(e)
+            for e in agent._terminal_replay_event_stream(agui_entry, agent_input, replayable)
+        ]
+        types_seq = [e["type"] for e in events]
+        assert types_seq == [
+            EventType.RUN_STARTED,
+            EventType.TEXT_MESSAGE_START,
+            EventType.TEXT_MESSAGE_CONTENT,
+            EventType.TEXT_MESSAGE_END,
+            EventType.RUN_FINISHED,
+        ]
+        # message_id 须保留 DB 原值，前端按 id 合并不会产生新卡片
+        text_events = [e for e in events if e["type"] in (
+            EventType.TEXT_MESSAGE_START,
+            EventType.TEXT_MESSAGE_CONTENT,
+            EventType.TEXT_MESSAGE_END,
+        )]
+        assert all(e["messageId"] == "ai-1" for e in text_events)
+        content_event = next(e for e in events if e["type"] == EventType.TEXT_MESSAGE_CONTENT)
+        assert content_event["delta"] == "hello world"
+
+    def test_replay_event_stream_emits_tool_call_with_args(self):
+        """checkpoint 片段含 AIMessage(tool_calls) + ToolMessage → 完整补发 TOOL_CALL_* 三段 + RESULT"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=False)
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+        replayable = [
+            AIMessage(
+                content="",
+                id="ai-1",
+                tool_calls=[{"id": "call-1", "name": "my_tool", "args": {"x": 1}, "type": "tool_call"}],
+            ),
+            ToolMessage(content="ok", id="tool-1", tool_call_id="call-1"),
+        ]
+
+        events = [
+            _parse_sse(e)
+            for e in agent._terminal_replay_event_stream(agui_entry, agent_input, replayable)
+        ]
+        types_seq = [e["type"] for e in events]
+        assert types_seq == [
+            EventType.RUN_STARTED,
+            EventType.TOOL_CALL_START,
+            EventType.TOOL_CALL_ARGS,
+            EventType.TOOL_CALL_END,
+            EventType.TOOL_CALL_RESULT,
+            EventType.RUN_FINISHED,
+        ]
+        # tool_call_id 链路保持一致
+        tc_events = [e for e in events if e["type"] in (
+            EventType.TOOL_CALL_START,
+            EventType.TOOL_CALL_ARGS,
+            EventType.TOOL_CALL_END,
+            EventType.TOOL_CALL_RESULT,
+        )]
+        assert all(e["toolCallId"] == "call-1" for e in tc_events)
+        args_event = next(e for e in events if e["type"] == EventType.TOOL_CALL_ARGS)
+        assert json.loads(args_event["delta"]) == {"x": 1}
+        result_event = next(e for e in events if e["type"] == EventType.TOOL_CALL_RESULT)
+        assert result_event["content"] == "ok"
+
+    def test_replay_event_stream_skips_human_and_system_messages(self):
+        """checkpoint 片段中的 Human/System 消息不应下发（前端历史已持有）"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=False)
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+        replayable = [
+            HumanMessage(content="hi", id="u-1"),
+            SystemMessage(content="sys", id="s-1"),
+            AIMessage(content="reply", id="ai-1"),
+        ]
+
+        events = [
+            _parse_sse(e)
+            for e in agent._terminal_replay_event_stream(agui_entry, agent_input, replayable)
+        ]
+        # 只补发 AIMessage 的 TEXT_MESSAGE_* 三段
+        types_seq = [e["type"] for e in events]
+        assert types_seq == [
+            EventType.RUN_STARTED,
+            EventType.TEXT_MESSAGE_START,
+            EventType.TEXT_MESSAGE_CONTENT,
+            EventType.TEXT_MESSAGE_END,
+            EventType.RUN_FINISHED,
+        ]
+
+    def test_replay_event_stream_swallows_streaming_error(self):
+        """checkpoint 转流式事件失败时不应中断 RUN_FINISHED 收尾，前端仍能正常关闭 run"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=False)
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+        replayable = [AIMessage(content="x", id="ai-1")]
+
+        with patch(
+            f"{_CHAT_MODULE}.langchain_messages_to_streaming_events",
+            side_effect=RuntimeError("boom"),
+        ):
+            events = [
+                _parse_sse(e)
+                for e in agent._terminal_replay_event_stream(agui_entry, agent_input, replayable)
+            ]
+
+        # 即便补发失败，仍要保证 RUN_STARTED → RUN_FINISHED 的最小骨架
+        types_seq = [e["type"] for e in events]
+        assert types_seq == [
+            EventType.RUN_STARTED,
+            EventType.RUN_FINISHED,
+        ]
+
+    def test_replay_event_stream_no_replayable_messages_keeps_minimal_sequence(self):
+        """replayable_messages 为 None / 空列表 → 退化为最小 RUN_STARTED + RUN_FINISHED 序列"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry(emit_approval_finished=False)
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        # None
+        events_none = [
+            _parse_sse(e)
+            for e in agent._terminal_replay_event_stream(agui_entry, agent_input, None)
+        ]
+        # 空 list
+        events_empty = [
+            _parse_sse(e)
+            for e in agent._terminal_replay_event_stream(agui_entry, agent_input, [])
+        ]
+
+        for events in (events_none, events_empty):
+            assert [e["type"] for e in events] == [
+                EventType.RUN_STARTED,
+                EventType.RUN_FINISHED,
+            ]
+
+    def test_build_replay_returns_stream_when_terminal(self):
+        """终态 + 有可重放消息 → 返回可迭代的重放事件流"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry()
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+        state = _fake_graph_state(messages=[HumanMessage(content="hi", id="1"), AIMessage(content="ok", id="2")])
+
+        with patch(f"{_CHAT_MODULE}.run_coro_sync", return_value=state) as mock_run:
+            replay = agent._build_terminal_resume_replay(
+                agui_entry, agent_input, MagicMock(), {"configurable": {"thread_id": "session"}}, "graph-1"
+            )
+
+        assert replay is not None
+        events = [_parse_sse(e) for e in replay]
+        types_seq = [e["type"] for e in events]
+        # 续流重放序列为 RUN_STARTED → RUN_FINISHED，不下发 MESSAGES_SNAPSHOT
+        assert EventType.MESSAGES_SNAPSHOT not in types_seq
+        assert EventType.RUN_STARTED in types_seq
+        assert EventType.RUN_FINISHED in types_seq
+        # aget_state 应被调用，且重放查询定位到 graph_thread_id
+        mock_run.assert_called_once()
+
+    def test_build_replay_uses_graph_thread_id_in_cfg(self):
+        """aget_state 的 cfg 应把 thread_id 显式指向 graph_thread_id，避免误读 session thread"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry()
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+        agent_e = MagicMock()
+        state = _fake_graph_state(messages=[HumanMessage(content="hi", id="1")])
+
+        with patch(f"{_CHAT_MODULE}.run_coro_sync", return_value=state):
+            agent._build_terminal_resume_replay(
+                agui_entry, agent_input, agent_e, {"configurable": {"thread_id": "session"}}, "graph-1"
+            )
+
+        replay_cfg = agent_e.aget_state.call_args.args[0]
+        assert replay_cfg["configurable"]["thread_id"] == "graph-1"
+
+    def test_build_replay_returns_none_when_not_terminal(self):
+        """graph 仍有 next 节点（未终态）→ 返回 None，由调用方回退正常 astream"""
+        agent = _seed_agent()
+        state = _fake_graph_state(next_nodes=("agent",), messages=[HumanMessage(content="hi", id="1")])
+        with patch(f"{_CHAT_MODULE}.run_coro_sync", return_value=state):
+            replay = agent._build_terminal_resume_replay(
+                _mock_agui_entry(), SimpleNamespace(thread_id="t1", run_id="r1"), MagicMock(), {}, "graph-1"
+            )
+        assert replay is None
+
+    def test_build_replay_returns_none_when_pending_interrupt(self):
+        """终态但首个 task 仍有 pending interrupt → 返回 None"""
+        agent = _seed_agent()
+        state = _fake_graph_state(interrupts=[{"value": "need approval"}], messages=[HumanMessage(content="hi", id="1")])
+        with patch(f"{_CHAT_MODULE}.run_coro_sync", return_value=state):
+            replay = agent._build_terminal_resume_replay(
+                _mock_agui_entry(), SimpleNamespace(thread_id="t1", run_id="r1"), MagicMock(), {}, "graph-1"
+            )
+        assert replay is None
+
+    def test_build_replay_returns_none_when_no_replayable_messages(self):
+        """终态但仅有 SystemMessage（无可交付内容）→ 返回 None"""
+        agent = _seed_agent()
+        state = _fake_graph_state(messages=[SystemMessage(content="sys", id="0")])
+        with patch(f"{_CHAT_MODULE}.run_coro_sync", return_value=state):
+            replay = agent._build_terminal_resume_replay(
+                _mock_agui_entry(), SimpleNamespace(thread_id="t1", run_id="r1"), MagicMock(), {}, "graph-1"
+            )
+        assert replay is None
+
+    def test_build_replay_returns_none_on_aget_state_error(self):
+        """aget_state 查询异常 → 吞掉异常并返回 None（回退 astream，不阻断续流）"""
+        agent = _seed_agent()
+        with patch(f"{_CHAT_MODULE}.run_coro_sync", side_effect=Exception("checkpoint unavailable")):
+            replay = agent._build_terminal_resume_replay(
+                _mock_agui_entry(), SimpleNamespace(thread_id="t1", run_id="r1"), MagicMock(), {}, "graph-1"
+            )
+        assert replay is None
+
+    # ---------------- _build_resume_aware_producer ----------------
+
+    def test_producer_non_resume_uses_astream(self):
+        """非 resume → 直接走正常 astream，不触发 checkpoint 查询（普通新流零行为变化）"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry()
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        with (
+            patch.object(agent, "_build_terminal_resume_replay") as mock_replay,
+            patch(f"{_CHAT_MODULE}.async_to_sync_generator", return_value=iter(["X"])),
+        ):
+            producer = agent._build_resume_aware_producer(
+                agui_entry, agent_input, agent_e=None, cfg=None, graph_thread_id=None, resume=False
+            )
+            out = list(producer)
+
+        assert out == ["X"]
+        mock_replay.assert_not_called()
+        agui_entry.run.assert_called_once_with(agent_input)
+
+    def test_producer_resume_missing_context_uses_astream(self):
+        """resume=True 但缺少 agent_e/cfg/graph_thread_id → 不查 checkpoint，直接 astream"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry()
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        with (
+            patch.object(agent, "_build_terminal_resume_replay") as mock_replay,
+            patch(f"{_CHAT_MODULE}.async_to_sync_generator", return_value=iter(["X"])),
+        ):
+            producer = agent._build_resume_aware_producer(
+                agui_entry, agent_input, agent_e=None, cfg=None, graph_thread_id=None, resume=True
+            )
+            out = list(producer)
+
+        assert out == ["X"]
+        mock_replay.assert_not_called()
+
+    def test_producer_terminal_resume_uses_replay(self):
+        """resume=True 且终态 → 走 checkpoint 重放，不再跑 astream"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry()
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        with (
+            patch.object(agent, "_build_terminal_resume_replay", return_value=iter(["R1", "R2"])) as mock_replay,
+            patch(f"{_CHAT_MODULE}.async_to_sync_generator") as mock_astream,
+        ):
+            producer = agent._build_resume_aware_producer(
+                agui_entry,
+                agent_input,
+                agent_e=MagicMock(),
+                cfg={"configurable": {}},
+                graph_thread_id="graph-1",
+                resume=True,
+            )
+            out = list(producer)
+
+        assert out == ["R1", "R2"]
+        mock_replay.assert_called_once()
+        mock_astream.assert_not_called()
+
+    def test_producer_resume_non_terminal_falls_back_to_astream(self):
+        """resume=True 但非终态（replay 返回 None）→ 回退正常 astream"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry()
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        with (
+            patch.object(agent, "_build_terminal_resume_replay", return_value=None) as mock_replay,
+            patch(f"{_CHAT_MODULE}.async_to_sync_generator", return_value=iter(["X"])),
+        ):
+            producer = agent._build_resume_aware_producer(
+                agui_entry,
+                agent_input,
+                agent_e=MagicMock(),
+                cfg={"configurable": {}},
+                graph_thread_id="graph-1",
+                resume=True,
+            )
+            out = list(producer)
+
+        assert out == ["X"]
+        mock_replay.assert_called_once()
+        agui_entry.run.assert_called_once_with(agent_input)
+
+    def test_producer_is_lazy(self):
+        """producer 必须惰性：未被拉取前不应触发 checkpoint 查询或 astream"""
+        agent = _seed_agent()
+        agui_entry = _mock_agui_entry()
+        agent_input = SimpleNamespace(thread_id="t1", run_id="r1")
+
+        with (
+            patch.object(agent, "_build_terminal_resume_replay") as mock_replay,
+            patch(f"{_CHAT_MODULE}.async_to_sync_generator") as mock_astream,
+        ):
+            agent._build_resume_aware_producer(
+                agui_entry,
+                agent_input,
+                agent_e=MagicMock(),
+                cfg={"configurable": {}},
+                graph_thread_id="graph-1",
+                resume=True,
+            )
+            # 仅构造、未迭代
+
+        mock_replay.assert_not_called()
+        mock_astream.assert_not_called()
+        agui_entry.run.assert_not_called()

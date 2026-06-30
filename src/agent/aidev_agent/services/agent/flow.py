@@ -317,12 +317,22 @@ class FlowAgentCompletionAgent(BaseModel):
             # 保存最后一次成功轮询结果，用于取消时构造 revoke 事件
             last_task_info = task_info
 
+            # 双轨派发：
+            # - 内部 event_handler（落库）始终使用 ``flow_agent_result``，保证历史回填一致；
+            # - SSE 输出在 retry/skip 续流场景使用 ``flow_agent_update``
             result_event = self._make_custom_event(
                 name=CustomMessageType.FLOW_AGENT_RESULT.value,
                 value=[task_info],
             )
             self._dispatch_event(result_event)
-            yield encoder.encode(result_event)
+            if self.resume_from_node:
+                update_event = self._make_custom_event(
+                    name=CustomMessageType.FLOW_AGENT_UPDATE.value,
+                    value=[task_info],
+                )
+                yield encoder.encode(update_event)
+            else:
+                yield encoder.encode(result_event)
 
             # 兼容 task_state 和 state 两种字段名
             task_state = task_info.get("task_state", task_info.get("state", ""))
