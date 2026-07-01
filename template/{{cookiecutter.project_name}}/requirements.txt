@@ -1,8 +1,8 @@
 ag-ui-protocol==0.1.10
-aidev-agent==2.1.0rc148
+aidev-agent==2.2.0rc167
 aidev-ai-blueking==2.2.0b4
-aidev-bkplugin==2.1.0rc148
-aidev-wxbot==2.1.0rc148
+aidev-bkplugin==2.2.0rc167
+aidev-wxbot==2.2.0rc167
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
 aiosignal==1.4.0
@@ -14,7 +14,7 @@ asgiref==3.10.0
 attrs==25.4.0
 bashlex==0.18
 billiard==4.2.2
-bk-plugin-framework==2.3.13
+bk-plugin-framework==2.3.15
 bk-plugin-runtime==2.1.9
 bkapi-bk-apigateway==1.0.12
 bkapi-client-core==1.2.0
