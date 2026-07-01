@@ -1,16 +1,16 @@
 [project]
 name = "ai-plugin"
-version = "2.1.0rc148"
+version = "2.2.0rc167"
 description = ""
 readme = "readme.md"
 authors = [{ name = "blueking" }]
 requires-python = "~=3.11.9"
 dependencies = [
-    "aidev-agent[opentelemetry]==2.1.0rc148",
-    "aidev-bkplugin==2.1.0rc148",
-    "aidev-wxbot==2.1.0rc148",
+    "aidev-agent[opentelemetry]==2.2.0rc167",
+    "aidev-bkplugin==2.2.0rc167",
+    "aidev-wxbot==2.2.0rc167",
     "aidev-ai-blueking==2.2.0b4",
-    "bk-plugin-framework==2.3.13",
+    "bk-plugin-framework==2.3.15",
     "bkapi-bk-apigateway==1.0.12",
     "celery==5.4.0",
     "django-celery-beat==2.7.0",
