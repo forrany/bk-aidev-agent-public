@@ -9,10 +9,21 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FileUploadParser
 from rest_framework.views import Response
 
-from aidev_bkplugin.constants import AGUI_PROTOCOL_VERSION
+from aidev_bkplugin.constants import AGUI_PROTOCOL_VERSION, DEFAULT_SESSION_PAGE, DEFAULT_SESSION_PAGE_SIZE
 from aidev_bkplugin.services.agent_config import AgentConfigFetcher
 from aidev_bkplugin.utils import is_local_dev
 from aidev_bkplugin.views.base import PluginResourceManager, PluginViewSet, client, logger
+
+
+def _parse_positive_int(value, default):
+    """将分页参数解析为正整数，缺失或非法（非数字、小于 1）时回退默认值"""
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 1 else default
 
 
 class ChatSessionViewSet(PluginViewSet):
@@ -24,11 +35,23 @@ class ChatSessionViewSet(PluginViewSet):
         return ChannelType.POPUP.value
 
     def list(self, request):
-        result = client.api.list_chat_session(
-            headers={"X-BKAIDEV-USER": request.user.username}, params={"session_type": self.session_type}
-        )
-        result["data"] = [each for each in result["data"] if each.get("protocol_version") == AGUI_PROTOCOL_VERSION]
-        return Response(data=result["data"])
+        params = {
+            "session_type": self.session_type,
+            "protocol_version": AGUI_PROTOCOL_VERSION,
+        }
+        page = request.query_params.get("page")
+        page_size = request.query_params.get("page_size")
+        # 兼容旧前端：仅当显式传入 page 或 page_size 时启用分页，否则保持数组返回
+        has_pagination = page is not None or page_size is not None
+        if has_pagination:
+            params["page"] = _parse_positive_int(page, DEFAULT_SESSION_PAGE)
+            params["page_size"] = _parse_positive_int(page_size, DEFAULT_SESSION_PAGE_SIZE)
+        result = client.api.list_chat_session(headers={"X-BKAIDEV-USER": request.user.username}, params=params)
+        data = result["data"]
+        if not isinstance(data, dict):
+            # 旧后端未分页（返回数组）：在 Agent 侧过滤协议版本
+            data = [each for each in data if each.get("protocol_version") == AGUI_PROTOCOL_VERSION]
+        return Response(data=data)
 
     @action(["POST"], url_path="batch_delete", detail=False)
     def batch_delete(self, request):
