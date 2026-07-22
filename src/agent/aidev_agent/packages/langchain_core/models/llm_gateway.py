@@ -22,8 +22,10 @@ from typing import AsyncIterator, Iterator, Optional, Type, Union
 
 import openai
 import requests
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.runnables.fallbacks import RunnableWithFallbacks
 from langchain_openai.chat_models import ChatOpenAI as RawChatOpenAI
 from langchain_openai.chat_models.base import _convert_message_to_dict
 from langchain_openai.embeddings import OpenAIEmbeddings as RawOpenAIEmbeddings
@@ -62,6 +64,16 @@ class ApiGwMixin(BaseModel):
 class ChatModel(RawChatOpenAI, ApiGwMixin):
     remote_tokenizer: bool = True
     max_content_length: Optional[int] = None
+    fallback_model: str | None = None
+
+    @classmethod
+    def get_setup_instance(cls, **kwargs) -> "ChatModel | RunnableWithFallbacks":
+        """创建网关模型；配置备用模型时返回 LangChain fallback Runnable。"""
+        model = super().get_setup_instance(**kwargs)
+        fallback = model._get_fallback_model()
+        if fallback is None:
+            return model
+        return model.with_fallbacks([fallback])
 
     @model_validator(mode="before")
     @classmethod
@@ -107,6 +119,13 @@ class ChatModel(RawChatOpenAI, ApiGwMixin):
         messages_dict = [_convert_message_to_dict(m) for m in messages]
         return self.get_num_tokens(json.dumps(messages_dict))
 
+    def _get_request_payload(self, *args, **kwargs) -> dict:
+        payload = super()._get_request_payload(*args, **kwargs)
+        # 部分 langchain-openai 版本会将子类扩展字段合并到 OpenAI 请求参数中。
+        # fallback_model 仅用于 SDK 内部切换，不能透传给 OpenAI 客户端。
+        payload.pop("fallback_model", None)
+        return payload
+
     def _create_chat_result(
         self,
         response: Union[dict, openai.BaseModel],
@@ -123,6 +142,11 @@ class ChatModel(RawChatOpenAI, ApiGwMixin):
             ].message.reasoning_content  # type: ignore
 
         return rtn
+
+    def _get_fallback_model(self) -> "ChatModel | None":
+        if not self.fallback_model or self.fallback_model == self.model_name:
+            return None
+        return self.model_copy(update={"model_name": self.fallback_model, "fallback_model": None})
 
     def _convert_chunk_to_generation_chunk(
         self,
@@ -190,6 +214,9 @@ class ChatModel(RawChatOpenAI, ApiGwMixin):
                 chunk, reasoning_start_time, last_reasoning_content
             )
             yield chunk
+
+
+ChatModelRunnable = RunnableWithFallbacks | BaseChatModel
 
 
 class Embeddings(RawOpenAIEmbeddings, ApiGwMixin):

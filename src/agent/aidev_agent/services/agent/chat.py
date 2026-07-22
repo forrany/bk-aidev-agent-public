@@ -11,6 +11,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.runnables.fallbacks import RunnableWithFallbacks
 from langchain_core.stores import ByteStore
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -36,7 +37,7 @@ from aidev_agent.core.tools.a2a_tools.types import AgentBackendType, AgentSpec
 from aidev_agent.core.tools.runtime_tools import RuntimeBackendResolver
 from aidev_agent.enums import AgentType, PromptRole
 from aidev_agent.exceptions import AgentException
-from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel
+from aidev_agent.packages.langchain_core.models.llm_gateway import ChatModel, ChatModelRunnable
 from aidev_agent.packages.langgraph.streaming.streaming_protocol import AgentStreamAdapter
 from aidev_agent.packages.resource_manager.registry import resource_manager
 from aidev_agent.pydantic_models import (
@@ -93,9 +94,9 @@ class ChatCompletionAgent(BaseModel):
     agent_type: ClassVar[AgentType] = AgentType.CHAT
 
     thread_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    chat_model: BaseChatModel | None = None
+    chat_model: ChatModelRunnable | None = None
     """聊天模型；种子实例（``ChatCompletionAgent()``）为 ``None``，``build(ctx)``
-    装配后由 :meth:`ChatAgentBuilder.build_chat_model` 填充为非空 ``BaseChatModel``。
+    装配后由 :meth:`ChatAgentBuilder.build_chat_model` 填充为非空聊天模型 Runnable。
     种子实例不可执行（``execute()`` 假设非空）。"""
     chat_model_non_thinking: BaseChatModel | None = None
     """非思考模型；由 :meth:`ChatAgentBuilder.build_chat_model_non_thinking` 填充。"""
@@ -201,7 +202,13 @@ class ChatCompletionAgent(BaseModel):
         if not self.messages:
             self.messages = self.convert_history_to_messages()
         messages = self.messages
-        self.chat_model.callbacks = self.callbacks
+        chat_models = (
+            (self.chat_model.runnable, *self.chat_model.fallbacks)
+            if isinstance(self.chat_model, RunnableWithFallbacks)
+            else (self.chat_model,)
+        )
+        for chat_model in chat_models:
+            chat_model.callbacks = self.callbacks
         return self._execute(messages, execute_kwargs)
 
     def stop(self):
@@ -1106,7 +1113,7 @@ class ChatAgentBuilder:
 
     # ---------- 公共：装配方法（被 ChatCompletionAgent.build 调用） ----------
 
-    def build_chat_model(self) -> BaseChatModel:
+    def build_chat_model(self) -> ChatModelRunnable:
         """构建聊天模型"""
         config = self.ctx.agent_config
         chat = self.ctx.chat or ChatBuildExtras()
@@ -1116,6 +1123,7 @@ class ChatAgentBuilder:
 
         kwargs: dict[str, Any] = {
             "model": config.chat_model,
+            "fallback_model": config.fallback_model,
             "base_url": settings.LLM_GW_ENDPOINT,
         }
 
