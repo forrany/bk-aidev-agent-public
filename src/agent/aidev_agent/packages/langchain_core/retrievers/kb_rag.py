@@ -43,6 +43,7 @@ from .utils import (
     dispatch_rag_event_chunk,
     invoke_decorator,
     normalize_query_for_search,
+    resolve_display_sort_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -875,6 +876,7 @@ class KnowledgeRag:
                 knowledge_bases=knowledge_bases,
                 query=query_for_search,
                 topk=knowledge_query_options.knowledge_resource_rough_recall_topk,
+                knowledge_query_options=knowledge_query_options,
                 **kwargs,
             )
 
@@ -975,7 +977,10 @@ class KnowledgeRag:
                     knowledge_query_options=knowledge_query_options,
                 )
             )
-            output_state["reference_doc"] = deduplicate_knowledge_file_paths(knowledge_resources_highly_relevant)
+            output_state["reference_doc"] = deduplicate_knowledge_file_paths(
+                knowledge_resources_highly_relevant,
+                sort_key=resolve_display_sort_key(knowledge_query_options.knowledge_resource_fine_grained_score_type),
+            )
         elif decision == Decision.QUERY_CLARIFICATION:
             # 查询澄清:处理中等相关性资源
             output_state.update(
@@ -984,7 +989,10 @@ class KnowledgeRag:
                     knowledge_query_options=knowledge_query_options,
                 )
             )
-            output_state["reference_doc"] = deduplicate_knowledge_file_paths(knowledge_resources_moderately_relevant)
+            output_state["reference_doc"] = deduplicate_knowledge_file_paths(
+                knowledge_resources_moderately_relevant,
+                sort_key=resolve_display_sort_key(knowledge_query_options.knowledge_resource_fine_grained_score_type),
+            )
 
         dispatch_rag_event_chunk("完成召回并分类")
         return KnowledgeRagRetrieveResult(

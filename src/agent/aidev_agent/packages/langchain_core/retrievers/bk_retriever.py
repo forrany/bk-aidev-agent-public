@@ -153,7 +153,9 @@ class BkRetriever(BaseRetriever):
                             "请传入支持的向量索引的子集！"
                         )
                     custom_index_names_set = set(custom_index_names_type_id)
-                    all_indexes = [index for index in supported_indexes if index["index_name"] in custom_index_names_set]
+                    all_indexes = [
+                        index for index in supported_indexes if index["index_name"] in custom_index_names_set
+                    ]
             if not all_indexes:
                 all_indexes = supported_indexes
             if not all_indexes:
@@ -213,9 +215,14 @@ class BkRetriever(BaseRetriever):
             "index_query_kwargs": index_query_kwargs,
             "knowledge_template_id": knowledge_query_options.knowledge_template_id,
             "with_scalar_data": knowledge_query_options.with_scalar_data,
+            "rrf_weights": knowledge_query_options.rrf_weights,
             "raw": True,  # 知识库查询接口集成了本文件中的重排逻辑，设置为True防止循环重排。下同
             "type": "index_specific",
         }
+        if knowledge_query_options.recall_channels is not None:
+            data["recall_channels"] = list(knowledge_query_options.recall_channels)
+        if knowledge_query_options.scalar_expression:
+            data["scalar"] = {"expression": knowledge_query_options.scalar_expression}
         return self._search_knowledge_by_client(data)
 
     @timeit(message="知识库检索（index_specific方式，使用提取的关键词）")
@@ -273,7 +280,15 @@ class BkRetriever(BaseRetriever):
             return []
 
     @timeit(message="知识库检索（nature方式）")
-    def search_knowledge_nature(self, knowledge_items: list[dict], knowledge_bases: list[dict], query, topk, **kwargs):
+    def search_knowledge_nature(
+        self,
+        knowledge_items: list[dict],
+        knowledge_bases: list[dict],
+        query,
+        topk,
+        knowledge_query_options: KnowledgeSettings | None = None,
+        **kwargs,
+    ):
         """
         对应 intent_recognition.py 第235-248行的 search_knowledge_nature 方法
         基于向量检索获取相关文档（nature方式）
@@ -288,6 +303,10 @@ class BkRetriever(BaseRetriever):
             "raw": True,
             "type": "nature",
         }
+        if knowledge_query_options and knowledge_query_options.recall_channels is not None:
+            data["recall_channels"] = list(knowledge_query_options.recall_channels)
+        if knowledge_query_options and knowledge_query_options.scalar_expression:
+            data["scalar"] = {"expression": knowledge_query_options.scalar_expression}
         return self._search_knowledge_by_client(data)
 
     def _get_relevant_documents(
