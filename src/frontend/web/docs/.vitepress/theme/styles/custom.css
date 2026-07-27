@@ -30,6 +30,36 @@ body {
   height: 100%;
 }
 
+/* Hero 标题/副标题：避免中文孤字断行，桌面与窄屏均保持可读换行 */
+.VPHero .name,
+.VPHero .text,
+.VPHero .tagline {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 640px) {
+  .VPHero .name,
+  .VPHero .text {
+    max-width: 640px;
+  }
+
+  .VPHero .tagline {
+    max-width: 640px;
+  }
+}
+
+@media (min-width: 960px) {
+  .VPHero.has-image .name,
+  .VPHero.has-image .text {
+    max-width: min(100%, 720px);
+  }
+
+  .VPHero.has-image .tagline {
+    max-width: min(100%, 640px);
+  }
+}
+
 /* 首页底部样式 */
 .home-footer {
   text-align: center;

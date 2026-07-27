@@ -32,7 +32,11 @@ const docsBase = resolveDocsBasePath(siteUrl); // => '/docs' 或 '/prod--foo/doc
 const assetService = createDocsAssetService({
   staticDir: getDefaultStaticDir(),
   basePath: docsBase,
-  globals: { BK_AIDEV_API_URL: process.env.BK_AIDEV_API_URL || '' },
+  // BK_AIDEV_URL：顶栏「返回 AIDev」按钮跳转；BK_AIDEV_API_URL：在线 Demo
+  globals: {
+    BK_AIDEV_API_URL: process.env.BK_AIDEV_API_URL || '',
+    BK_AIDEV_URL: process.env.BK_AIDEV_URL || '',
+  },
 });
 
 // GET 请求：assetService.handleGet(relativePath) 返回 text/file/not_found
@@ -120,6 +124,7 @@ pnpm build
 pnpm preview
 
 # 预览 npm 包构建产物（pnpm build:npm 后 dist/static/，含 __DOCS_BASE__ 替换）
+# 访问 http://localhost:4173/（根路径），不要带 /__DOCS_BASE__/
 pnpm preview:npm
 
 # 生产静态服务（自动识别 dist/ 或 dist/static/）

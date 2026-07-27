@@ -1,8 +1,10 @@
 import DefaultTheme from 'vitepress/theme'
+import { h } from 'vue'
 
 import './styles/vars.css'
 import './styles/custom.css'
 
+import BackToAidev from './components/BackToAidev.vue'
 import DemoContainer from './components/DemoContainer.vue'
 import FeatureCard from './components/FeatureCard.vue'
 import VersionBadge from './components/VersionBadge.vue'
@@ -11,6 +13,11 @@ import Playground from './components/Playground.vue'
 
 export default {
   extends: DefaultTheme,
+  Layout: () =>
+    h(DefaultTheme.Layout, null, {
+      'nav-bar-content-after': () => h(BackToAidev, { variant: 'nav' }),
+      'nav-screen-content-after': () => h(BackToAidev, { variant: 'screen' }),
+    }),
   async enhanceApp({ app }) {
     app.component('DemoContainer', DemoContainer)
     app.component('FeatureCard', FeatureCard)

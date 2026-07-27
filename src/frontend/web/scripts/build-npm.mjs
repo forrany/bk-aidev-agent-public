@@ -13,9 +13,9 @@ function run(cmd) {
 
 console.log('=== Building npm package for ai-blueking-docs ===\n');
 
-// Step 1: VitePress build with placeholder base
-console.log('[1/4] Building VitePress with __DOCS_BASE__/ placeholder...');
-run('VITEPRESS_BASE=__DOCS_BASE__/ vitepress build docs');
+// Step 1: VitePress build with placeholder base（必须以 / 开头，否则 VitePress 警告且路由前缀异常）
+console.log('[1/4] Building VitePress with /__DOCS_BASE__/ placeholder...');
+run('VITEPRESS_BASE=/__DOCS_BASE__/ vitepress build docs');
 
 // Step 2: Reorganize dist/ → dist/static/
 console.log('[2/4] Reorganizing dist/ for npm package structure...');

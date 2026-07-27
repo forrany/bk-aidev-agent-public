@@ -92,11 +92,28 @@ function buildGlobalsScript(globals: Record<string, string>): string {
   return `<script>${entries}</script>`;
 }
 
+/**
+ * 将构建产物中的 __DOCS_BASE__ 占位符替换为实际挂载路径。
+ * 根路径部署时必须先替换 `/__DOCS_BASE__/` → `/`，避免变成 `//`：
+ * VitePress 客户端用 `const n="/__DOCS_BASE__/"; path.slice(n.length)` 解析路由，
+ * 若变成 `const n="//"`，首页会先 SSR 再被客户端误判为 404。
+ */
 function replaceDocsBase(rawContent: string, basePath: string): string {
-  const basePathNoSlash = basePath.replace(/^\//, '');
+  const normalized = (basePath || '').replace(/\/$/, '');
+  const isRoot = normalized === '' || normalized === '/';
+
+  if (isRoot) {
+    return rawContent
+      .replaceAll(`/${DOCS_BASE_PLACEHOLDER}/`, '/')
+      .replaceAll(`${DOCS_BASE_PLACEHOLDER}/`, '/')
+      .replaceAll(`/${DOCS_BASE_PLACEHOLDER}`, '')
+      .replaceAll(DOCS_BASE_PLACEHOLDER, '');
+  }
+
+  const resolvedBase = normalized.startsWith('/') ? normalized : `/${normalized}`;
   return rawContent
-    .replaceAll('/' + DOCS_BASE_PLACEHOLDER, '/' + basePathNoSlash)
-    .replaceAll(DOCS_BASE_PLACEHOLDER, basePath);
+    .replaceAll(`/${DOCS_BASE_PLACEHOLDER}`, resolvedBase)
+    .replaceAll(DOCS_BASE_PLACEHOLDER, resolvedBase);
 }
 
 function injectGlobals(html: string, globals: Record<string, string>): string {
@@ -196,13 +213,14 @@ export class DocsAssetService {
       };
     }
 
+    // js/css 含运行时 base 替换，不能 immutable；否则替换逻辑变更后浏览器仍用旧产物
     if (ext === '.css') {
       return {
         kind: 'text',
         status: 200,
         contentType: 'text/css; charset=utf-8',
         body: content,
-        cacheControl: 'public, max-age=31536000, immutable',
+        cacheControl: 'no-cache',
       };
     }
 
@@ -211,7 +229,7 @@ export class DocsAssetService {
       status: 200,
       contentType: 'application/javascript; charset=utf-8',
       body: content,
-      cacheControl: 'public, max-age=31536000, immutable',
+      cacheControl: 'no-cache',
       extraHeaders: { 'X-Content-Type-Options': 'nosniff' },
     };
   }

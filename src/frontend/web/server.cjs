@@ -48,11 +48,28 @@ function resolveDocsBase() {
   return normalized === '/' ? '' : normalized;
 }
 
+/**
+ * 将构建产物中的 __DOCS_BASE__ 占位符替换为实际挂载路径。
+ * 根路径部署时必须先替换 `/__DOCS_BASE__/` → `/`，避免变成 `//`：
+ * VitePress 客户端用 `const n="/__DOCS_BASE__/"; path.slice(n.length)` 解析路由，
+ * 若变成 `const n="//"`，首页会先 SSR 再被客户端误判为 404。
+ */
 function replaceDocsBase(content, docsBase) {
-  const base = docsBase || '';
+  const normalized = (docsBase || '').replace(/\/$/, '');
+  const isRoot = normalized === '' || normalized === '/';
+
+  if (isRoot) {
+    return content
+      .replaceAll(`/${DOCS_BASE_PLACEHOLDER}/`, '/')
+      .replaceAll(`${DOCS_BASE_PLACEHOLDER}/`, '/')
+      .replaceAll(`/${DOCS_BASE_PLACEHOLDER}`, '')
+      .replaceAll(DOCS_BASE_PLACEHOLDER, '');
+  }
+
+  const basePath = normalized.startsWith('/') ? normalized : `/${normalized}`;
   return content
-    .replaceAll(`/${DOCS_BASE_PLACEHOLDER}`, base ? `/${base.replace(/^\//, '')}` : '/')
-    .replaceAll(DOCS_BASE_PLACEHOLDER, base);
+    .replaceAll(`/${DOCS_BASE_PLACEHOLDER}`, basePath)
+    .replaceAll(DOCS_BASE_PLACEHOLDER, basePath);
 }
 
 function buildGlobalsScript() {
@@ -121,13 +138,10 @@ function sendReplaceableFile(req, res, filePath, contentType) {
       body = injectGlobals(body);
     }
     res.setHeader('Content-Type', contentType);
-    if (contentType.startsWith('text/html')) {
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-    } else {
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    }
+    // html/js/css 会做 __DOCS_BASE__ 运行时替换，禁止 immutable 长缓存，避免修替换逻辑后浏览器仍用旧 JS（表现为首页闪一下变 404）
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.send(body);
   });
 }
