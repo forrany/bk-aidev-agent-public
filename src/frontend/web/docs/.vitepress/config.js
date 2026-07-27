@@ -2,9 +2,10 @@ import { createRequire } from "node:module"
 import { defineConfig } from "vitepress"
 import express from "express"
 import container from "markdown-it-container"
+import { resolveDevRuntimeGlobalsScript } from "./utils/dev-runtime-globals.js"
 import { aiBluekingVersion as version } from "./utils/resolve-changelog-version.js"
 
-const base = process.env.VITEPRESS_BASE || "__DOCS_BASE__/"
+const base = process.env.VITEPRESS_BASE || '/__DOCS_BASE__/'
 const require = createRequire(import.meta.url)
 const { createMockAguiRouter } = require("./mock-agui-routes.cjs")
 
@@ -164,6 +165,17 @@ export default defineConfig({
   },
   vite: {
     plugins: [
+      {
+        name: "inject-dev-runtime-globals",
+        apply: "serve",
+        transformIndexHtml() {
+          const script = resolveDevRuntimeGlobalsScript({ mode: "development" })
+          if (!script) {
+            return []
+          }
+          return [{ tag: "script", children: script, injectTo: "head" }]
+        },
+      },
       {
         name: "mock-agui-api",
         configureServer(server) {

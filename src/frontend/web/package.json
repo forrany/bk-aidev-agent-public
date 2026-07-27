@@ -20,7 +20,7 @@
     "README.md"
   ],
   "scripts": {
-    "dev": "vitepress dev docs --host",
+    "dev": "VITEPRESS_BASE=/ vitepress dev docs --host",
     "build": "VITEPRESS_BASE=/ vitepress build docs",
     "build:npm": "node scripts/build-npm.mjs",
     "build:all": "pnpm build:npm",

@@ -3,7 +3,7 @@ layout: home
 
 hero:
   name: AI 小鲸
-  text: 模块化智能对话解决方案
+  text: 模块化智能对话<br>解决方案
   tagline: 基于三层架构的 Vue 智能对话组件，支持 Vue2/Vue3
   image:
     src: /ai-logo.svg
