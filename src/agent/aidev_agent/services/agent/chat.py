@@ -225,6 +225,25 @@ class ChatCompletionAgent(BaseModel):
             finally:
                 self.runtime_backend_resolver = None
 
+    async def _aclose_chat_models(self) -> None:
+        """在模型执行 loop 上关闭当前 agent 自己创建的异步 HTTP client。"""
+        clients: dict[int, tuple[Any, list[BaseChatModel]]] = {}
+        for model in (self.chat_model, self.chat_model_non_thinking):
+            if model is None or not getattr(model, "_owns_http_async_client", False):
+                continue
+            client = getattr(model, "http_async_client", None)
+            if client is not None:
+                clients.setdefault(id(client), (client, []))[1].append(model)
+
+        for client, owners in clients.values():
+            try:
+                await client.aclose()
+            except Exception:
+                logger.warning("ChatCompletionAgent: 关闭模型异步 HTTP client 失败", exc_info=True)
+            else:
+                for model in owners:
+                    model._owns_http_async_client = False
+
     def _query_approval_status(self, session_code: str) -> dict | None:
         """查询 gongfeng 后端判断是否需要续流，并从 interrupt 记录获取审批结果及 interrupts。
 
@@ -255,7 +274,7 @@ class ChatCompletionAgent(BaseModel):
         因为非流式路径（ainvoke）不经过 prepare_stream。
         """
         try:
-            agent_state = run_coro_sync(agent_e.aget_state(cfg))
+            agent_state = run_coro_sync(lambda: agent_e.aget_state(cfg))
             checkpoint_messages = agent_state.values.get("messages", [])
             non_system_checkpoint_msgs = [m for m in checkpoint_messages if not isinstance(m, SystemMessage)]
 
@@ -278,7 +297,7 @@ class ChatCompletionAgent(BaseModel):
 
                 if remove_ops:
                     run_coro_sync(
-                        agent_e.aupdate_state(
+                        lambda: agent_e.aupdate_state(
                             cfg,
                             {"messages": remove_ops},
                             as_node="__start__",
@@ -376,10 +395,14 @@ class ChatCompletionAgent(BaseModel):
                 input_state: dict[str, Any] = {"messages": messages, "execute_kwargs": execute_kwargs}
                 if platform_pv:
                     input_state["runtime_paas_sbx_pv"] = platform_pv
-                result = run_coro_sync(
-                    agent_e.ainvoke(input_state, cfg),
-                    timeout=execute_kwargs.invoke_timeout,
-                )
+
+                async def _ainvoke_with_cleanup():
+                    try:
+                        return await agent_e.ainvoke(input_state, cfg)
+                    finally:
+                        await self._aclose_chat_models()
+
+                result = run_coro_sync(_ainvoke_with_cleanup, timeout=execute_kwargs.invoke_timeout)
                 result_output = result.get("messages")[-1]
                 return_data = {
                     "choices": [{"delta": {"role": "assistant", "content": result_output.content}}],
@@ -402,7 +425,12 @@ class ChatCompletionAgent(BaseModel):
         _input: dict[str, Any] = {"messages": messages}
         if platform_pv:
             _input["runtime_paas_sbx_pv"] = platform_pv
-        return agent_e.agent.stream_standard_event(agent_e, cfg, _input)
+        return agent_e.agent.stream_standard_event(
+            agent_e,
+            cfg,
+            _input,
+            async_finalizer=self._aclose_chat_models,
+        )
 
     def _stream(
         self, agent_e: Runnable, cfg: RunnableConfig, messages: list[BaseMessage], execute_kwargs: ExecuteKwargs
@@ -498,9 +526,7 @@ class ChatCompletionAgent(BaseModel):
             thread_id=queue_thread_id or agent_input.thread_id,
             defer_cleanup_on_complete=background_only,
         )
-        producer = self._build_resume_aware_producer(
-            agui_entry, agent_input, agent_e=agent_e, cfg=cfg, resume=resume
-        )
+        producer = self._build_resume_aware_producer(agui_entry, agent_input, agent_e=agent_e, cfg=cfg, resume=resume)
 
         # ---- 阶段 1：同步拉取头部帧并直接 yield ----
         head_frames = []
@@ -509,7 +535,11 @@ class ChatCompletionAgent(BaseModel):
             yield frame
 
         # ---- 阶段 2：剩余帧交给队列管理（支持断点续传）----
-        yield from helper.stream(remaining_producer, on_complete=self._on_complete)
+        yield from helper.stream(
+            remaining_producer,
+            on_complete=self._on_complete,
+            event_handler=self.event_handler,
+        )
 
     @staticmethod
     def _extract_head_frames(
@@ -561,9 +591,15 @@ class ChatCompletionAgent(BaseModel):
                         "(scheme B fallback), thread_id=%s",
                         agent_input.thread_id,
                     )
-                    yield from replay
+                    try:
+                        yield from replay
+                    finally:
+                        run_coro_sync(self._aclose_chat_models)
                     return
-            yield from async_to_sync_generator(agui_entry.run(agent_input))
+            yield from async_to_sync_generator(
+                agui_entry.run(agent_input),
+                async_finalizer=self._aclose_chat_models,
+            )
 
         return _gen()
 
@@ -588,7 +624,7 @@ class ChatCompletionAgent(BaseModel):
         try:
             replay_cfg = dict(cfg)
             replay_cfg["configurable"] = {**cfg.get("configurable", {}), "thread_id": thread_id}
-            state = run_coro_sync(agent_e.aget_state(replay_cfg))
+            state = run_coro_sync(lambda: agent_e.aget_state(replay_cfg))
         except Exception:
             logger.warning(
                 "[ResumeReplay] aget_state failed, fallback to astream, thread_id=%s",
@@ -603,8 +639,7 @@ class ChatCompletionAgent(BaseModel):
         is_terminal = len(next_nodes) == 0 and not interrupts
         if not is_terminal:
             logger.info(
-                "[ResumeReplay] graph not terminal (next=%s, interrupts=%d), use normal resume astream, "
-                "thread_id=%s",
+                "[ResumeReplay] graph not terminal (next=%s, interrupts=%d), use normal resume astream, thread_id=%s",
                 next_nodes,
                 len(interrupts),
                 thread_id,
