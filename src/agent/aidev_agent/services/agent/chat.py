@@ -57,6 +57,7 @@ from aidev_agent.services.event_handlers.agui_writer import AGUISessionWriter
 from aidev_agent.services.event_handlers.base import BaseSessionWriter
 from aidev_agent.services.messages_handler import GeneratorStreamingHelper
 from aidev_agent.utils.async_utils import async_to_sync_generator
+from aidev_agent.utils.event import RunId
 from aidev_agent.utils.loop import run_coro_sync
 from aidev_agent.utils.migrations import (
     migration_chat_model_non_thinking_from_non_thinking_llm_v1,
@@ -313,6 +314,15 @@ class ChatCompletionAgent(BaseModel):
             return []
         return self._chat_history_to_langchain_messages(self._convert_contents(self.chat_history))
 
+    @staticmethod
+    def _filter_cancelled_for_llm(messages: list[BaseMessage]) -> list[BaseMessage]:
+        """LLM 入口过滤「用户已取消」占位，不影响 MESSAGES_SNAPSHOT。"""
+        return [
+            each
+            for each in messages
+            if not (isinstance(each, AIMessage) and each.content == RunId.CANCELLED_MESSAGE)
+        ]
+
     @property
     def model_name(self) -> str:
         return getattr(self.chat_model, "model_name", "")
@@ -530,7 +540,7 @@ class ChatCompletionAgent(BaseModel):
         else:
             # 不再依赖 checkpoint 中的 messages，直接使用后端数据库传来的完整历史
             state_input["messages"] = []
-            langchain_messages = agui_messages_to_langchain(messages)
+            langchain_messages = self._filter_cancelled_for_llm(agui_messages_to_langchain(messages))
             state = self._merge_state(state_input, langchain_messages)
 
         # 2. regenerate 检测 + checkpoint 时间旅行
@@ -669,7 +679,11 @@ class ChatCompletionAgent(BaseModel):
         此处仅补充 messages / execute_kwargs 后调用 agent_e.ainvoke。
         """
         try:
-            input_state: dict[str, Any] = {"messages": messages, "execute_kwargs": execute_kwargs, **state}
+            input_state: dict[str, Any] = {
+                "messages": self._filter_cancelled_for_llm(messages),
+                "execute_kwargs": execute_kwargs,
+                **state,
+            }
 
             async def _ainvoke_with_cleanup():
                 try:
@@ -700,7 +714,7 @@ class ChatCompletionAgent(BaseModel):
         state: dict[str, Any],
         messages: list[BaseMessage],
     ) -> Generator[Any, None, None]:
-        _input: dict[str, Any] = {"messages": messages, **state}
+        _input: dict[str, Any] = {"messages": self._filter_cancelled_for_llm(messages), **state}
         agent_type = self.model_context_options.llm_code_agent_type if self.model_context_options else None
         adapter = AgentStreamAdapter(agent_type=agent_type)
         return adapter.stream_standard_event(
