@@ -187,8 +187,7 @@ class ChatSessionViewSet(PluginViewSet):
                 if access_token:
                     executor_info["access_token"] = access_token
                     logger.info(
-                        "[pv_files] cookie ticket empty, fallback to access_token: "
-                        "user=%s, path=%s",
+                        "[pv_files] cookie ticket empty, fallback to access_token: user=%s, path=%s",
                         username,
                         request.path,
                     )
@@ -297,16 +296,24 @@ class ChatSessionContentViewSet(PluginViewSet):
     def stop(self, request):
         username = request.user.username
         session_code = request.data.get("session_code", "")
+        run_id = request.data.get("run_id") or None
 
         # 获取 message_handler 用于清理
         message_handler = message_handler_factory.get()
 
         # 停止 agent 侧的流式生产者
         if session_code:
-            # 1. 发送取消信号（进程内 + 跨进程）
-            GeneratorStreamingHelper.cancel(session_code)
+            # 1. 先清理上一轮完成通知，避免误消费旧通知
+            if hasattr(message_handler, "clear_cancelled_signal"):
+                try:
+                    message_handler.clear_cancelled_signal(session_code, run_id=run_id)
+                except Exception as e:
+                    logger.exception(f"Error clearing stale cancelled signal: {e}")
 
-            # 2. 等待 SSE 消费者真正退出（收到 CANCELLED_CHUNK 并完成 mark_stopped）
+            # 2. 发送取消信号（进程内 + 跨进程）
+            GeneratorStreamingHelper.cancel(session_code, message_handler=message_handler, run_id=run_id)
+
+            # 3. 等待 SSE 消费者真正退出（收到取消终态与 EOD）
             #    正常情况下几百毫秒内完成，超时则降级为当前行为
             stream_finished = False
             if hasattr(message_handler, "wait_for_consumer_cancelled"):
@@ -314,6 +321,7 @@ class ChatSessionContentViewSet(PluginViewSet):
                     stream_finished = message_handler.wait_for_consumer_cancelled(
                         session_code,
                         timeout=TimeoutConfig.STOP_WAIT_STREAM_FINISH_TIMEOUT,
+                        run_id=run_id,
                     )
                     if stream_finished:
                         logger.info(f"Stream finished confirmed for session_code={session_code}")
@@ -325,16 +333,10 @@ class ChatSessionContentViewSet(PluginViewSet):
                 except Exception as e:
                     logger.exception(f"Error waiting for stream finish: {e}")
 
-            # 3. 如果等待超时（消费者可能已崩溃），兜底标记 stopped
+            # 4. 如果等待超时（如工具仍在执行），保留 stopped 标记；
+            #    真正的取消完成通知仍由消费者在收到 EOD 后发送。
             if not stream_finished and hasattr(message_handler, "mark_stopped"):
                 message_handler.mark_stopped(session_code)
-
-            # 4. 清理 cancelled 信号（避免残留）
-            if hasattr(message_handler, "clear_cancelled_signal"):
-                try:
-                    message_handler.clear_cancelled_signal(session_code)
-                except Exception as e:
-                    logger.exception(f"Error clearing cancelled signal: {e}")
 
         # 5. 如果是 flow 类型智能体，额外调用 flow agent stop 接口撤销 bkflow 任务（不可恢复）
         #    用户点击「停止」→ revoke（任务变为 REVOKED/FAILED），不可恢复
@@ -360,7 +362,9 @@ class ChatSessionContentViewSet(PluginViewSet):
             except Exception as e:
                 logger.exception(f"Error revoking flow agent task: session_code={session_code}, error={e}")
 
-        result = client.api.stop_chat_session_content(json=request.data, headers={"X-BKAIDEV-USER": username})
+        platform_payload = request.data.copy()
+        platform_payload.pop("run_id", None)
+        result = client.api.stop_chat_session_content(json=platform_payload, headers={"X-BKAIDEV-USER": username})
 
         return Response(data=result["data"])
 

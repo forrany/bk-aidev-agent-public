@@ -5,6 +5,7 @@ import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from django.conf import settings
 
 if not settings.configured:
@@ -32,8 +33,12 @@ from aidev_bkplugin.constants import AGUI_PROTOCOL_VERSION  # noqa: E402
 from aidev_bkplugin.views import session as session_mod  # noqa: E402
 
 
-def _request(query_params=None, username="alice"):
-    return SimpleNamespace(query_params=query_params or {}, user=SimpleNamespace(username=username))
+def _request(query_params=None, username="alice", data=None):
+    return SimpleNamespace(
+        query_params=query_params or {},
+        user=SimpleNamespace(username=username),
+        data=data or {},
+    )
 
 
 def _session(session_code, protocol_version=AGUI_PROTOCOL_VERSION):
@@ -111,3 +116,43 @@ def test_list_pagination_params_invalid_fallback_to_default(monkeypatch):
             "page_size": session_mod.DEFAULT_SESSION_PAGE_SIZE,
         },
     )
+
+
+@pytest.mark.parametrize("run_id", ["run-current", None])
+def test_stop_clears_stale_notification_before_sending_cancel(monkeypatch, run_id):
+    """每轮 stop 先清旧通知，并兼容不传 run_id 的旧前端。"""
+    session_code = "session-stop-order"
+    call_order = []
+    handler = MagicMock()
+    handler.clear_cancelled_signal.side_effect = lambda code, run_id=None: call_order.append(("clear", code, run_id))
+    handler.wait_for_consumer_cancelled.side_effect = lambda code, timeout, run_id=None: (
+        call_order.append(("wait", code, run_id)) or True
+    )
+    api = MagicMock()
+    api.stop_chat_session_content.return_value = {"data": {"stopped": True}}
+
+    monkeypatch.setattr(session_mod.message_handler_factory, "get", lambda: handler)
+    monkeypatch.setattr(
+        session_mod.GeneratorStreamingHelper,
+        "cancel",
+        lambda code, message_handler=None, run_id=None: (
+            call_order.append(("cancel", code, message_handler, run_id)) or True
+        ),
+    )
+    monkeypatch.setattr(session_mod.AgentConfigFetcher, "get_info", lambda **kwargs: {"agent_type": "chat"})
+    monkeypatch.setattr(session_mod, "client", SimpleNamespace(api=api))
+
+    request_data = {"session_code": session_code, **({"run_id": run_id} if run_id else {})}
+    response = session_mod.ChatSessionContentViewSet().stop(_request(data=request_data))
+
+    assert response.data == {"stopped": True}
+    assert call_order == [
+        ("clear", session_code, run_id),
+        ("cancel", session_code, handler, run_id),
+        ("wait", session_code, run_id),
+    ]
+    api.stop_chat_session_content.assert_called_once_with(
+        json={"session_code": session_code},
+        headers={"X-BKAIDEV-USER": "alice"},
+    )
+    handler.mark_stopped.assert_not_called()

@@ -75,6 +75,32 @@ class _RecordingEventWriter(BaseSessionWriter):
         pass
 
 
+class _FailOnceCancelledWriter(_ConcreteWriter):
+    """首次取消消息写入失败，用于验证终态写入可重试。"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._failed_once = False
+
+    def _do_create_content(self, payload: dict, headers: dict) -> int | None:
+        if not self._failed_once:
+            self._failed_once = True
+            raise RuntimeError("transient persistence failure")
+        return super()._do_create_content(payload, headers)
+
+
+def test_cancelled_message_write_retries_after_transient_failure():
+    writer = _FailOnceCancelledWriter()
+
+    writer._write_cancelled_messages("")
+
+    assert writer._cancelled_messages_written is False
+    writer._write_cancelled_messages("")
+
+    assert writer._cancelled_messages_written is True
+    assert [content["content"] for content in writer.created_contents] == [writer.PAUSED_CONTENT_MESSAGE]
+
+
 def assert_content_type_equal(results: list[dict], event_type: EventType, content: str):
     contents = []
     for each in results:
@@ -1499,6 +1525,60 @@ class TestSessionWriterCancelUnit:
 
         assert writer.is_cancelled is True
         assert any(c.get("content") == "用户已取消" and c.get("status") == "fail" for c in writer.created_contents)
+
+    def test_cancel_error_then_run_finished_writes_paused_once(self):
+        """RUN_ERROR 与 RUN_FINISHED 连续到达时，不重复补写取消消息。"""
+        writer = _ConcreteWriter()
+        writer.handle_run_error(RunErrorEvent(type=EventType.RUN_ERROR, message=RunId.CANCELLED_MESSAGE))
+        writer.handle_run_finished(
+            RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id="t1", run_id=RunId.CANCELLED)
+        )
+
+        paused = [
+            content
+            for content in writer.created_contents
+            if content.get("content") == "用户已取消" and content.get("status") == "fail"
+        ]
+        assert len(paused) == 1
+
+    def test_concurrent_cancel_events_write_paused_once(self):
+        """generator 与 producer 并发分发取消事件时，也只回写一次。"""
+        writer = _ConcreteWriter()
+        write_entered = threading.Event()
+        allow_write = threading.Event()
+        original_write = writer._write_assistant_message
+
+        def slow_write(*args, **kwargs):
+            write_entered.set()
+            assert allow_write.wait(timeout=1.0)
+            return original_write(*args, **kwargs)
+
+        writer._write_assistant_message = slow_write
+        error_thread = threading.Thread(
+            target=writer.handle_run_error,
+            args=(RunErrorEvent(type=EventType.RUN_ERROR, message=RunId.CANCELLED_MESSAGE),),
+        )
+        error_thread.start()
+        assert write_entered.wait(timeout=1.0)
+
+        finished_thread = threading.Thread(
+            target=writer.handle_run_finished,
+            args=(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id="t1", run_id=RunId.CANCELLED),),
+        )
+        finished_thread.start()
+        allow_write.set()
+        error_thread.join(timeout=1.0)
+        finished_thread.join(timeout=1.0)
+
+        assert not error_thread.is_alive()
+        assert not finished_thread.is_alive()
+
+        paused = [
+            content
+            for content in writer.created_contents
+            if content.get("content") == "用户已取消" and content.get("status") == "fail"
+        ]
+        assert len(paused) == 1
 
     def test_cancel_with_model_end_written_no_paused(self):
         """取消 + model_end 已回写 → 不补写暂停消息（AI 已输出文本场景）"""

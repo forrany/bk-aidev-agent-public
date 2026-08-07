@@ -87,7 +87,7 @@ class MockMQHandler(InMemoryQueueMessageHandler):
         instance = object.__new__(cls)
         instance._init_queues()
         # 初始化跨进程取消信号队列
-        instance._cancel_signals: dict[str, bool] = {}
+        instance._cancel_signals: dict[str, str | None] = {}
         instance._cancel_signal_lock = threading.Lock()
         instance._initialized = True
         return instance
@@ -96,30 +96,34 @@ class MockMQHandler(InMemoryQueueMessageHandler):
         # 不调用 super().__init__()，因为 __new__ 已经初始化
         pass
 
-    def set_cancel_signal(self, thread_id: str) -> bool:
+    def set_cancel_signal(self, thread_id: str, run_id: str | None = None) -> bool:
         """设置跨进程取消信号（模拟 RabbitMQ 队列）
 
         可以从任意进程调用，生产者/消费者会通过 check_cancel_signal() 检测到取消。
         """
         with self._cancel_signal_lock:
-            self._cancel_signals[thread_id] = True
+            self._cancel_signals[thread_id] = run_id
             print(f"[MockMQ] Set cancel signal for thread_id={thread_id}")
         return True
 
-    def check_cancel_signal(self, thread_id: str) -> bool:
+    def check_cancel_signal(self, thread_id: str, run_id: str | None = None) -> bool:
         """检查跨进程取消信号（peek 模式，不消费）
 
         用于生产者/消费者定期检查是否需要停止。
         """
         with self._cancel_signal_lock:
-            result = self._cancel_signals.get(thread_id, False)
+            signal_exists = thread_id in self._cancel_signals
+            signal_run_id = self._cancel_signals.get(thread_id)
+            result = signal_exists and (not run_id or not signal_run_id or signal_run_id == run_id)
             print(f"[MockMQ] Check cancel signal for thread_id={thread_id}: {result}")
             return result
 
-    def clear_cancel_signal(self, thread_id: str) -> None:
+    def clear_cancel_signal(self, thread_id: str, run_id: str | None = None) -> None:
         """清除跨进程取消信号（在流结束后调用）"""
         with self._cancel_signal_lock:
-            self._cancel_signals.pop(thread_id, None)
+            signal_run_id = self._cancel_signals.get(thread_id)
+            if run_id is None or signal_run_id in (None, run_id):
+                self._cancel_signals.pop(thread_id, None)
             print(f"[MockMQ] Clear cancel signal for thread_id={thread_id}")
 
 
@@ -356,22 +360,23 @@ class TestCrossProcessCancelSignal:
         assert len(run_finished_events) > 0, f"应包含 RUN_FINISHED 事件，实际收到: {collected}"
         assert run_finished_events[-1]["runId"] == RunId.CANCELLED
 
-    def test_cross_process_cancel_clears_on_stream_start(self, mq_handler):
-        """流开始时清理残留的跨进程取消信号
+    def test_cross_process_cancel_before_stream_start_is_preserved(self, mq_handler):
+        """流注册前到达的跨进程取消信号不能被启动清理吞掉
 
         场景：
-        1. 上一次流的取消信号残留在队列中
-        2. 新流启动时，应该清理残留的取消信号
+        1. 用户先点击停止，取消信号已进入队列
+        2. producer/consumer 随后才完成注册
 
         验证：
-        - 残留的取消信号被清理
-        - 新流不会被误取消
+        - 本轮 generator 不再继续执行
+        - 输出 RUN_FINISHED(cancelled)
         """
         tid = "test_cancel_clear_on_start"
+        run_id = "run-before-stream"
 
-        # 设置残留的取消信号
-        mq_handler.set_cancel_signal(tid)
-        assert mq_handler.check_cancel_signal(tid) is True
+        # 模拟 stop 早于流注册
+        mq_handler.set_cancel_signal(tid, run_id=run_id)
+        assert mq_handler.check_cancel_signal(tid, run_id=run_id) is True
 
         # 启动新流
         collected = []
@@ -385,15 +390,25 @@ class TestCrossProcessCancelSignal:
 
         def consume():
             helper = GeneratorStreamingHelper(mq_handler, thread_id=tid)
-            collected.extend(helper.stream(simple_gen()))
+            cancel_event = helper.prepare_run(run_id)
+            collected.extend(
+                helper.stream(
+                    simple_gen(),
+                    expected_run_id=run_id,
+                    cancel_event=cancel_event,
+                )
+            )
 
         t = threading.Thread(target=consume)
         t.start()
         t.join(timeout=5.0)
 
-        # 验证流正常完成
-        assert stream_completed.is_set(), "流应正常完成，不应被残留的取消信号打断"
-        assert len(collected) == 5, f"应收到 5 个 chunk，实际收到 {len(collected)}"
+        assert not stream_completed.is_set(), "注册前的 stop 应中断本轮 generator"
+        run_finished_events = [
+            parse_sse_event(event) for event in collected if isinstance(event, str) and "RUN_FINISHED" in event
+        ]
+        assert run_finished_events
+        assert run_finished_events[-1]["runId"] == RunId.CANCELLED
 
     def test_stopped_session_sends_run_finished_event(self, mq_handler):
         """停止会话时应发送 RUN_FINISHED 事件
