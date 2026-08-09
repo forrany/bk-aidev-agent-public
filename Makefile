@@ -91,10 +91,13 @@ release_versions:
 		echo "Example: make release_versions aidev_ai_blueking_version=2.0.0rc1"; \
 		exit 1; \
 	fi
+
+ifneq ($(filter 1 true yes y,$(sync)),)
 	UV_PYTHON="$(ROOT_DIR)/.venv/bin/python" $(MAKE) -C "$(ROOT_DIR)/src/agent"
 	UV_PYTHON="$(ROOT_DIR)/.venv/bin/python" $(MAKE) -C "$(ROOT_DIR)/src/plugins/aidev_bkplugin"
 	UV_PYTHON="$(ROOT_DIR)/.venv/bin/python" $(MAKE) -C "$(ROOT_DIR)/src/plugins/aidev_wxbot"
-	UV_PYTHON="$(ROOT_DIR)/.venv/bin/python" $(MAKE) -C "$(ROOT_DIR)/$(TEMPLATE_PROJECT_DIR)"
+	UV_PYTHON="$(ROOT_DIR)/.venv/bin/python" $(MAKE) -C "$(ROOT_DIR)/$(TEMPLATE_PROJECT_DIR)" requirements
+endif
 
 .PHONY: sync_template_sdk_versions
 sync_template_sdk_versions:
