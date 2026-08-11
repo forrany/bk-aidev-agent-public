@@ -1429,6 +1429,8 @@ class ChatAgentBuilder:
         chat = self.ctx.chat or ChatBuildExtras()
         if chat.auth_headers:
             kwargs["auth_headers"] = chat.auth_headers
+        if chat.default_headers:
+            kwargs["default_headers"] = chat.default_headers
 
         if settings.LLM_RETRY_STRATEGY == "sdk":
             kwargs["max_retries"] = 0
@@ -1454,6 +1456,8 @@ class ChatAgentBuilder:
         chat = self.ctx.chat or ChatBuildExtras()
         if chat.auth_headers:
             kwargs["auth_headers"] = chat.auth_headers
+        if chat.default_headers:
+            kwargs["default_headers"] = chat.default_headers
 
         if settings.LLM_RETRY_STRATEGY == "sdk":
             kwargs["max_retries"] = 0
