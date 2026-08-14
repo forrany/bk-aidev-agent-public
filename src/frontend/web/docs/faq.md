@@ -189,7 +189,7 @@ const onReady = (chatHelper: IChatHelper) => {
 <ChatBot url="/api/ai" :models="myModels" />
 ```
 
-选中态跨 session 保持，切换 / 新建会话不会改变当前模型；发送时携带 `llm_code`。详见 [模型选择](/guide/core-features/model-selection)。
+选中态跟随 `session.model`（≥ v2.2.2）：切换历史会话会同步 ModelSelector，用户切换模型会写回当前会话。发送时携带 `llm_code`。详见 [模型选择](/guide/core-features/model-selection)。
 
 ---
 

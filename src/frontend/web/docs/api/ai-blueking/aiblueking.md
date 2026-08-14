@@ -56,8 +56,8 @@ function openAI() {
 | `enablePopup` | `boolean` | `true` | 是否启用文本选中弹窗（AiSelection） |
 | `draggable` | `boolean` | `true` | 是否可拖拽 |
 | `enableChatSession` | `boolean` | `true` | 是否启用多会话（显示会话管理侧边栏） |
-| `enableModelSelect` | `boolean` | `true` | 是否启用模型选择（**≥ v2.2.1**）；为 `true` 时 bootstrap 拉取 `GET llms/`，列表非空才展示 ModelSelector |
-| `models` | `ILlmItem[] \| IModelOption[]` | — | 外部模型列表（**≥ v2.2.1**）；有值时跳过内部拉取，优先使用 |
+| `enableModelSelect` | `boolean` | `true` | 是否启用模型选择（**≥ v2.2.2**）；为 `true` 时 bootstrap 拉取 `GET llms/`，列表非空才展示 ModelSelector |
+| `models` | `ILlmItem[] \| IModelOption[]` | — | 外部模型列表（**≥ v2.2.2**）；有值时跳过内部拉取，优先使用 |
 | `hideHeader` | `boolean` | `false` | 是否隐藏头部栏 |
 | `hideNimbus` | `boolean` | `false` | 是否隐藏悬浮球 |
 | `hideDefaultTrigger` | `boolean` | `false` | 是否隐藏默认触发器 |
@@ -66,7 +66,7 @@ function openAI() {
 | `ignoreErrors` | `Array<string \| RegExp>` | `[]` | 忽略的接口错误 URL 模式（**≥ v2.1.4-beta.25**）；字符串包含匹配或正则，匹配的接口错误不会弹出 toast |
 
 ::: tip 模型选择
-默认开启。选中态跨 session 保持，发送时携带 `llm_code`。详见 [模型选择](/guide/core-features/model-selection)。
+默认开启。选中态跟随 `session.model` 并写回当前会话（≥ v2.2.2），发送时携带 `llm_code`。详见 [模型选择](/guide/core-features/model-selection)。
 :::
 
 ### 容器配置

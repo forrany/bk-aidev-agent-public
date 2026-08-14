@@ -1,10 +1,10 @@
 # 模型选择
 
-::: tip 默认行为
+::: tip 默认行为（≥ v2.2.2）
 `enableModelSelect` 默认为 `true`。初始化时并行拉取 `GET llms/`；列表非空时在输入框发送按钮左侧展示 ModelSelector。拉取失败不阻断初始化。
 :::
 
-AI 小鲸支持在对话时热切换可用模型。选中态由 [`ChatBusinessManager`](/api/ai-blueking/managers#chatbusinessmanager) 持有，发送消息时通过 `agent.chat` 第 6 个参数传入 `llm_code`。
+AI 小鲸支持在对话时热切换可用模型。选中态由 [`ModelSelectionManager`](/api/ai-blueking/managers#modelselectionmanager) 持有（`ChatBusinessManager` 委托），发送消息时通过 `agent.chat` 第 6 个参数传入 `llm_code`。
 
 ## 快速使用
 
@@ -55,16 +55,18 @@ const models: ILlmItem[] = [
 | --- | --- |
 | 展示条件 | `enableModelSelect !== false` 且模型列表非空 |
 | 选中值展示 | ModelSelector 绑定 `llm_name`；发送使用 `llm_code` |
-| 跨 session | 选中态在组件实例生命周期内跨会话保持；切历史 / 新建 / 复用空会话**不会**改变当前选中 |
-| 首次兜底 | 仅在尚无有效选中时：`session.model`（且在列表中）→ `property.default` → 列表首项 |
-| 写回 | 用户切换模型**不**写回 session；创建会话请求也不带 `model` |
-| 刷新 | 重新挂载后实例重置，可再次走首次兜底 |
+| 跟随 session | 切换历史会话时，用 `session.model` 同步 ModelSelector（命中可用列表时） |
+| 写回 | 用户切换模型 → `ModelSelectionManager.persistSessionModel`（`session.model` 唯一写回出口） |
+| 新建 | 所有建会话路径（含初始化 `loadRecentSession`）统一经 `resolveModelForSession`：优先当前选中 / preferred，校验落在可用列表内；`enableModelSelect=false` 时不强制写 `model` |
+| 空列表 | 启用模型选择但无可用模型 → 抛 `ModelUnavailableError`，阻断建会话并上报 `sdk-error`（`apiName: session`） |
+| 首次 / 兜底 | `session.model` 命中列表 → 选中；空/未知且无有效选中 → `property.default` / 首项 |
+| 附件按钮 | 跟随选中模型 `property.support_vision`；快捷指令 `supportUpload.vision` 优先 |
 
-选中优先级（仅「当前无有效选中」时解析）：
+选中优先级：
 
 ```
-1. 已有有效 _selectedLlmCode → 保持
-2. current?.model 且在 models 中 → 采用
+1. 切换会话且 session.model 命中列表 → 采用
+2. 已有有效选中 → 保持
 3. property.default / 列表首项 → 采用
 ```
 
@@ -76,15 +78,15 @@ const models: ILlmItem[] = [
 [首次挂载]
 runAgentBootstrap → getAgentInfo + getSessions + getLlms（可选）
 loadRecentSession → current.model 可能就绪
-ChatBusinessManager.loadModels / setModels
-resolveInitialSelection()
-  → session.model | default
+ModelSelectionManager.loadModels / setModels
+applySessionModel(session.model)
 selectedModelName → ChatContainer ModelSelector
 
 [运行时]
-用户选模型 A
-  → 切历史会话 / 新建 / 复用空会话 → 仍为 A
-  → chat_completion(model=A)
+用户选模型 A → persistSessionModel 写回当前 session.model
+  → 切历史会话 B → applySessionModel(B.model)
+  → 新建会话 → resolveModelForSession 写入合法 model
+  → chat_completion(model=当前 llm_code)
 ```
 
 ## Props
@@ -98,10 +100,12 @@ selectedModelName → ChatContainer ModelSelector
 
 详见 [AIBlueking Props](/api/ai-blueking/aiblueking#功能开关)、[ChatBot Props](/api/ai-blueking/chatbot#功能开关)。
 
-## ChatBusinessManager API
+## ChatBusinessManager / ModelSelectionManager API
+
+模型状态由 `ModelSelectionManager` 持有；`ChatBusinessManager` 仍暴露同名 getter / 方法并委托给它。
 
 ```typescript
-// 响应式状态
+// 响应式状态（ChatBusinessManager 与 ModelSelectionManager 相同）
 chatBusinessManager.models;            // Ref<ILlmItem[]>
 chatBusinessManager.selectedLlmCode;   // Ref<string | undefined>
 chatBusinessManager.selectedModelName; // ComputedRef<string>
@@ -110,8 +114,8 @@ chatBusinessManager.isModelsLoading;   // Ref<boolean>
 // 方法
 await chatBusinessManager.loadModels();           // 拉取 / 复用 agent.models
 chatBusinessManager.setModels(list);              // 外部注入
-chatBusinessManager.setSelectedModel(item);       // 按 ILlmItem 选中
-chatBusinessManager.setSelectedModelByName(name); // 按 llm_name 选中
+chatBusinessManager.setSelectedModel(item);       // 按 ILlmItem 选中并写回 session
+chatBusinessManager.setSelectedModelByName(name); // 按 llm_name 选中并写回 session
 
 // 发送时可覆盖本轮模型
 await chatBusinessManager.sendMessage(content, sessionCode, {
@@ -147,7 +151,7 @@ await agent.chat(userInput, sessionCode, undefined, undefined, property, 'hy3-pr
 
 ## 相关文档
 
-- [会话管理](/guide/core-features/session-management) — `ISession.model` 仅作首次兜底
+- [会话管理](/guide/core-features/session-management) — `ISession.model` 跟随会话并写回
 - [初始化生命周期](/guide/internals/chat-bootstrap) — bootstrap 并行拉取模型列表
-- [ChatBusinessManager](/api/ai-blueking/managers#chatbusinessmanager)
+- [ChatBusinessManager](/api/ai-blueking/managers#chatbusinessmanager) / [ModelSelectionManager](/api/ai-blueking/managers#modelselectionmanager)
 - [Agent 模块](/api/chat-helper/sdk#agent-模块)

@@ -5,7 +5,7 @@
 ## 规则
 
 1. **新版本块放在文件最上方**（紧接 `# 更新日志` 之后）。
-2. 标题使用 `## v{version}`，与 `packages/ai-blueking/package.json` 的 `version` 一致。
+2. 标题使用 `## v{version}`，与文档站当前发布版本一致（导航栏读 changelog 首条标题；发 npm 时再与 `packages/ai-blueking/package.json` 对齐）。
 3. 用 `---` 与上一版本分隔。
 4. 分类标题使用三级标题：`### 新功能` / `### 优化` / `### 修复` / `### 变更` / `### 文档` / `### 重大变更`。
 5. 文档类条目用 Markdown 链接指向新页：`[页面标题](/guide/...)`.
@@ -35,15 +35,12 @@
 ## 示例（节选）
 
 ```markdown
-## v2.2.1
+## v2.2.2
 
 ### 新功能
 
-- **模型选择（Model Select）**（≥ v2.2.1）：`ChatBot` / `AIBlueking` 新增 `enableModelSelect`（默认 `true`）与 `models` prop；初始化并行拉取 `GET llms/`，列表非空时展示 ModelSelector。详见 [模型选择](/guide/core-features/model-selection)
-
-### 文档
-
-- 新增 [模型选择](/guide/core-features/model-selection) 指南
+- **模型选择（Model Select）**（≥ v2.2.2）：`ChatBot` / `AIBlueking` 新增 `enableModelSelect`（默认 `true`）与 `models` prop；切换历史会话用 `session.model` 同步，用户切换写回当前会话。详见 [模型选择](/guide/core-features/model-selection)
+- **文件产物预览 / 下载**（≥ v2.2.2）：AI 回复中的文件卡片可打开侧栏「文件产物」Tab
 
 ---
 ```

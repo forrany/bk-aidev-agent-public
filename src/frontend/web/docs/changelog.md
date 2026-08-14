@@ -1,10 +1,36 @@
 # 更新日志
 
-## v2.2.1
+## v2.2.2
+
+v2.2.2 正式版整合了未对外发布的 2.2.1-beta 与 2.2.2-beta.1 至 beta.11 的功能与修复。
 
 ### 新功能
 
-- **模型选择（Model Select）**（≥ v2.2.1）：`ChatBot` / `AIBlueking` 新增 `enableModelSelect`（默认 `true`）与 `models` prop；初始化并行拉取 `GET llms/`，列表非空时展示 ModelSelector。选中态跨 session 保持，仅首次无有效选中时用 `session.model` / default 兜底；发送时 `chat_completion` 携带 `llm_code`。详见 [模型选择](/guide/core-features/model-selection)
+- **模型选择（Model Select）**（≥ v2.2.2）：`ChatBot` / `AIBlueking` 新增 `enableModelSelect`（默认 `true`）与 `models` prop；初始化并行拉取 `GET llms/`，列表非空时展示 ModelSelector。抽出 `ModelSelectionManager`：切换历史会话时用 `session.model` 同步选中，用户切换模型会写回当前会话；新建会话统一经 `resolveModelForSession` 写入合法 `model`。发送时 `chat_completion` 携带 `llm_code`。详见 [模型选择](/guide/core-features/model-selection)
+- **文件产物预览 / 下载**（≥ v2.2.2）：AI 回复中的文件卡片可打开侧栏「文件产物」Tab；`AIBlueking` / `ChatBot` 已接入 `onArtifactClick`，点击时经 `pv_files/download_url` 取链后预览或下载
+- **字号主题 `size`**（≥ v2.2.2）：`AIBlueking` / `ChatBot` 透传 `size`（`'small'` 12px / `'normal'` 14px）至 `ChatContainer`
+- **自动重命名 `rename` 事件**（≥ v2.2.2）：首条消息后 AI 自动重命名成功时对外抛出 `@rename(newName, sessionCode)`，与手动改名一致
+
+### 优化
+
+- 附件按钮跟随选中模型 `property.support_vision`（快捷指令 `supportUpload.vision` 优先）
+- 切换会话时消息列表瞬时贴底，避免长距离平滑滚动
+- 停止生成改为请求 stop 接口、不 abort SSE；加固非用户路径误触发 `stopChat`
+- 会话重命名补充 `session_name` 参数
+
+### 修复
+
+- `executionTabVisible` 未传时与 `ChatContainer` 对齐为默认 `true`（Vue boolean 缺省会被收成 `false`）
+- `ask-user-question` 自由文本作答不再伪造 `others` 答案
+- 修复 `chat_completion` 报错未弹出提示的问题
+- 兼容 `MessageStatus.completed`，并校准输入区控件尺寸样式
+
+### 升级建议
+
+- 从 **v2.2.0** 升级时注意新增模型选择：默认开启，选中态跟随 `session.model` 并写回当前会话
+- 详细 API 见 [模型选择](/guide/core-features/model-selection)、[AIBlueking Props](/api/ai-blueking/aiblueking)、[ChatBot Props](/api/ai-blueking/chatbot)
+
+---
 
 ## v2.2.0
 
