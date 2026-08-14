@@ -19,7 +19,7 @@ interface ISession {
   createdAt?: string;             // 创建时间
   updatedAt?: string;             // 更新时间
   isTemporary?: boolean;          // 是否为临时会话
-  model?: string;                 // 会话关联模型（llm_code）；小鲸仅作首次兜底
+  model?: string;                 // 会话关联模型（llm_code）；切换会话时同步 ModelSelector，用户切换会写回
   labels?: string[];              // 标签
   comment?: string;               // 备注
   rate?: number;                  // 评分
@@ -27,7 +27,7 @@ interface ISession {
 ```
 
 ::: tip 与模型选择的关系
-`session.model` **不会**在切换 / 新建会话时覆盖 ModelSelector。选中态由 `ChatBusinessManager` 跨 session 保持，仅在组件首次挂载且尚无有效选中时用 `session.model` 兜底。详见 [模型选择](/guide/core-features/model-selection)。
+自 **v2.2.2** 起，切换历史会话会用 `session.model` 同步 ModelSelector；用户切换模型会写回当前会话。编排入口为 `ModelSelectionManager`。详见 [模型选择](/guide/core-features/model-selection)。
 :::
 
 ## ChatBot 内置会话管理

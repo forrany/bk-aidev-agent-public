@@ -2,7 +2,7 @@
 
 > **约定**：以下 API 以仓库内 `packages/chat-x/src` 源码为准；发布包以 `dist` 为准。若二者不一致，以当前分支源码为准。
 >
-> **当前版本**：`@blueking/chat-x` `0.0.49-beta.1`（含 HITL 中断消息、RenderMode、ModelSelector、字号主题、`#group` 插槽等能力）。
+> **当前版本**：`@blueking/chat-x` `0.0.49-beta.8`（含 HITL 中断消息、RenderMode、ModelSelector、字号主题、`#group` 插槽、文件产物预览等能力）。与 `@blueking/ai-blueking` `2.2.2` 配套。
 
 ## 包入口导出概要
 

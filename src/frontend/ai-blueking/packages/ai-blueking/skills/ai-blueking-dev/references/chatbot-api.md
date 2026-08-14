@@ -1,6 +1,6 @@
 # ChatBot 组件 API
 
-> 适用版本：`@blueking/ai-blueking` `2.2.2-beta.1`（含 HITL 中断/恢复、renderMode、模型选择、侧栏自定义渲染、standalone-mount 等能力）。
+> 适用版本：`@blueking/ai-blueking` `2.2.2`（含 HITL 中断/恢复、renderMode、模型选择、侧栏自定义渲染、standalone-mount、文件产物预览等能力）。
 
 ## Props
 
@@ -22,8 +22,8 @@
 | renderMode      | `RenderMode`         | `chat`  | 渲染模式：`chat`(默认) / `share`(分享只读) / `test`（详见「渲染模式 renderMode」） |
 | enableSelection | `boolean`            | `false` | 是否启用多选模式（分享用；新代码推荐用 `renderMode="share"`） |
 | shareLoading    | `boolean`            | `false` | 分享加载状态                                   |
-| enableModelSelect | `boolean`          | `true`  | 是否启用模型选择（≥ v2.2.1）；拉取 `GET llms/`，列表非空才展示 |
-| models          | `ILlmItem[] \| IModelOption[]` | - | 外部模型列表（≥ v2.2.1）；有值时跳过内部拉取 |
+| enableModelSelect | `boolean`          | `true`  | 是否启用模型选择（≥ v2.2.2）；拉取 `GET llms/`，列表非空才展示 |
+| models          | `ILlmItem[] \| IModelOption[]` | - | 外部模型列表（≥ v2.2.2）；有值时跳过内部拉取 |
 | modelSelectionManager | `ModelSelectionManager` | - | 集成模式注入共享实例（AIBlueking → ChatBot）；独立模式内部自建 |
 | errorToast      | `boolean`            | `true`  | 接口/业务错误时是否自动弹 Message（展示 `error.message`）；设为 `false` 可自行通过 `@error` 处理。AIBlueking 内嵌时会传 `false` 以免与父层双弹 |
 | height          | `string \| number`   | -       | 容器高度                                       |
@@ -36,6 +36,7 @@
 | placement       | `'left' \| 'right'`  | `'left'`| 执行情况侧面板位置                             |
 | resizeProps     | `ResizeProps`        | -       | ResizeLayout 配置（执行情况侧面板拖拽）        |
 | size            | `AiSizeMode`（`'normal' \| 'small'`） | `'small'` | 字号主题档位，透传至 ChatContainer（`small` 12px / `normal` 14px） |
+| executionTabVisible | `boolean` | `true` | 「执行情况」Tab 是否展示（与 ChatContainer 一致）；置 `false` 时从 Tab 栏隐藏 |
 | getSideRenderComponent | `GetSideRenderComponent` | - | 自定义侧栏内容区渲染（详见 [side render / custom tabs](integration-patterns.md#侧栏自定义渲染与自定义-tab-side-render--custom-tabs)） |
 | getSideTabRenderComponent | `GetSideTabRenderComponent` | - | 自定义侧栏 Tab 标签渲染 |
 | onCustomTabChange | `OnCustomTabChange` | -       | 覆盖默认 Flow 节点详情拉取；未传则回退到 `chatHelper.message.getFlowAgentTaskNodeInfo` |
@@ -252,6 +253,7 @@ AIBlueking 是完整面板组件（Nimbus 悬浮球 + 浮窗 + 拖拽 + Header +
 | dropdownMenuConfig | `DropdownMenuConfig` | `{ showRename, showAutoGenerate, showShare }` 均 `true` | Header 更多菜单开关 `{ showAutoGenerate?, showRename?, showShare? }` |
 | errorToast | `boolean` | `true` | 接口错误时是否自动弹 Message 提示；设为 `false` 可自行通过 `@sdk-error` 处理（统一错误出口） |
 | ignoreErrors | `Array<RegExp \| string>` | - | 忽略的接口错误 URL 模式（包含匹配或正则），匹配的错误不弹 toast |
+| executionTabVisible | `boolean` | `true` | 「执行情况」Tab 是否展示（透传 ChatBot，与 ChatContainer 一致）；置 `false` 时从 Tab 栏隐藏 |
 | getSideRenderComponent | `GetSideRenderComponent` | - | 自定义侧栏内容区渲染（透传 ChatBot） |
 | getSideTabRenderComponent | `GetSideTabRenderComponent` | - | 自定义侧栏 Tab 标签渲染（透传 ChatBot） |
 | onCustomTabChange | `OnCustomTabChange` | - | 覆盖默认 Flow 节点详情拉取（透传 ChatBot） |
@@ -266,8 +268,8 @@ AIBlueking 是完整面板组件（Nimbus 悬浮球 + 浮窗 + 拖拽 + Header +
 | loadRecentSessionOnMount | `boolean` | `true` | 挂载时是否加载最近会话 |
 | **功能开关** |||
 | enablePopup | `boolean` | `true` | 是否启用选中文本弹窗（划词） |
-| enableModelSelect | `boolean` | `true` | 是否启用模型选择（≥ v2.2.1）；bootstrap 拉取 `GET llms/` |
-| models | `ILlmItem[] \| IModelOption[]` | - | 外部模型列表（≥ v2.2.1）；有值时跳过内部拉取 |
+| enableModelSelect | `boolean` | `true` | 是否启用模型选择（≥ v2.2.2）；bootstrap 拉取 `GET llms/` |
+| models | `ILlmItem[] \| IModelOption[]` | - | 外部模型列表（≥ v2.2.2）；有值时跳过内部拉取 |
 | disabledInput | `boolean` | `false` | 是否禁用输入 |
 | hideHeader | `boolean` | `false` | 是否隐藏头部 |
 | hideNimbus | `boolean` | `false` | 是否隐藏悬浮球 |

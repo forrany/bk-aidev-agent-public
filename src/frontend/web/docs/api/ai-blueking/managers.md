@@ -116,9 +116,36 @@ await chatBizManager.loadModels();
 chatBizManager.setSelectedModelByName('混元预览');
 ```
 
-::: tip 模型选择语义
-选中态跨 session 保持；仅在尚无有效选中时用 `session.model` / default 兜底。详见 [模型选择](/guide/core-features/model-selection)。
+::: tip 模型选择语义（≥ v2.2.2）
+状态由共享的 `ModelSelectionManager` 持有。切换历史会话时用 `session.model` 同步选中；用户切换会写回当前会话。详见 [模型选择](/guide/core-features/model-selection)。
 :::
+
+## ModelSelectionManager
+
+模型选择状态与规则的唯一归属。由 `AIBlueking` 创建并注入内嵌 `ChatBot`（`modelSelectionManager` prop），使外壳层建会话与聊天区切换模型读到同一份选中态。`ChatBusinessManager` / `SessionBusinessManager` 均委托该管理器。
+
+### 响应式状态
+
+| 属性 | 类型 | 说明 |
+| --- | --- | --- |
+| `models` | `Ref<ILlmItem[]>` | 可用模型列表 |
+| `isLoading` | `Ref<boolean>` | 模型列表加载中 |
+| `selectedLlmCode` | `Ref<string \| undefined>` | 当前选中 `llm_code` |
+| `selectedModelName` | `ComputedRef<string>` | 当前选中 `llm_name` |
+| `selectedModelSupportsVision` | `ComputedRef<boolean>` | 当前选中模型是否支持 vision（附件按钮） |
+
+### 方法
+
+| 方法 | 类型 | 说明 |
+| --- | --- | --- |
+| `loadModels` | `(options?: { force?: boolean }) => Promise<void>` | 拉取可用模型；已有 `agent.models` 时复用 |
+| `setModels` | `(models: ILlmItem[]) => void` | 使用外部模型列表 |
+| `setSelectedModel` | `(model: ILlmItem \| null \| undefined) => void` | 按模型选项设置选中 |
+| `setSelectedModelByName` | `(llmName: string) => void` | 按展示名设置选中 |
+| `applySessionModel` | `(modelCode?: string) => void` | 按 `session.model` 同步选中 |
+| `persistSessionModel` | `(llmCode?: string, session?: ISession \| null) => Promise<void>` | 写回 `session.model` 的唯一出口 |
+| `resolveModelForSession` | `(preferred?: string) => string \| undefined` | 解析建会话用的合法 `model`；启用模型选择但列表为空时抛 `ModelUnavailableError` |
+| `ensureLoaded` | `() => Promise<void>` | 幂等等待列表就绪 |
 
 ## SessionBusinessManager
 

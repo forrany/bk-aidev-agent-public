@@ -40,12 +40,12 @@ interface AIBluekingProps {
   /** 是否启用会话管理 */
   enableChatSession?: boolean;
   /**
-   * 是否启用模型选择（默认 true，≥ v2.2.1）
+   * 是否启用模型选择（默认 true，≥ v2.2.2）
    * 为 true 时 bootstrap 拉取 GET llms/；列表非空才展示 ModelSelector
    */
   enableModelSelect?: boolean;
   /**
-   * 外部传入的模型列表（≥ v2.2.1；有值时跳过内部拉取，优先使用）
+   * 外部传入的模型列表（≥ v2.2.2；有值时跳过内部拉取，优先使用）
    */
   models?: ILlmItem[] | IModelOption[];
   /** 是否隐藏头部 */
@@ -340,12 +340,12 @@ interface ChatBotProps {
 
   // 功能开关
   /**
-   * 是否启用模型选择（默认 true，≥ v2.2.1）
+   * 是否启用模型选择（默认 true，≥ v2.2.2）
    * 为 true 时拉取 GET llms/；列表非空才展示 ModelSelector
    */
   enableModelSelect?: boolean;
   /**
-   * 外部传入的模型列表（≥ v2.2.1；有值时跳过内部拉取，优先使用）
+   * 外部传入的模型列表（≥ v2.2.2；有值时跳过内部拉取，优先使用）
    */
   models?: ILlmItem[] | IModelOption[];
 

@@ -37,10 +37,10 @@
 | `/guide/core-features/shortcuts` | `shortcuts.md` | 快捷指令 |
 | `/guide/core-features/prompts` | `prompts.md` | 用户 `/` 提示词、`@` 资源 |
 | `/guide/core-features/session-management` | `session-management.md` | 会话 CRUD；`session.model` 跟随会话，切换/新建可写回 |
-| `/guide/core-features/model-selection` | `model-selection.md` | 模型选择（≥ v2.2.1）：`enableModelSelect`、`models`、跟随 session、`GET llms/`、upload=`support_vision` |
+| `/guide/core-features/model-selection` | `model-selection.md` | 模型选择（≥ v2.2.2）：`enableModelSelect`、`models`、`ModelSelectionManager`、跟随 session、写回、`GET llms/`、upload=`support_vision` |
 | `/guide/core-features/sharing` | `sharing.md` | 分享；`confirm-share` 的 `source`、自定义 `triggerSelection` |
 | `/guide/core-features/custom-message-rendering` | `custom-message-rendering.md` | `custom-component` 块 |
-| `/guide/core-features/side-render-customization` | `side-render-customization.md` | 侧栏 Tab `getSideRenderComponent` 等（≥ v2.1.4-beta.7） |
+| `/guide/core-features/side-render-customization` | `side-render-customization.md` | 侧栏 Tab `getSideRenderComponent` 等（≥ v2.1.4-beta.7）；`executionTabVisible`（≥ v2.2.0）；文件产物 Tab（≥ v2.2.2） |
 | `/guide/core-features/ui-customization` | `ui-customization.md` | 主题、布局；`#welcome` 插槽、`messageTools`/`updateTools` |
 | `/guide/core-features/skill-guide` | `skill-guide.md` | AIDev Skill 市场指引 |
 
@@ -68,7 +68,7 @@
 
 欢迎区 / 消息工具栏扩展落点：指南 `ui-customization.md`（`#welcome`、`messageTools`/`updateTools`）、`sharing.md`（`confirm-share` + `source`、`agent-action`）；API 同步 `api/ai-blueking/chatbot.md`、`aiblueking.md`、`types.md`。
 
-模型选择相关落点（≥ v2.2.1）：指南 `model-selection.md`；API 同步 `aiblueking` / `chatbot` / `managers` / `types`、`chat-helper/sdk`、`chat-x/components`；FAQ「如何关闭或自定义模型选择」。
+模型选择相关落点（≥ v2.2.2）：指南 `model-selection.md`；API 同步 `aiblueking` / `chatbot` / `managers`（含 `ModelSelectionManager`） / `types`、`chat-helper/sdk`、`chat-x/components`；FAQ「如何关闭或自定义模型选择」。
 
 ## 示例 `/demos/`
 
@@ -80,7 +80,9 @@
 
 - `themeConfig.nav` — 顶栏
 - `themeConfig.sidebar["/guide/"]` 等 — 侧栏（**新指南页必改**）
-- `import { version } from "../../../ai-blueking/packages/ai-blueking/package.json"` — 顶栏版本下拉
+- 顶栏版本下拉读 `changelog.md` 首条 `## vX.Y.Z`（`utils/resolve-changelog-version.js`）
+
+演示依赖（npm 已发布后再改）：`src/frontend/web/package.json` 中 `@blueking/ai-blueking` / `chat-x` / `chat-helper` 应对齐该正式版及其配套子包（当前 2.2.2 / 0.0.49-beta.8 / 0.0.12-beta.20）。
 
 ## 源码对照（写文档前建议阅读）
 

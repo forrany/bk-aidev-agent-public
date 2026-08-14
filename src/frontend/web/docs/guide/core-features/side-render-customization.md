@@ -43,6 +43,10 @@
 - 该 Tab 的 `order`（`0`）与不可关闭特性由 `@blueking/chat-x` 内部保证，业务侧无法通过 `addCustomTab` 覆盖。
 :::
 
+## 内置「文件产物」Tab
+
+自 **v2.2.2** 起，`AIBlueking` / `ChatBot` 会把 `ChatContainer.onArtifactClick` 接到 `pv_files/download_url`。AI 回复中的文件卡片可打开侧栏固定的「文件产物」Tab（`name: 'file-artifact'`），聚合当前会话 `property.artifacts` 并预览 / 下载。集成方无需额外配置；原子组装时需自行传入 `onArtifactClick`。
+
 ## 数据流
 
 ```mermaid
