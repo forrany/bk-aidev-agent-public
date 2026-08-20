@@ -139,11 +139,14 @@ class FlowAgentCompletionAgent(BaseModel):
             thread_id=stream_thread_id,
             defer_cleanup_on_complete=background_only,
         )
+        attach_only = getattr(execute_kwargs, "stream_mode", "start") == "attach"
+        run_id = None if attach_only else str(uuid.uuid4())
         return helper.stream(
-            self._run_flow(),
+            self._run_flow(run_id),
             on_complete=self._on_complete,
             event_handler=self.event_handler,
-            attach_only=getattr(execute_kwargs, "stream_mode", "start") == "attach",
+            expected_run_id=run_id,
+            attach_only=attach_only,
         )
 
     def _on_complete(self) -> None:
@@ -158,10 +161,10 @@ class FlowAgentCompletionAgent(BaseModel):
 
     # ---------- 核心流程 ----------
 
-    def _run_flow(self) -> Generator[str, None, None]:
+    def _run_flow(self, run_id: str | None = None) -> Generator[str, None, None]:
         """核心流程：启动（或使用已有 task_id）→ 轮询 → 产出 SSE 事件"""
         encoder = EventEncoder()
-        run_id = str(uuid.uuid4())
+        run_id = run_id or str(uuid.uuid4())
         # 每次运行重置任务启动状态
         self._task_started = False
 
@@ -358,6 +361,15 @@ class FlowAgentCompletionAgent(BaseModel):
                 )
 
             if task_state in FLOW_TASK_END_STATES:
+                if self.resume_from_node and _poll_count == 1:
+                    logger.warning(
+                        "[FLOW_AGENT] Node resume reached terminal state on first poll: run_id=%s, task_id=%s, "
+                        "action=%s, task_state=%s",
+                        run_id,
+                        task_id,
+                        self.resume_from_node,
+                        task_state,
+                    )
                 logger.info(
                     f"[FLOW_AGENT] Task finished: task_id={task_id}, task_state={task_state}, "
                     f"poll_count={_poll_count}, elapsed={time.time() - start_time:.1f}s"
