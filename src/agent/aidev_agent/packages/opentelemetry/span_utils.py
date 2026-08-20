@@ -34,10 +34,25 @@ class SpanHolder:
     start_time: float = field(default_factory=time.time)
 
 
+def _set_content_attributes(
+    span: Span,
+    *,
+    content_key: str,
+    original_length_key: str,
+    truncated_key: str,
+    value: str,
+    max_attribute_length: int,
+) -> None:
+    original_length = len(value)
+    truncated = original_length > max_attribute_length
+    _set_span_attribute(span, content_key, value[:max_attribute_length] if truncated else value)
+    _set_span_attribute(span, original_length_key, original_length)
+    _set_span_attribute(span, truncated_key, truncated)
+
+
 def set_request_params(span, kwargs, span_holder: SpanHolder):
-    if not span.is_recording():
-        return
-    # 设置请求的名称模型
+    # Metrics still need the request model when tracing is disabled and the
+    # callback receives a non-recording span.
     for model_tag in ("model", "model_id", "model_name"):
         if (model := kwargs.get(model_tag)) is not None or (
             model := (kwargs.get("invocation_params") or {}).get(model_tag)
@@ -46,6 +61,9 @@ def set_request_params(span, kwargs, span_holder: SpanHolder):
             break
     else:
         model = "unknown"
+    if not span.is_recording():
+        return
+    # 设置请求的名称模型
     _set_span_attribute(span, "gen_ai.request.model", model)
     _set_span_attribute(span, "gen_ai.response.model", model)
     # 设置请求的相关参数
@@ -82,10 +100,19 @@ def set_llm_request(
     prompts: list[str],
     kwargs: Any,
     span_holder: SpanHolder,
+    max_attribute_length: int = 10000,
 ) -> None:
     set_request_params(span, kwargs, span_holder)
     for i, msg in enumerate(prompts):
         _set_span_attribute(span, "llm.input" if i == 0 else f"llm.input{i}", json.dumps(msg))
+    _set_content_attributes(
+        span,
+        content_key="gen_ai.input.messages",
+        original_length_key="llm.input_original_length",
+        truncated_key="llm.input_truncated",
+        value=json.dumps(prompts, cls=CallbackFilteredJSONEncoder),
+        max_attribute_length=max_attribute_length,
+    )
 
 
 def set_chat_request(
@@ -94,6 +121,7 @@ def set_chat_request(
     messages: list[list[BaseMessage]],
     kwargs: Any,
     span_holder: SpanHolder,
+    max_attribute_length: int = 10000,
 ) -> None:
     # 本部分由于做训练数据收集
     # 收集模型基本的配置：名称/核心参数/工具
@@ -101,6 +129,14 @@ def set_chat_request(
     # 收集 prompt
     for i, message in enumerate(messages):
         _set_span_attribute(span, "llm.input" if i == 0 else f"llm.output{i}", json.dumps(messages_to_dict(message)))
+    _set_content_attributes(
+        span,
+        content_key="gen_ai.input.messages",
+        original_length_key="llm.input_original_length",
+        truncated_key="llm.input_truncated",
+        value=json.dumps([messages_to_dict(group) for group in messages], cls=CallbackFilteredJSONEncoder),
+        max_attribute_length=max_attribute_length,
+    )
 
 
 def generation_to_dict(generation: Union[Generation, ChatGeneration, GenerationChunk, ChatGenerationChunk]):
@@ -152,10 +188,21 @@ def generation_to_dict(generation: Union[Generation, ChatGeneration, GenerationC
     return ret
 
 
-def set_chat_response(span: Span, response: LLMResult) -> None:
+def set_chat_response(span: Span, response: LLMResult, max_attribute_length: int = 10000) -> None:
+    output_groups = [
+        [generation_to_dict(generation) for generation in generations] for generations in response.generations
+    ]
     for i, generations in enumerate(response.generations):
         _set_span_attribute(
             span,
             "llm.output" if i == 0 else f"llm.output{i}",
             json.dumps([generation_to_dict(generation) for generation in generations]),
         )
+    _set_content_attributes(
+        span,
+        content_key="gen_ai.output.messages",
+        original_length_key="llm.output_original_length",
+        truncated_key="llm.output_truncated",
+        value=json.dumps(output_groups, cls=CallbackFilteredJSONEncoder),
+        max_attribute_length=max_attribute_length,
+    )
