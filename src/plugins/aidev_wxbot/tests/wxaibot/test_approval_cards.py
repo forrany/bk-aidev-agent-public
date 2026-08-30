@@ -17,7 +17,7 @@ from aidev_wxbot.wxaibot.approval_cards import build_cancel_result_card, build_p
         "javascript:void(0)",
     ],
 )
-def test_pending_card_has_separate_safe_web_session_link(approval_card_case, monkeypatch, session_url):
+def test_pending_card_opens_safe_session_without_session_row(approval_card_case, monkeypatch, session_url):
     case = approval_card_case
     monkeypatch.setattr(
         "aidev_wxbot.wxaibot.approval_cards.AgentHelper.build_session_detail_url", lambda _session: session_url
@@ -25,10 +25,12 @@ def test_pending_card_has_separate_safe_web_session_link(approval_card_case, mon
     card = build_pending_approval_card(
         {"outcome": {"type": "interrupt", "interrupts": case.result["interrupts"]}}, case.action.session_code
     )
-    links = [row for row in card["horizontal_content_list"] if row.get("type") == 1]
-    expected = [{"keyname": "会话", "value": "查看会话", "type": 1, "url": session_url}]
-    assert links == (expected if session_url.startswith(("https://", "http://")) else [])
-    assert card["card_action"] == case.card["card_action"]
+    assert [row["keyname"] for row in card["horizontal_content_list"]] == ["单据编号", "提交时间"]
+    expected_action = (
+        {"type": 1, "url": session_url} if session_url.startswith(("https://", "http://")) else {"type": 0}
+    )
+    assert card["card_action"] == expected_action
+    assert card["horizontal_content_list"][0] == case.card["horizontal_content_list"][0]
     assert card["button_list"] == case.card["button_list"]
 
 
@@ -43,15 +45,26 @@ def test_result_only_replaces_action_area(approval_card_case, status, label):
     expected = {key: value for key, value in case.card.items() if key != "button_list"}
     expected.update(card_type="text_notice", jump_list=[{"type": 0, "title": label}])
     assert card == expected
-    assert card["horizontal_content_list"][-1] == {
-        "keyname": "会话",
-        "value": "查看会话",
-        "type": 1,
-        "url": "https://agent.example.com/session-1",
-    }
+    assert [row["keyname"] for row in card["horizontal_content_list"]] == ["单据编号", "提交时间"]
+    assert card["card_action"] == {"type": 1, "url": "https://agent.example.com/session-1"}
     assert case.result == original
     assert "must-not-leak" not in json.dumps(card)
     assert "candidate-not-actual-approver" not in json.dumps(card)
+
+
+@pytest.mark.parametrize(
+    "ticket_url", ["https://approval.example.com/#/ticket?type=ticket&id=1", "", "javascript:alert(1)"]
+)
+def test_ticket_number_link_is_separate_from_default_action(approval_card_case, ticket_url):
+    case = approval_card_case
+    case.result["interrupts"][0]["metadata"]["ticket"]["url"] = ticket_url
+    card = build_cancel_result_card(case.action, case.task_id, result=case.result)
+    assert card["card_action"] == {"type": 1, "url": "https://agent.example.com/session-1"}
+    row = {"keyname": "单据编号", "value": "DE001"}
+    if ticket_url.startswith("https://"):
+        row.update(type=1, url=ticket_url)
+    assert card["horizontal_content_list"][0] == row
+    assert card["main_title"]["desc"] == "点击卡片查看会话"
 
 
 @pytest.mark.parametrize("result", [None, [], {}, {"approve_result": []}, {"approve_result": "pending"}])
