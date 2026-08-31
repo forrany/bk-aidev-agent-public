@@ -1,5 +1,7 @@
 """企微审批卡片测试使用的脱敏平台响应与回调。"""
 
+import copy
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -12,13 +14,21 @@ from aidev_wxbot.wxaibot.approval_cards import (
 )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def card_signing_settings():
+    """Card signature tests must not depend on a developer's local .env."""
+    from django.conf import settings
+
+    settings.SECRET_KEY = "wxbot-test-only-signing-key"
+
+
 @pytest.fixture
 def approval_card_case(monkeypatch):
     monkeypatch.setattr(
         "aidev_wxbot.wxaibot.approval_cards.AgentHelper.build_session_detail_url",
         lambda _session: "https://agent.example.com/session-1",
     )
-    action = ApprovalCancelAction("session-1", "int-approval-call-1-DE001")
+    action = ApprovalCancelAction("session-1", "int-approval-call-1-DE001", "alice-wx")
     task_id = approval_task_id(action)
     interrupt = {
         "id": action.interrupt_id,
@@ -79,6 +89,13 @@ def approval_resume_case(approval_card_case, monkeypatch):
     monkeypatch.setattr(mod, "AgentBuilder", case.builder)
     case.manager = MagicMock()
     monkeypatch.setattr(mod, "SessionManager", case.manager)
+    case.manager.return_value.list_session_contents.return_value = [
+        {
+            "role": "interrupt",
+            "property": {"turn_id": "turn-1"},
+            "content": {"outcome": {"type": "success", "interrupts": case.result["interrupts"]}},
+        }
+    ]
     case.real_run = mod.AgentExecutor.run_agent_to_completion
     case.run = MagicMock()
     monkeypatch.setattr(mod.AgentExecutor, "run_agent_to_completion", case.run)
@@ -89,4 +106,105 @@ def approval_resume_case(approval_card_case, monkeypatch):
     monkeypatch.setattr(mod, "close_old_connections", case.cleanup)
     monkeypatch.setattr(mod, "_pending", set())
     case.module, case.handler = mod, handler
+    return case
+
+
+@pytest.fixture
+def persisted_approval_case(approval_resume_case, monkeypatch):
+    """Use real state readers with the platform's persisted-content contract."""
+    from aidev_agent.services.agent.approval import ApprovalStateHandler
+
+    case = approval_resume_case
+    case.record = {
+        "id": 1,
+        "role": "interrupt",
+        "property": {
+            "turn_id": "turn-1",
+            "builtin_property": {
+                "approve_result": "cancelled",
+                "graph_thread_id": "graph-1",
+            },
+        },
+        "content": {"outcome": {"type": "success", "interrupts": case.result["interrupts"]}},
+    }
+    case.api = MagicMock()
+    # ChatSessionProperty does not expose pending_interrupt on older platforms.
+    case.api.retrieve_chat_session.return_value = {"data": {"session_property": {"labels": []}}}
+    case.api.get_chat_session_contents.return_value = {"data": [case.record]}
+    monkeypatch.setattr(ApprovalStateHandler, "_get_client", lambda _: SimpleNamespace(api=case.api))
+    monkeypatch.setattr(case.module, "ApprovalStateHandler", ApprovalStateHandler)
+    case.manager.return_value.list_session_contents.return_value = [case.record]
+    return case
+
+
+@pytest.fixture
+def question_case(monkeypatch):
+    from aidev_wxbot.wxaibot.question_cards import QuestionAction, questions_digest
+
+    monkeypatch.setattr(
+        "aidev_wxbot.wxaibot.question_cards.AgentHelper.build_session_detail_url",
+        lambda session_code: f"https://agent.example.com/chat-window/?session={session_code}",
+    )
+    questions = [
+        {
+            "header": "区域",
+            "question": "请选择区域",
+            "multiSelect": False,
+            "options": [{"label": "华南"}, {"label": "华东"}],
+        }
+    ]
+    interrupt = {
+        "id": "question-1",
+        "reason": "aidev:user_question",
+        "metadata": {"status": "pending", "type": "ask_user_question", "questions": questions},
+    }
+    action = QuestionAction("session-1", "question-1", questions_digest(questions), "alice-wx")
+    return SimpleNamespace(
+        interrupt=interrupt,
+        action=action,
+        event={"type": "RUN_FINISHED", "outcome": {"type": "interrupt", "interrupts": [interrupt]}},
+        selected={"selected_item": [{"question_key": "q0", "option_ids": {"option_id": ["0"]}}]},
+    )
+
+
+@pytest.fixture(params=["single", "multi", "three_single"])
+def native_question_case(question_case, request):
+    """The three supported native layouts with non-default user selections."""
+    from aidev_wxbot.wxaibot.question_cards import questions_digest
+
+    case = question_case
+    questions = case.interrupt["metadata"]["questions"]
+    questions[0]["multiSelect"] = request.param == "multi"
+    if request.param == "three_single":
+        questions[:] = [copy.deepcopy(questions[0]) for _ in range(3)]
+        for index, question in enumerate(questions, 1):
+            question["question"] = f"请选择区域{index}"
+    case.selected = {
+        "selected_item": [
+            {"question_key": f"q{i}", "option_ids": {"option_id": ["1", "0"] if q["multiSelect"] else ["1"]}}
+            for i, q in enumerate(questions)
+        ]
+    }
+    case.action = replace(case.action, digest=questions_digest(questions))
+    return case
+
+
+@pytest.fixture(params=[(1, False, 20), (1, True, 20), (2, False, 10), (3, False, 10)])
+def protocol_question_case(question_case, request):
+    """Native capacity boundaries, with text beyond the old byte-length guards."""
+    count, multi, options = request.param
+    case = question_case
+    case.interrupt["metadata"]["questions"] = [
+        {
+            "question": f"问题{i}：" + "完整题干" * 30,
+            "multiSelect": multi,
+            "options": [{"label": f"选项{j}：" + "完整选项" * 10} for j in range(options)],
+        }
+        for i in range(count)
+    ]
+    case.selected = {
+        "selected_item": [
+            {"question_key": f"q{i}", "option_ids": {"option_id": [str(options - 1)]}} for i in range(count)
+        ]
+    }
     return case
