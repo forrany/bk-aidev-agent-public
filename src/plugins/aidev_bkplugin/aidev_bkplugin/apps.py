@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import sys
+from pathlib import Path
 
 from aidev_agent.utils.module_loading import import_string
 from django.apps import AppConfig
@@ -60,6 +62,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _is_one_off_management_command() -> bool:
+    if not sys.argv or Path(sys.argv[0]).name not in {"manage.py", "django-admin", "django-admin.py"}:
+        return False
+    return sys.argv[1:2] not in (["runserver"], ["celery"], ["run_wxaibot_ws"])
+
+
 def init_bk_aidev_agent_otel() -> None:
     """
     初始化 BK AIDEV Agent OpenTelemetry。
@@ -84,6 +92,15 @@ def init_bk_aidev_agent_otel() -> None:
     if not getattr(otel_config, "enabled", True):
         logger.info("[aidev_bkplugin] OpenTelemetry disabled; remote initialization skipped")
         set_metric_service(None)
+        return
+
+    if _is_one_off_management_command():
+        # 一次性命令不采集指标或 Trace，避免退出时等待上报；无需获取远程 OT 配置。
+        otel_config.enable_metrics = False
+        otel_config.enable_traces = False
+        set_metric_service(None)
+        BkAidevAgentInstrumentor(config=otel_config).instrument()
+        logger.info("[aidev_bkplugin] metrics and traces disabled for one-off management command")
         return
 
     if getattr(otel_config, "trace_exporter", "otlp") == "logging":
