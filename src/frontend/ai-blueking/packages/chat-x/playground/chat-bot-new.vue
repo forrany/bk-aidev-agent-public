@@ -198,6 +198,7 @@
   import { MOCK_USER_QUESTION_PENDING_MESSAGES } from './interrupt';
   import { streamContent } from './markdown';
   import {
+    MOCK_FLOW_AGENT_MESSAGES,
     MOCK_INFO_MESSAGES,
     MOCK_MESSAGES,
     MOCK_MODELS,
@@ -226,11 +227,12 @@
   const handleModelChange = (model: IModelOption) => {
     console.log('model change:', model);
   };
-  // Info 分隔提示 + ToolCall 各状态 + 含 toolCalls 的会话 mock + 待回答 UserQuestion
+  // Info 分隔提示 + ToolCall 各状态 + 含 toolCalls 的会话 mock + flow_agent 执行情况 + 待回答 UserQuestion
   const messages = deepRef<Message[]>([
     ...MOCK_INFO_MESSAGES,
     ...MOCK_TOOLCALL_STATUS_MESSAGES,
     ...(MOCK_MESSAGES as Message[]),
+    ...MOCK_FLOW_AGENT_MESSAGES,
     // ...MOCK_USER_QUESTION_PENDING_MESSAGES,
   ]);
 
