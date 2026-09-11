@@ -6,7 +6,7 @@ metadata:
   version: '5.39'
   packages:
     ai-blueking: 2.2.4
-    chat-x: 0.0.51
+    chat-x: 0.0.52-beta.1
     chat-helper: 0.0.12
 ---
 
