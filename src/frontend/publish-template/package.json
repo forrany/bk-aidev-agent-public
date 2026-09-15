@@ -18,7 +18,7 @@
     "@blueking/cli-service": "0.1.1",
     "bkui-vue": "^2.0.2-beta.112",
     "dayjs": "^1.11.12",
-    "postcss": "~8.4.16",
+    "postcss": "^8.5.23",
     "postcss-import": "^15.0.0",
     "postcss-mixins": "^9.0.4",
     "postcss-nested": "^6.0.0",

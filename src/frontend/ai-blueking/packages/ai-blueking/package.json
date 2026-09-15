@@ -85,7 +85,7 @@
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.8.1",
-    "happy-dom": "^20.3.7",
+    "happy-dom": "^20.14.5",
     "sass-embedded": "^1.93.3",
     "tsx": "^4.20.6",
     "typescript": "~5.9.3",

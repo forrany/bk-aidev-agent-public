@@ -51,18 +51,24 @@
     "@types/koa": "^3.0.2",
     "@types/koa-send": "^4.1.6",
     "@types/koa__router": "^12.0.5",
-    "esbuild": "^0.20.2",
+    "esbuild": "^0.27.0",
     "koa": "^2.14.0",
     "koa-mount": "^4.2.0",
     "koa-send": "^5.0.0",
-    "less": "^4.2.0",
+    "less": "^4.9.1",
     "markdown-it-container": "^3.0.0",
     "monaco-editor-vue3": "^0.1.6",
     "shiki": "^2.5.0",
-    "vitepress": "^1.6.3"
+    "vitepress": "^2.0.0-alpha.16"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
+  },
+  "overrides": {
+    "lodash": "4.18.1",
+    "image-size": "2.0.4",
+    "nanoid": "3.3.19",
+    "postcss": "8.5.28"
   },
   "type": "module",
   "engines": {
