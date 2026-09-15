@@ -5,9 +5,9 @@ metadata:
   author: blueking
   version: '5.39'
   packages:
-    ai-blueking: 2.2.4
-    chat-x: 0.0.52-beta.1
-    chat-helper: 0.0.12
+    ai-blueking: 2.2.5-beta.2
+    chat-x: 0.0.52-dev.2
+    chat-helper: 0.0.13-dev.2
 ---
 
 # AI 小鲸组件开发指南
