@@ -1,5 +1,8 @@
 <template>
-  <div class="shortcut-render">
+  <div
+    ref="rootRef"
+    class="shortcut-render"
+  >
     <div class="shortcut-render-header">
       <ThinkingIcon class="header-icon" />
       <span class="header-name">{{ alias || name }}</span>
@@ -67,6 +70,7 @@
     (e: 'submit', formModel: Record<string, unknown>): void;
   };
   const emits = defineEmits<ShortcutRenderEmits>();
+  const rootRef = useTemplateRef<HTMLElement>('rootRef');
   const formRef = useTemplateRef<InstanceType<typeof Form>>('formRef');
   const localFormModel = reactive<Record<string, unknown>>({});
   const rules = shallowRef<Record<string, Record<string, unknown>>>({});
@@ -109,14 +113,18 @@
       required: component.fillBack ?? component.formItemProps?.required,
     };
   };
-  /** 与 tippy appendTo 同一挂载点，让下拉留在小鲸层叠上下文内；没有注入时回到 body。 */
+  /**
+   * 与 tippy appendTo 同一挂载点，让下拉留在小鲸层叠上下文内；没有注入时回到 body。
+   * 函数形式的 appendTo 会按参考元素向上查找容器（如 `ref.closest('.draggable-container-content')`），
+   * 因此须传入组件自身节点而不是 document.body。
+   */
   const resolvePopoverBoundary = (): 'body' | HTMLElement => {
     const appendTo = commonTippyOptions?.value?.appendTo;
     if (appendTo instanceof HTMLElement) {
       return appendTo;
     }
     if (typeof appendTo === 'function') {
-      const target = appendTo(document.body);
+      const target = appendTo(rootRef.value ?? document.body);
       if (target instanceof HTMLElement) {
         return target;
       }

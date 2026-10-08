@@ -437,7 +437,7 @@ Select 的下拉是 bkui Popover，默认会 Teleport 到 `document.body`，层�
 | `appendTo` | `boundary` |
 | --- | --- |
 | `HTMLElement` | 该元素 |
-| 返回 `HTMLElement` 的函数 | 函数返回值。ChatBot 默认是 `() => rootRef ?? document.body`，即 `.ai-chatbot` |
+| 返回 `HTMLElement` 的函数 | 以 `ShortcutRender` 根节点为参数调用后的返回值。AIBlueking 默认是 `ref => ref.closest('.draggable-container-content') ?? document.body` |
 | 未注入，或值为 `'parent'` 等无法解析的结果 | `'body'` |
 
 这样下拉留在小鲸自己的层叠上下文里，bkui 自己的递增 z-index 即可盖过表单，不必再写死一个高于浮窗的数字。

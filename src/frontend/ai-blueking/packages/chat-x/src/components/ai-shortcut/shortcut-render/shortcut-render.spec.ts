@@ -407,6 +407,41 @@ describe('ShortcutRender', () => {
       });
     });
 
+    it('select 下拉应按组件自身节点解析 closest 形式的 appendTo', async () => {
+      const container = document.createElement('div');
+      container.className = 'draggable-container-content';
+      document.body.appendChild(container);
+      const components: ShortcutComponent[] = [
+        {
+          key: 'option',
+          name: '选择',
+          type: 'select',
+          options: [{ label: '选项1', value: '1' }],
+        },
+      ];
+
+      wrapper = mount(ShortcutRender, {
+        attachTo: container,
+        props: {
+          id: 'test',
+          name: '测试',
+          components,
+        },
+        global: {
+          provide: {
+            [COMMON_TIPPY_OPTIONS_TOKEN]: computed(() => ({
+              appendTo: (ref: Element) => ref.closest('.draggable-container-content') ?? document.body,
+            })),
+          },
+        },
+      });
+      await nextTick();
+
+      expect(wrapper.getComponent({ name: 'Select' }).props('popoverOptions')).toEqual({ boundary: container });
+
+      container.remove();
+    });
+
     it('应该渲染 switcher 类型组件', () => {
       const components: ShortcutComponent[] = [
         {
