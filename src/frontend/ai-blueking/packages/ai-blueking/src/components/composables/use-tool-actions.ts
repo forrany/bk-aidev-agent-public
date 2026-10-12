@@ -273,7 +273,14 @@ export function useToolActions(params: UseToolActionsParams): UseToolActionsRetu
     try {
       const existingProperty = (message as unknown as { property?: Record<string, unknown> }).property;
       const docSchemaPayload = buildDocSchemaPayload(docSchema);
-      const nextProperty = docSchemaPayload ? { ...existingProperty, docSchema: docSchemaPayload } : existingProperty;
+      // 编辑器没再带回标签（例如图片已删除）时，旧 docSchema 不能留着，否则后端仍能读到附件
+      const propertyWithoutDocSchema = { ...existingProperty };
+      delete propertyWithoutDocSchema.docSchema;
+      const nextProperty = docSchemaPayload
+        ? { ...existingProperty, docSchema: docSchemaPayload }
+        : Object.keys(propertyWithoutDocSchema).length > 0
+          ? propertyWithoutDocSchema
+          : undefined;
       const mergedProperty = applyRequestOptionsContext(nextProperty, getRequestOptions);
       await chatBusinessManager.value?.resendMessageWithProperty(
         String(messageId),
