@@ -285,28 +285,93 @@ describe('useToolActions', () => {
       );
     });
 
-    it('should not overwrite original docSchema when the new document has no tags', async () => {
+    it('should drop docSchema when the edited document no longer has tags', async () => {
       const params = createParams();
       (params.chatHelper.value!.session.current as any).value = { sessionCode: 'session-1' };
       const { handleUserInputConfirm } = useToolActions(params);
 
-      const originalDoc = [
-        [{ type: 'tag', data: { type: 'skill', label: '审查', value: 'code_review', icon: '', description: '' } }],
+      const imageDoc = [
+        [{ type: 'text', text: '看这张图' }],
+        [
+          {
+            type: 'tag',
+            data: { type: 'artifact', label: 'shot.png', value: 'files/shot.png', icon: '', description: '' },
+          },
+        ],
       ];
       const message = createMockUserMessage({
         id: 'msg-1',
-        property: { extra: { command: 'summary' }, docSchema: originalDoc },
+        property: { extra: { command: 'summary' }, docSchema: imageDoc },
       } as any);
 
-      await handleUserInputConfirm(message as any, 'plain', [[{ type: 'text', text: 'plain' }]] as any);
+      await handleUserInputConfirm(message as any, '看这张图', [[{ type: 'text', text: '看这张图' }]] as any);
 
       expect(params.chatBusinessManager.value!.resendMessageWithProperty).toHaveBeenCalledWith(
         'msg-1',
         'session-1',
-        'plain',
+        '看这张图',
         {
           extra: { command: 'summary' },
-          docSchema: originalDoc,
+        },
+      );
+    });
+
+    it('should resend with no property when docSchema was the only key and the image is removed', async () => {
+      const params = createParams();
+      (params.chatHelper.value!.session.current as any).value = { sessionCode: 'session-1' };
+      const { handleUserInputConfirm } = useToolActions(params);
+
+      const imageDoc = [
+        [
+          {
+            type: 'tag',
+            data: { type: 'artifact', label: 'shot.png', value: 'files/shot.png', icon: '', description: '' },
+          },
+        ],
+      ];
+      const message = createMockUserMessage({
+        id: 'msg-1',
+        property: { docSchema: imageDoc },
+      } as any);
+
+      await handleUserInputConfirm(message as any, '只剩文字', [[{ type: 'text', text: '只剩文字' }]] as any);
+
+      expect(params.chatBusinessManager.value!.resendMessageWithProperty).toHaveBeenCalledWith(
+        'msg-1',
+        'session-1',
+        '只剩文字',
+        undefined,
+      );
+    });
+
+    it('should merge request context without restoring docSchema after the image is removed', async () => {
+      const params = createParams({
+        getRequestOptions: () => ({ context: { env: 'prod' } }),
+      });
+      (params.chatHelper.value!.session.current as any).value = { sessionCode: 'session-1' };
+      const { handleUserInputConfirm } = useToolActions(params);
+
+      const imageDoc = [
+        [
+          {
+            type: 'tag',
+            data: { type: 'artifact', label: 'shot.png', value: 'files/shot.png', icon: '', description: '' },
+          },
+        ],
+      ];
+      const message = createMockUserMessage({
+        id: 'msg-1',
+        property: { docSchema: imageDoc },
+      } as any);
+
+      await handleUserInputConfirm(message as any, '只剩文字', [[{ type: 'text', text: '只剩文字' }]] as any);
+
+      expect(params.chatBusinessManager.value!.resendMessageWithProperty).toHaveBeenCalledWith(
+        'msg-1',
+        'session-1',
+        '只剩文字',
+        {
+          extra: { context: { env: 'prod' } },
         },
       );
     });
