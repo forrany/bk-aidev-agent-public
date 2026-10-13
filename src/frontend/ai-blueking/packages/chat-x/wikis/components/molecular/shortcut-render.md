@@ -440,6 +440,8 @@ Select 的下拉是 bkui Popover，默认会 Teleport 到 `document.body`，层�
 | 返回 `HTMLElement` 的函数 | 以 `ShortcutRender` 根节点为参数调用后的返回值。AIBlueking 默认是 `ref => ref.closest('.draggable-container-content') ?? document.body` |
 | 未注入，或值为 `'parent'` 等无法解析的结果 | `'body'` |
 
+bkui Popover 只在创建时解析 `boundary`。`ShortcutRender` 首次渲染时根节点尚未挂载，函数形式的 `appendTo` 可能解析不到容器，因此根节点挂载后会重建一次 Select，按解析到的挂载点创建下拉。
+
 这样下拉留在小鲸自己的层叠上下文里，bkui 自己的递增 z-index 即可盖过表单，不必再写死一个高于浮窗的数字。
 
 不要把 `boundary` 设成 `'parent'`。`.ai-shortcut-render` 有 `overflow: hidden`，下拉会被裁掉。全屏时 `ChatContainer` 会把 `appendTo` 换成全屏容器，下拉跟着挂到那里。

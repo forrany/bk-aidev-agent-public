@@ -35,6 +35,8 @@ import { COMMON_TIPPY_OPTIONS_TOKEN } from '../../../composables/use-common';
 
 import type { Shortcut, ShortcutComponent } from '../../../types';
 
+const selectSetupBoundaries = vi.hoisted(() => [] as unknown[]);
+
 // Mock bkui-vue components
 vi.mock('bkui-vue', () => {
   const Form = defineComponent({
@@ -101,6 +103,8 @@ vi.mock('bkui-vue', () => {
         },
         emits: ['update:modelValue', 'change'],
         setup(props, { slots }) {
+          // bkui Popover 只在创建时读取 boundary，记录每个实例创建时拿到的值
+          selectSetupBoundaries.push((props.popoverOptions as { boundary?: unknown }).boundary);
           return () => h('select', { class: 'mock-select', value: props.modelValue }, slots.default?.());
         },
       }),
@@ -438,6 +442,34 @@ describe('ShortcutRender', () => {
       await nextTick();
 
       expect(wrapper.getComponent({ name: 'Select' }).props('popoverOptions')).toEqual({ boundary: container });
+
+      container.remove();
+    });
+
+    it('select 应在根节点挂载后按解析到的挂载点重新创建', async () => {
+      const container = document.createElement('div');
+      container.className = 'draggable-container-content';
+      document.body.appendChild(container);
+      selectSetupBoundaries.length = 0;
+
+      wrapper = mount(ShortcutRender, {
+        attachTo: container,
+        props: {
+          id: 'test',
+          name: '测试',
+          components: [{ key: 'option', name: '选择', type: 'select', options: [{ label: '选项1', value: '1' }] }],
+        },
+        global: {
+          provide: {
+            [COMMON_TIPPY_OPTIONS_TOKEN]: computed(() => ({
+              appendTo: (ref: Element) => ref.closest('.draggable-container-content') ?? document.body,
+            })),
+          },
+        },
+      });
+      await nextTick();
+
+      expect(selectSetupBoundaries.at(-1)).toBe(container);
 
       container.remove();
     });

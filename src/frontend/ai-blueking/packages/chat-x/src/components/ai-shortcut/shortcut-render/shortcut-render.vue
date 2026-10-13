@@ -170,6 +170,8 @@
           Select,
           {
             ...componentProps,
+            // bkui Popover 只在创建时解析 boundary；根节点挂载后重建一次，按真实挂载点解析 appendTo
+            key: rootRef.value ? 'boundary-resolved' : 'boundary-pending',
             popoverOptions: {
               boundary: resolvePopoverBoundary(),
               ...userPopoverOptions,
