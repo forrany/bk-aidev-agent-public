@@ -81,12 +81,12 @@ class BaseKnowledgeNode:
         Args:
             llm: 语言模型
             knowledge_query_options: 知识库检索配置
-            kb_retriever: 可选的知识库检索器，如不提供则创建默认实例
+            kb_retriever: 绑定当前资源上下文的检索器，执行查询时必须提供
         """
         self.llm = llm
         self.knowledge_query_options = knowledge_query_options
         self.chat_history = chat_history
-        self.kb_retriever = kb_retriever or BkRetriever()
+        self.kb_retriever = kb_retriever
         self.retriever = KnowledgeRag(llm, self.kb_retriever)
 
     def get_query_input(self, state: KnowledgeInputState) -> Any:
@@ -274,11 +274,14 @@ def make_knowledge_node(
     llm: BaseChatModel,
     knowledge_query_options: KnowledgeSettings,
     chat_history: Optional[list] = None,
+    *,
+    kb_retriever: BkRetriever | None = None,
 ):
     """构建知识库检索节点。
     Args:
         llm: 语言模型,用于知识库检索中的相关性判断和内容处理
         knowledge_query_options: 知识库检索配置
+        kb_retriever: 绑定当前资源上下文的检索器
 
     Returns:
         可用于 LangGraph node 的 callable,接受 (state, config, *, store) 参数
@@ -291,4 +294,5 @@ def make_knowledge_node(
         llm=llm,
         knowledge_query_options=knowledge_query_options,
         chat_history=chat_history,
+        kb_retriever=kb_retriever,
     )
