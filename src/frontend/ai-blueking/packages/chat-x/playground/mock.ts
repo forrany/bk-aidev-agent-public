@@ -818,8 +818,16 @@ const mockCreatedAtAgo = (offsetMs: number) => new Date(Date.now() - offsetMs).t
 
 // 已上传文件样例：可在 @ / + 中引用，也可点击附件在侧栏预览与下载。
 const MOCK_UPLOADED_FILES = [
-  new File(['# 上传文件接入说明\n\n上传响应的 `path` 会保存为 `outputId`。\n\n- 在 @ 或 + 中引用文件\n- 点击附件或标签打开侧栏\n- 在侧栏下载原文件\n'], '上传文件接入说明.md', { type: 'text/markdown' }),
-  new File(['{\n  "service": "chat-x",\n  "uploadLimitMB": 45,\n  "previewEnabled": true\n}'], '上传配置示例.json', { type: 'application/json' }),
+  new File(
+    [
+      '# 上传文件接入说明\n\n上传响应的 `path` 会保存为 `outputId`。\n\n- 在 @ 或 + 中引用文件\n- 点击附件或标签打开侧栏\n- 在侧栏下载原文件\n',
+    ],
+    '上传文件接入说明.md',
+    { type: 'text/markdown' },
+  ),
+  new File(['{\n  "service": "chat-x",\n  "uploadLimitMB": 45,\n  "previewEnabled": true\n}'], '上传配置示例.json', {
+    type: 'application/json',
+  }),
 ].map(createMockUploadedFile);
 
 // 带文件产物的会话消息，用于 playground 调试 artifacts 展示与 outputId 去重
@@ -828,7 +836,10 @@ export const MOCK_ARTIFACTS_MESSAGES = [
     id: 'mock-artifacts-user',
     role: MessageRole.User,
     content: [
-      { type: MessageContentType.Text, text: '帮我检查上传的接入说明和配置。旧版附件没有 outputId，只展示在消息中，不进入 @ / + 菜单。' },
+      {
+        type: MessageContentType.Text,
+        text: '帮我检查上传的接入说明和配置。旧版附件没有 outputId，只展示在消息中，不进入 @ / + 菜单。',
+      },
       ...MOCK_UPLOADED_FILES.map(file => ({
         type: MessageContentType.Binary,
         id: file.id,
@@ -838,7 +849,13 @@ export const MOCK_ARTIFACTS_MESSAGES = [
         size: file.size,
         url: file.download_url,
       })),
-      { type: MessageContentType.Binary, id: 'legacy-file', filename: '旧版附件（无outputId）.txt', mimeType: 'text/plain', size: 128 },
+      {
+        type: MessageContentType.Binary,
+        id: 'legacy-file',
+        filename: '旧版附件（无outputId）.txt',
+        mimeType: 'text/plain',
+        size: 128,
+      },
     ],
     name: 'user',
     status: MessageStatus.Complete,
@@ -1428,7 +1445,7 @@ export const MOCK_MESSAGE_PROCESS_MESSAGES = [
           name: 'knowlege-ba2',
           function_type: 'skill',
           description: '把 Markdown / HTML 注入 iWiki 编辑页。',
-          arguments: '{"target": "iwiki.woa.com"}',
+          arguments: '{"target": "qq.com"}',
         },
       },
     ],
@@ -1467,7 +1484,7 @@ export const MOCK_MESSAGE_PROCESS_MESSAGES = [
           name: 'knowlege-ba2',
           function_type: 'skill',
           description: '把 Markdown / HTML 注入 iWiki 编辑页。',
-          arguments: '{"target": "iwiki.woa.com"}',
+          arguments: '{"target": "qq.com"}',
         },
         toolMessage: {
           toolCallId: 'mock-process-tc-ba2-error',
