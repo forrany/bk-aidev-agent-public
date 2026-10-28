@@ -273,6 +273,7 @@
     handleStop,
     stopGeneration,
     setCiteText,
+    setInputContent,
     focusInput,
     selectShortcut,
     sendShortcut,
@@ -362,6 +363,7 @@
     updateSize,
     updatePositionAndSize,
     setCiteText,
+    setInputContent,
     focusInput,
     updateAgentInfo,
   });

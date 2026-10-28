@@ -66,6 +66,8 @@
 
 组件行为变更时：更新对应 API 表 + 在指南中加交叉链接。
 
+`setInputContent` 落点：API `api/ai-blueking/chatbot.md`、`aiblueking.md` 的 Expose 表。整篇替换输入框（`string | TagSchema`），不发送、不清引用，标签按芯片显示。挂载后给 `ChatInput` 的 `v-model` 赋带标签的文档同样保留芯片（chat-x `AiSlashInput` 按节点同步），如需说明落在 `api/chat-x/components.md` 的 `ChatInput`。
+
 欢迎区 / 消息工具栏扩展落点：指南 `ui-customization.md`（`#welcome`、`messageTools`/`updateTools`）、`sharing.md`（`confirm-share` + `source`、`agent-action`）；API 同步 `api/ai-blueking/chatbot.md`、`aiblueking.md`、`types.md`。
 
 Header 插槽 `#headerLeft` / `#headerActions` 落点：指南 `ui-customization.md`；API `api/ai-blueking/aiblueking.md` Slots 表（仅 AIBlueking）。

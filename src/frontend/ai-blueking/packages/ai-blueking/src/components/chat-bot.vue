@@ -252,6 +252,7 @@
     handleDeleteFile,
     handleArtifactClick,
     handleStopSending,
+    setInputContent,
     stopGeneration,
   } = useMessageSender({
     emit,
@@ -444,6 +445,7 @@
     whenReady,
     getChatHelper,
     setCiteText,
+    setInputContent,
     focusInput,
     enterShareMode: () => chatContainerRef.value?.enterShareMode(),
     exitShareMode: () => chatContainerRef.value?.exitShareMode(),

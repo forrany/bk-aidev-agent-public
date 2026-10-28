@@ -21,7 +21,7 @@ import type {
   OnCustomTabChange,
 } from '../types';
 import type { IAgentInfo, ILlmItem, ISession } from '@blueking/chat-helper';
-import type { RenderMode } from '@blueking/chat-x';
+import type { RenderMode, TagSchema } from '@blueking/chat-x';
 import type { AiSizeMode, IModelOption, IToolBtn, Message } from '@blueking/chat-x';
 import type { TippyOptions } from 'vue-tippy';
 
@@ -108,6 +108,11 @@ export interface ChatBotExpose {
   sendShortcut: (shortcut: IShortcut, selectedText?: string) => Promise<void>;
   // 其他
   setCiteText: (text: string) => void;
+  /**
+   * 整篇替换输入框内容。字符串是纯文本，TagSchema 保留标签。
+   * 不发送、不清引用、不聚焦。替换会进入编辑器撤销历史。
+   */
+  setInputContent: (value: string | TagSchema) => void;
 
   stopGeneration: () => void;
 
