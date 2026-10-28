@@ -78,6 +78,7 @@
             :aside-collapsed="asideCollapsed"
             :auto-load="props.loadRecentSessionOnMount"
             :chat-helper="chatHelper"
+            :enable-message-collapse="props.enableMessageCollapse"
             :enable-model-select="props.enableModelSelect"
             :error-toast="false"
             :execution-tab-visible="props.executionTabVisible"

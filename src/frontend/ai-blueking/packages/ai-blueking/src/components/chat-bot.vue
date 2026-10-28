@@ -13,6 +13,7 @@
       v-model:selected-shortcut="selectedShortcut"
       :chat-loading="effectiveChatLoading"
       :common-tippy-options="effectiveTippyOptions"
+      :enable-message-collapse="props.enableMessageCollapse"
       :execution-tab-visible="props.executionTabVisible"
       :get-side-render-component="props.getSideRenderComponent"
       :get-side-tab-render-component="props.getSideTabRenderComponent"
@@ -135,6 +136,7 @@
     chatHelper: undefined,
     url: '',
     enableSelection: false,
+    enableMessageCollapse: true,
     enableModelSelect: true,
     executionTabVisible: true,
     errorToast: true,

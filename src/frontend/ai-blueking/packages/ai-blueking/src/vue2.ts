@@ -295,6 +295,10 @@ export default createVue2Wrapper(AIBlueking, {
       type: Boolean,
       default: true,
     },
+    enableMessageCollapse: {
+      type: Boolean,
+      default: true,
+    },
     resizeProps: {
       type: Object,
       default: undefined,
@@ -530,6 +534,10 @@ export const ChatBotV2 = createVue2Wrapper(ChatBot, {
       default: undefined,
     },
     executionTabVisible: {
+      type: Boolean,
+      default: true,
+    },
+    enableMessageCollapse: {
       type: Boolean,
       default: true,
     },
