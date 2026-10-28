@@ -52,6 +52,7 @@ import type {
   IToolBtn,
   Message,
   RenderMode,
+  TagSchema,
 } from '@blueking/chat-x';
 
 /**
@@ -193,6 +194,11 @@ export interface AIBluekingExpose {
 
   // 其他
   setCiteText: (text: string) => void;
+  /**
+   * 整篇替换输入框内容。字符串是纯文本，TagSchema 保留标签。
+   * 不发送、不清引用、不聚焦。替换会进入编辑器撤销历史。
+   */
+  setInputContent: (value: string | TagSchema) => void;
   // 面板控制
   show: (sessionCode?: string, options?: { isTemporary?: boolean }) => Promise<void>;
   stopGeneration: () => void;

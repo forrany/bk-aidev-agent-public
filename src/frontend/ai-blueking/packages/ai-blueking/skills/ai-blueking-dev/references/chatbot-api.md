@@ -166,6 +166,7 @@
 | stopGeneration | `() => void`                             | 停止生成                 |
 | switchSession  | `(sessionCode: string) => Promise<void>` | 切换会话                 |
 | setCiteText    | `(text: string) => void`                 | 设置引用文本             |
+| setInputContent | `(value: string \| TagSchema) => void` | 整篇替换输入框。不发送、不清引用、不聚焦。字符串是纯文本，`TagSchema` 是文本加标签，标签按芯片显示；写入前会克隆。替换会进入编辑器撤销历史 |
 | focusInput     | `() => void`                             | 聚焦输入框               |
 | selectShortcut | `(shortcut, text?) => void`              | 选择快捷指令并显示表单   |
 | sendShortcut   | `(shortcut, text?) => Promise<void>`     | 直接发送快捷指令（跳过表单） |
@@ -360,6 +361,7 @@ AIBlueking 是完整面板组件（Nimbus 悬浮球 + 浮窗 + 拖拽 + Header +
 | switchToSession | `(sessionCode: string) => Promise<void>` | 切换会话 |
 | updateSessionName | `(sessionCode, newName) => Promise<void>` | 更新会话名 |
 | setCiteText | `(text: string) => void` | 设置引用文本 |
+| setInputContent | `(value: string \| TagSchema) => void` | 整篇替换输入框。不发送、不清引用、不聚焦。与 `ChatBot.setInputContent` 相同 |
 | focusInput | `() => void` | 聚焦输入框 |
 | updatePosition | `(x, y) => void` | 更新位置 |
 | updateSize | `(w, h) => void` | 更新尺寸 |
