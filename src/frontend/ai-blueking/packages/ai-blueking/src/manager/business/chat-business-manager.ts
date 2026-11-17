@@ -102,7 +102,7 @@ export class ChatBusinessManager {
   /**
    * 暴露消息列表
    */
-  get messages() {
+  get messages(): Ref<IMessage[]> {
     return this.messageModule.list;
   }
 

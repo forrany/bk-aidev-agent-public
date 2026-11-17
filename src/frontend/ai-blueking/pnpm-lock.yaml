@@ -104,6 +104,9 @@ importers:
       echarts:
         specifier: ^6.0.0
         version: 6.0.0
+      monaco-editor-039:
+        specifier: npm:monaco-editor@0.39.0
+        version: monaco-editor@0.39.0
       vue:
         specifier: ^3.5.24
         version: 3.5.32(typescript@5.9.3)
@@ -4889,6 +4892,9 @@ packages:
 
   mlly@1.8.2:
     resolution: {integrity: sha512-d+ObxMQFmbt10sretNDytwt85VrbkhhUA/JBGm1MPaWJ65Cl4wOgLaB1NYvJSZ0Ef03MMEU/0xpPMXUIQ29UfA==}
+
+  monaco-editor@0.39.0:
+    resolution: {integrity: sha512-zhbZ2Nx93tLR8aJmL2zI1mhJpsl87HMebNBM6R8z4pLfs8pj604pIVIVwyF1TivcfNtIPpMXL+nb3DsBmE/x6Q==}
 
   monaco-editor@0.55.1:
     resolution: {integrity: sha512-jz4x+TJNFHwHtwuV9vA9rMujcZRb0CEilTEwG2rRSpe/A7Jdkuj8xPKttCgOh+v/lkHy7HsZ64oj+q3xoAFl9A==}
@@ -11944,6 +11950,8 @@ snapshots:
       pathe: 2.0.3
       pkg-types: 1.3.1
       ufo: 1.6.3
+
+  monaco-editor@0.39.0: {}
 
   monaco-editor@0.55.1:
     dependencies:

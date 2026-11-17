@@ -79,6 +79,18 @@ const router = createRouter({
       component: () => import('./views/SideRenderView.vue'),
       meta: { title: '侧栏渲染 side-render', group: 'example' },
     },
+    {
+      path: '/examples/monaco-selection',
+      name: 'MonacoSelection',
+      component: () => import('./views/MonacoSelectionView.vue'),
+      meta: { title: 'Monaco 0.39 划词', group: 'example' },
+    },
+    {
+      path: '/examples/empty-shortcut',
+      name: 'EmptyShortcutSelection',
+      component: () => import('./views/EmptyShortcutSelectionView.vue'),
+      meta: { title: '空快捷指令划词', group: 'example' },
+    },
   ],
 });
 

@@ -14,9 +14,9 @@
         @mousedown.stop
       >
         <div class="ai-selection-popover-content">
-          <slot :shortcuts="shortcuts">
+          <slot :shortcuts="displayShortcuts">
             <template
-              v-for="(shortcut, index) in shortcuts.slice(0, maxShortcutCount)"
+              v-for="(shortcut, index) in displayShortcuts.slice(0, maxShortcutCount)"
               :key="shortcut.id"
             >
               <ShortcutBtn
@@ -25,7 +25,7 @@
                 @click="handleSelectShortcut(shortcut)"
               />
             </template>
-            <template v-if="shortcuts.length > maxShortcutCount">
+            <template v-if="displayShortcuts.length > maxShortcutCount">
               <div
                 class="ai-divider"
                 style="margin: 0 4px"
@@ -61,7 +61,7 @@
                     class="shortcut-menu"
                   >
                     <ShortcutBtn
-                      v-for="shortcut in shortcuts.slice(maxShortcutCount)"
+                      v-for="shortcut in displayShortcuts.slice(maxShortcutCount)"
                       :key="shortcut.id"
                       mode="menu"
                       :shortcut="shortcut"
@@ -79,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-  import { nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef } from 'vue';
+  import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef } from 'vue';
 
   import { Tippy, useTippy } from 'vue-tippy';
 
@@ -115,6 +115,11 @@
 
   const popoverRef = useTemplateRef<HTMLElement>('popoverRef');
   const moreMenuRef = useTemplateRef<InstanceType<typeof Tippy> & ReturnType<typeof useTippy>>('moreMenuRef');
+
+  /**
+   * 显式传入 [] 会覆盖 props 默认值。空列表时只保留「问问小鲸」，避免渲染没有按钮的气泡。
+   */
+  const displayShortcuts = computed(() => (props.shortcuts.length > 0 ? props.shortcuts : DEFAULT_SHORTCUTS));
 
   const position = shallowRef({ x: 0, y: 0 });
   const selectedText = shallowRef('');
@@ -155,7 +160,94 @@
     }
   };
 
+  const isMonacoInputArea = (element: Element | null): element is HTMLTextAreaElement => {
+    return (
+      element instanceof HTMLTextAreaElement &&
+      element.classList.contains('inputarea') &&
+      Boolean(element.closest('.monaco-editor'))
+    );
+  };
+
+  /**
+   * Monaco 0.39 在 inputarea 聚焦后监听 document selectionchange。
+   * 距它上次写入光标超过约 100ms 时，textarea.selectionStart 被清成 0 会当成键盘移动，
+   * 光标跳到屏阅读缓冲区起点，这个样例里就是 1:1。
+   */
+  const selectionTouchesMonaco = (selection: Selection | null) => {
+    if (isMonacoInputArea(document.activeElement)) return true;
+    const node = selection?.anchorNode ?? null;
+    const element = node instanceof Element ? node : node?.parentElement ?? null;
+    return Boolean(element?.closest('.monaco-editor'));
+  };
+
+  const hidePopover = () => {
+    if (!visible.value) return;
+    visible.value = false;
+  };
+
+  const placePopover = async (rect: DOMRect) => {
+    visible.value = true;
+    await nextTick();
+    const popoverRect = popoverRef.value!.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const padding = 8;
+    const selectionCenterX = rect.left + rect.width / 2;
+    let left = selectionCenterX - popoverRect.width / 2;
+
+    if (left < padding) {
+      left = padding;
+    } else if (left + popoverRect.width > viewportWidth - padding) {
+      left = viewportWidth - popoverRect.width - padding;
+    }
+
+    let top: number;
+    const spaceAbove = rect.top;
+    const spaceBelow = viewportHeight - rect.bottom;
+    const requiredSpace = popoverRect.height + props.offset;
+
+    if (spaceAbove >= requiredSpace) {
+      top = rect.top - popoverRect.height - props.offset;
+    } else if (spaceBelow >= requiredSpace) {
+      top = rect.bottom + props.offset;
+    } else if (spaceAbove >= spaceBelow) {
+      top = Math.max(padding, rect.top - popoverRect.height - props.offset);
+    } else {
+      top = Math.min(viewportHeight - popoverRect.height - padding, rect.bottom + props.offset);
+    }
+    position.value = { x: left, y: top };
+  };
+
+  const handleMonacoInputSelection = async (textarea: HTMLTextAreaElement) => {
+    const text = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd).trim();
+    if (!text || props.excludeSelectors.some(selector => textarea.closest(selector))) {
+      selectedSelection.value = null;
+      hidePopover();
+      return;
+    }
+
+    if (text !== selectedText.value) {
+      emits('selectionChange', text);
+    }
+    selectedText.value = text;
+    selectedSelection.value = null;
+
+    const rect = textarea.getBoundingClientRect();
+    const anchor =
+      rect.width === 0 && rect.height === 0 ? textarea.closest('.monaco-editor')?.getBoundingClientRect() : rect;
+    if (!anchor || (anchor.width === 0 && anchor.height === 0)) {
+      hidePopover();
+      return;
+    }
+    await placePopover(anchor);
+  };
+
   const selectionChange = async () => {
+    if (isMonacoInputArea(document.activeElement)) {
+      await handleMonacoInputSelection(document.activeElement);
+      return;
+    }
+
     selectedSelection.value = window.getSelection();
     // 如果文档选区无效，尝试从 Shadow DOM 中查找
     if (!selectedSelection.value) {
@@ -234,50 +326,14 @@
         return;
       }
     }
-    // 计算弹窗位置
-    visible.value = true;
-    await nextTick();
-    const popoverRect = popoverRef.value!.getBoundingClientRect();
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const padding = 8; // 距离视口边缘的最小距离
-    // 计算水平位置（尽量居中）
-    const selectionCenterX = rect.left + rect.width / 2;
-    let left = selectionCenterX - popoverRect.width / 2;
-
-    // // 水平边界处理：确保弹窗不超出视口，尽量保持居中
-    if (left < padding) {
-      // 左边界超出，贴左边
-      left = padding;
-    } else if (left + popoverRect.width > viewportWidth - padding) {
-      // 右边界超出，贴右边
-      left = viewportWidth - popoverRect.width - padding;
-    }
-
-    // 计算垂直位置（优先上方，空间不足则下方）
-    let top: number;
-    const spaceAbove = rect.top; // 上方可用空间
-    const spaceBelow = viewportHeight - rect.bottom; // 下方可用空间
-    const requiredSpace = popoverRect.height + props.offset;
-
-    // 判断上方是否有足够空间
-    if (spaceAbove >= requiredSpace) {
-      top = rect.top - popoverRect.height - props.offset;
-    } else if (spaceBelow >= requiredSpace) {
-      top = rect.bottom + props.offset;
-    } else {
-      if (spaceAbove >= spaceBelow) {
-        top = Math.max(padding, rect.top - popoverRect.height - props.offset);
-      } else {
-        top = Math.min(viewportHeight - popoverRect.height - padding, rect.bottom + props.offset);
-      }
-    }
-    position.value = { x: left, y: top };
+    await placePopover(rect);
   };
 
   const closePopover = () => {
     if (!visible.value) return;
-    selectedSelection.value?.removeAllRanges();
+    if (!selectionTouchesMonaco(selectedSelection.value)) {
+      selectedSelection.value?.removeAllRanges();
+    }
     visible.value = false;
   };
 

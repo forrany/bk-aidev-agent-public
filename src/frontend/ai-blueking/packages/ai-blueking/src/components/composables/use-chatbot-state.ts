@@ -72,7 +72,7 @@ export function useChatbotState(params: UseChatbotStateParams): UseChatbotStateR
   });
 
   // TODO: IMessage (chat-helper) 和 Message (chat-x) 类型需要统一
-  const messages = computed(() => (chatBusinessManager.value?.messages.value ?? []) as Message[]);
+  const messages = computed(() => (chatBusinessManager.value?.messages.value ?? []) as unknown as Message[]);
   const isMessagesLoading = computed(() => chatBusinessManager.value?.isMessagesLoading.value ?? false);
   const isGenerating = computed(() => chatBusinessManager.value?.isGenerating.value ?? false);
   // const stopLoading = computed(() => chatBusinessManager.value?.isStopLoading.value ?? false);

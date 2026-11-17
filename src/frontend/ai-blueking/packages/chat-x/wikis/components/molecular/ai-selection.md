@@ -114,9 +114,11 @@ AI 划词选择组件，监听用户在页面中的文本选区，在选区附�
 | 窗口失去焦点       | `window.blur`                    |
 | 点击快捷指令       | 触发后立即关闭并清除选区         |
 
+关闭弹窗时，若选区落在 Monaco Editor（`textarea.inputarea`，0.39 及同类实现）上，**不会**调用 `removeAllRanges()`。Monaco 把隐藏 textarea 的选区清成 0 会当成键盘移动，光标会跳到 `1:1`。Monaco 内的划词改用 textarea 自身的 `selectionStart` / `selectionEnd` 定位。
+
 ## 基础用法
 
-不传 `shortcuts` 时，使用内置默认快捷指令"问问小鲸"（`id: 'ai-chat'`）：
+不传 `shortcuts`，或显式传入空数组 `[]` 时，使用内置默认快捷指令「问问小鲸」（`id: 'ai-chat'`）。空数组会覆盖 props 默认值，组件会回退到这一条指令，避免渲染没有按钮的气泡。
 
 ```vue
 <template>

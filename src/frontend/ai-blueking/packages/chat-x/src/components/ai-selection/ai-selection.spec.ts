@@ -359,7 +359,7 @@ describe('AiSelection', () => {
   });
 
   describe('边界情况测试', () => {
-    it('应该处理空的快捷指令数组', async () => {
+    it('快捷指令为空时只展示问问小鲸', async () => {
       wrapper = mount(AiSelection, {
         props: {
           visible: true,
@@ -374,8 +374,72 @@ describe('AiSelection', () => {
       });
 
       await nextTick();
+      const buttons = wrapper.findAll('.mock-shortcut-btn');
       expect(wrapper.find('.ai-selection-popover').exists()).toBe(true);
-      expect(wrapper.findAll('.mock-shortcut-btn').length).toBe(0);
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0].text()).toBe('问问小鲸');
+    });
+
+    it('关闭气泡时不应清除 Monaco inputarea 的选区', async () => {
+      const host = document.createElement('div');
+      host.className = 'monaco-editor';
+      const textarea = document.createElement('textarea');
+      textarea.className = 'inputarea';
+      textarea.value = 'const users = ["monaco", "selection", "cursor"];';
+      host.appendChild(textarea);
+      document.body.appendChild(host);
+
+      const selection = window.getSelection();
+      const removeAllRanges = vi.spyOn(selection as Selection, 'removeAllRanges');
+
+      wrapper = mount(AiSelection, {
+        props: {
+          visible: false,
+          shortcuts: [createShortcut('explain', '解释代码')],
+          'onUpdate:visible': (val: boolean) => wrapper.setProps({ visible: val }),
+        },
+        global: {
+          stubs: {
+            Teleport: true,
+          },
+        },
+      });
+
+      const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+      textarea.focus();
+      textarea.setSelectionRange(6, 11);
+      vi.spyOn(textarea, 'getBoundingClientRect').mockReturnValue({
+        x: 10,
+        y: 40,
+        left: 10,
+        top: 40,
+        right: 210,
+        bottom: 60,
+        width: 200,
+        height: 20,
+        toJSON: () => ({}),
+      } as DOMRect);
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      await wait(250);
+      await nextTick();
+
+      expect(wrapper.find('.ai-selection-popover').exists()).toBe(true);
+      expect(textarea.selectionStart).toBe(6);
+      expect(textarea.selectionEnd).toBe(11);
+      expect(removeAllRanges).not.toHaveBeenCalled();
+
+      textarea.setSelectionRange(8, 8);
+      document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      document.dispatchEvent(new Event('selectionchange'));
+      await wait(350);
+      await nextTick();
+
+      expect(textarea.selectionStart).toBe(8);
+      expect(removeAllRanges).not.toHaveBeenCalled();
+
+      host.remove();
+      removeAllRanges.mockRestore();
     });
   });
 });

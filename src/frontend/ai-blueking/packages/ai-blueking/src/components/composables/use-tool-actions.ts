@@ -70,7 +70,7 @@ export function useToolActions(params: UseToolActionsParams): UseToolActionsRetu
     }
 
     try {
-      const allMessages = chatBusinessManager.value.messages.value as Message[];
+      const allMessages = chatBusinessManager.value.messages.value as unknown as Message[];
       const lastUserMessage = findLastUserMessageBefore(allMessages, aiMessages[0]);
 
       if (!lastUserMessage) {
@@ -120,7 +120,7 @@ export function useToolActions(params: UseToolActionsParams): UseToolActionsRetu
     }
 
     try {
-      const allMessages = chatBusinessManager.value.messages.value as Message[];
+      const allMessages = chatBusinessManager.value.messages.value as unknown as Message[];
       const userMessageIndex = allMessages.findIndex((m: Message) => m === userMessage);
       if (userMessageIndex === -1) {
         console.error('[ChatBot] User message not found in messages list');
@@ -137,7 +137,7 @@ export function useToolActions(params: UseToolActionsParams): UseToolActionsRetu
       }
 
       const messagesToDelete = [userMessage, ...aiMessages];
-      await chatHelper.value.message.deleteMessages(messagesToDelete as IMessage[]);
+      await chatHelper.value.message.deleteMessages(messagesToDelete as unknown as IMessage[]);
     } catch (error) {
       console.error('[ChatBot] Failed to delete user message:', error);
       emit('error', error as Error);
@@ -202,7 +202,7 @@ export function useToolActions(params: UseToolActionsParams): UseToolActionsRetu
       return;
     }
 
-    const allMessages = (chatBusinessManager.value?.messages.value || []) as Message[];
+    const allMessages = (chatBusinessManager.value?.messages.value || []) as unknown as Message[];
     const userMessageId = findLastUserMessageIdBefore(allMessages, messages[0]);
 
     if (userMessageId === undefined) {

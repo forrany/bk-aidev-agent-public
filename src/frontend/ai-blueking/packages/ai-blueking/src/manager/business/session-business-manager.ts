@@ -7,6 +7,8 @@
  * 蓝鲸智云PaaS平台 (BlueKing PaaS) is licensed under the MIT License.
  */
 
+import type { Ref } from 'vue';
+
 import { hasRealMessageContent } from '../../utils/message-utils';
 
 import type { CreateSessionOptions, IEventEmitter, SessionBusinessConfig } from './types';
@@ -49,7 +51,7 @@ export class SessionBusinessManager {
     this.messageModule = messageModule;
   }
 
-  get currentSession() {
+  get currentSession(): Ref<ISession | null> {
     return this.sessionModule.current;
   }
 
@@ -76,7 +78,7 @@ export class SessionBusinessManager {
   /**
    * 暴露 AG-UI SDK 的响应式状态
    */
-  get sessionList() {
+  get sessionList(): Ref<ISession[]> {
     return this.sessionModule.list;
   }
 
